@@ -929,7 +929,9 @@ impl Host {
                         format!("{} · {kind} · {}", p.name, p.link.via.map_or("offline".to_string(), |v| format!("online ({v})")))
                     })
                     .collect();
-                Ok(if rows.is_empty() { "No paired machines.".into() } else { rows.join("\n") })
+                let here = self.with_state(|s| s.workspaces.iter().filter(|w| w.remote.is_none()).map(|w| w.name.clone()).collect::<Vec<_>>().join(", "));
+                let me = format!("You're on {} (server, this machine; workspaces: {here}). Its files and commands are yours directly; the machines below only through these tools:", connect.status().name);
+                Ok(if rows.is_empty() { format!("{me}\nNo paired machines.") } else { format!("{me}\n{}", rows.join("\n")) })
             }
             "list_remote_panes" => return Some(self.forward(call, a["machine"].as_str().unwrap_or_default(), "list_panes_all", json!({}), &caller())),
             "add_workspace" => {
@@ -1219,9 +1221,9 @@ fn server_tools() -> Vec<Value> {
     let machine = json!({"type": "string", "description": "Machine name from list_machines"});
     let pane = json!({"type": "string", "description": "\"<machine>:<number>\" from list_remote_panes"});
     vec![
-        json!({"name": "list_machines", "description": "List the winfer machines paired with this server (Winfer Connect): name, desktop or server, online or not. Their panes are reachable with list_remote_panes, read_pane and send_to_pane (pane \"<machine>:<number>\"), spawn_remote_agent and remote_pane_action.", "inputSchema": {"type": "object", "properties": {}}}),
+        json!({"name": "list_machines", "description": "List the winfer machines paired with this server (Winfer Connect): name, desktop or server, online or not. Their panes are reachable with list_remote_panes, read_pane and send_to_pane (pane \"<machine>:<number>\"), spawn_remote_agent and remote_pane_action. You run on this machine, not on any listed one: work on another machine only through these tools.", "inputSchema": {"type": "object", "properties": {}}}),
         json!({"name": "list_remote_panes", "description": "List a paired machine's workspaces and panes. Address panes as \"<machine>:<number>\" in read_pane, send_to_pane and remote_pane_action.", "inputSchema": {"type": "object", "properties": {"machine": machine}, "required": ["machine"]}}),
-        json!({"name": "spawn_remote_agent", "description": "Start an agent pane on a paired machine, optionally with a first prompt, in a workspace there and its own git worktree.", "inputSchema": {"type": "object", "properties": {
+        json!({"name": "spawn_remote_agent", "description": "Start an agent pane on a paired machine, optionally with a first prompt, in a workspace there and its own git worktree. To run more commands on a machine, first look for a pane of yours there (list_remote_panes) and send them to it with send_to_pane; start another only when you need one running alongside.", "inputSchema": {"type": "object", "properties": {
             "machine": machine, "provider": {"type": "string", "description": "Agent id, e.g. claude, codex, winfer, or shell"},
             "prompt": {"type": "string"}, "worktree": {"type": "boolean"}, "workspace": {"type": "string", "description": "Workspace name on that machine (default: its first)"}
         }, "required": ["machine", "provider"]}}),
