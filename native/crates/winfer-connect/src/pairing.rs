@@ -1,8 +1,9 @@
 //! Pairing two instances: X25519 + a 6-digit code both screens show (numeric comparison).
 //!
 //! ```text
-//! J → H  p1 {i, name, kind, e: X25519 public, n, m?: HMAC(linkAuth, "p1", i, e, n)}
+//! J → H  p0 {c: th1}                    th1 = SHA256(i, name, e, n of p1): commits to p1
 //! H → J  p2 {i, name, kind, e, n, m?: HMAC(linkAuth, "p2", th1, i, e, n)}
+//! J → H  p1 {i, name, kind, e: X25519 public, n, m?: HMAC(linkAuth, "p1", i, e, n)}   H checks th1
 //!        th = SHA256(both messages' fields); ss = X25519
 //!        code     = HKDF(salt = link? ‖ th, ss, "sas") → 6 digits
 //!        pairKey  = HKDF(…, "pair"), confirmKey = HKDF(…, "confirm")
@@ -12,6 +13,8 @@
 //! The joiner (J) clicked Pair on a nearby instance or pasted a pair link from the host (H). With a
 //! link, its one-time key authenticates both p1 and p2 and is mixed into every derived key, so an
 //! attacker without the link can't get in the middle; on the LAN the code comparison does that.
+//! The commitment keeps that comparison honest: whoever answers second could otherwise try keys
+//! until both 6-digit codes match. Each side's contribution is fixed before it sees the other's.
 
 use crate::crypto::{Ephemeral, b64, hkdf, hkdf32, hmac, hmac_verify, sha256, unb64, unb64_n};
 use crate::keys::LinkKeys;
@@ -50,6 +53,8 @@ pub enum PairError {
     Malformed,
     BadLink,
     BadConfirm,
+    /// The revealed p1 isn't the one committed to in p0.
+    BadCommit,
     Cancelled(String),
     Unexpected,
 }
@@ -77,6 +82,9 @@ pub struct Pairing {
     eph: Option<Ephemeral>,
     nonce: [u8; 16],
     p1: Option<Value>,
+    /// Host: the joiner's commitment (p0), then the p2 it answered with.
+    commit: Option<[u8; 32]>,
+    p2: Option<Value>,
     secrets: Option<Secrets>,
     confirmed_here: bool,
     confirmed_there: bool,
@@ -94,7 +102,7 @@ pub struct Out {
 impl Pairing {
     /// `link`: the pair link's one-time key, on both sides of a link pairing.
     pub fn new(side: Side, me: Me, link: Option<[u8; 32]>) -> Pairing {
-        Pairing { side, me, link, eph: Some(Ephemeral::new()), nonce: crate::crypto::random(), p1: None, secrets: None, confirmed_here: false, confirmed_there: false }
+        Pairing { side, me, link, eph: Some(Ephemeral::new()), nonce: crate::crypto::random(), p1: None, commit: None, p2: None, secrets: None, confirmed_here: false, confirmed_there: false }
     }
 
     fn link_auth(&self) -> Option<[u8; 32]> {
@@ -116,12 +124,13 @@ impl Pairing {
     /// The joiner's opening message.
     pub fn start(&mut self) -> Out {
         match self.side {
-            // Once: a second p1 (the relay reconnected) would end the pairing on the host.
+            // Once: a second p0 (the relay reconnected) would end the pairing on the host.
             Side::Joiner if self.p1.is_some() => Out::default(),
             Side::Joiner => {
                 let p1 = self.hello("p1", &[]);
-                self.p1 = Some(p1.clone());
-                Out { send: vec![p1], ..Default::default() }
+                let commit = Self::th1(&p1).expect("own hello");
+                self.p1 = Some(p1);
+                Out { send: vec![json!({"t": "p0", "v": 1, "c": b64(&commit)})], ..Default::default() }
             }
             Side::Host => Out::default(),
         }
@@ -200,19 +209,29 @@ impl Pairing {
 
     pub fn on_message(&mut self, msg: &Value) -> Result<Out, PairError> {
         match (msg["t"].as_str(), self.side) {
+            (Some("p0"), Side::Host) if self.commit.is_none() => {
+                let commit = unb64_n::<32>(msg["c"].as_str().unwrap_or_default()).ok_or(PairError::Malformed)?;
+                let p2 = self.hello("p2", &[&commit]);
+                self.commit = Some(commit);
+                self.p2 = Some(p2.clone());
+                Ok(Out { send: vec![p2], ..Default::default() })
+            }
             (Some("p1"), Side::Host) if self.p1.is_none() => {
+                let (commit, p2) = self.commit.zip(self.p2.clone()).ok_or(PairError::Unexpected)?;
+                if Self::th1(msg)? != commit {
+                    return Err(PairError::BadCommit);
+                }
                 self.check_link(msg, "p1", &[])?;
-                let th1 = Self::th1(msg)?;
-                let p2 = self.hello("p2", &[&th1]);
                 let code = self.derive(msg, &p2, msg)?;
                 self.p1 = Some(msg.clone());
-                Ok(Out { send: vec![p2], code: Some(code), ..Default::default() })
+                Ok(Out { code: Some(code), ..Default::default() })
             }
             (Some("p2"), Side::Joiner) if self.secrets.is_none() => {
                 let p1 = self.p1.clone().ok_or(PairError::Unexpected)?;
                 self.check_link(msg, "p2", &[&Self::th1(&p1)?])?;
                 let code = self.derive(&p1, msg, msg)?;
-                Ok(Out { code: Some(code), ..Default::default() })
+                // Reveal p1 only now that p2 is fixed.
+                Ok(Out { send: vec![p1], code: Some(code), ..Default::default() })
             }
             (Some("p3"), _) => {
                 let s = self.secrets.as_ref().ok_or(PairError::Unexpected)?;
@@ -276,9 +295,10 @@ mod tests {
     fn pair(link_j: Option<[u8; 32]>, link_h: Option<[u8; 32]>) -> Result<(String, String, Paired, Paired), PairError> {
         let mut j = Pairing::new(Side::Joiner, me('J', Kind::Server), link_j);
         let mut h = Pairing::new(Side::Host, me('H', Kind::Desktop), link_h);
-        let p1 = j.start().send.remove(0);
-        let mut out_h = h.on_message(&p1)?;
-        let out_j = j.on_message(&out_h.send.remove(0))?;
+        let p0 = j.start().send.remove(0);
+        let p2 = h.on_message(&p0)?.send.remove(0);
+        let mut out_j = j.on_message(&p2)?;
+        let out_h = h.on_message(&out_j.send.remove(0))?;
         let (cj, ch) = (out_j.code.unwrap(), out_h.code.unwrap());
         let c_j = j.confirm()?.send.remove(0);
         let mut c_h = h.confirm()?;
@@ -316,12 +336,27 @@ mod tests {
         let mut h = Pairing::new(Side::Host, me('H', Kind::Desktop), None);
         let mut m_h = Pairing::new(Side::Host, me('M', Kind::Desktop), None);
         let mut m_j = Pairing::new(Side::Joiner, me('N', Kind::Desktop), None);
-        let p1 = j.start().send.remove(0);
-        let mut to_j = m_h.on_message(&p1).unwrap();
-        let code_j = j.on_message(&to_j.send.remove(0)).unwrap().code.unwrap();
-        let p1m = m_j.start().send.remove(0);
-        let code_h = h.on_message(&p1m).unwrap().code.unwrap();
+        let p0 = j.start().send.remove(0);
+        let p0m = m_j.start().send.remove(0);
+        let p2 = h.on_message(&p0m).unwrap().send.remove(0);
+        let mut to_m = m_j.on_message(&p2).unwrap();
+        let code_h = h.on_message(&to_m.send.remove(0)).unwrap().code.unwrap();
+        let p2m = m_h.on_message(&p0).unwrap().send.remove(0);
+        let code_j = j.on_message(&p2m).unwrap().code.unwrap();
         assert_ne!(code_j, code_h);
+    }
+
+    #[test]
+    fn a_revealed_hello_must_match_its_commitment() {
+        // Mallory can't commit first and pick her key after seeing p2: the host rejects it.
+        let mut j = Pairing::new(Side::Joiner, me('J', Kind::Desktop), None);
+        let mut h = Pairing::new(Side::Host, me('H', Kind::Desktop), None);
+        let mut m = Pairing::new(Side::Joiner, me('M', Kind::Desktop), None);
+        let p0 = j.start().send.remove(0);
+        let p2 = h.on_message(&p0).unwrap().send.remove(0);
+        let _ = m.start();
+        let other_p1 = m.on_message(&p2).unwrap().send.remove(0);
+        assert_eq!(h.on_message(&other_p1).err(), Some(PairError::BadCommit));
     }
 
     #[test]

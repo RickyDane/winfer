@@ -54,8 +54,9 @@ channel is up.
 ## Pairing
 
 ```
-J → H  p1 {v:1, i, name, kind, e: X25519 public, n(16), m?: HMAC(linkAuth, "p1", i, e, n)}
-H → J  p2 {v:1, i, name, kind, e, n, m?: HMAC(linkAuth, "p2", th1, i, e, n)}     th1 = SHA256(i, name, e, n of p1)
+J → H  p0 {v:1, c: th1}                                                           th1 = SHA256(i, name, e, n of p1)
+H → J  p2 {v:1, i, name, kind, e, n, m?: HMAC(linkAuth, "p2", th1, i, e, n)}
+J → H  p1 {v:1, i, name, kind, e: X25519 public, n(16), m?: HMAC(linkAuth, "p1", i, e, n)}   H checks SHA256(p1) = c
        th = SHA256("winfer-connect-pair-v1", p1 fields, p2 fields); ss = X25519; salt = linkKey(or empty) ‖ th
        code = u32(HKDF(salt, ss, "sas")[0..4]) mod 10^6, shown "123 456"
        pairKey = HKDF(salt, ss, "pair"); confirmKey = HKDF(salt, ss, "confirm")
@@ -64,7 +65,7 @@ either px {reason}                                    cancel
 ```
 
 - **Link pairing:** the host makes `winfer-connect:#p=<base64url(JSON {v:1, k: linkKey, i, n, u: relay URL, x:
-  expiry ms})>` (10 min). Both join the one-time room derived from `k` as role `peer`; the joiner sends `p1` when the
+  expiry ms})>` (10 min). Both join the one-time room derived from `k` as role `peer`; the joiner sends `p0` when the
   relay reports 2 peers. The host deletes the room afterwards. A server joining with `winferd pair` confirms by itself.
 - **LAN pairing:** the joiner dials the host's LAN port and opens with `lan {want: "pair"}`; the host shows an incoming
   request. Only when discoverable and not already pairing (else `px`). 2 min limit.

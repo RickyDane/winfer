@@ -146,9 +146,11 @@ pub fn spawn(rt: &tokio::runtime::Handle, me: String, peer: String, keys: PairKe
         let mut lan: Option<(Path, mpsc::UnboundedReceiver<TEvent>)> = None;
         let mut active: Option<Via> = None;
         let mut tick = tokio::time::interval(Duration::from_secs(1));
+        // The state last reported, so data frames and ticks don't each fire Changed.
+        let mut reported = LinkState::default();
 
         // Which ready path carries traffic; fires Up/Down/Changed as that changes.
-        let settle = |relay: &Path, lan: &Option<(Path, mpsc::UnboundedReceiver<TEvent>)>, active: &mut Option<Via>| {
+        let settle = |relay: &Path, lan: &Option<(Path, mpsc::UnboundedReceiver<TEvent>)>, active: &mut Option<Via>, reported: &mut LinkState| {
             let best = if lan.as_ref().is_some_and(|(p, _)| p.channel.is_some()) {
                 Some(Via::Lan)
             } else if relay.channel.is_some() {
@@ -156,17 +158,21 @@ pub fn spawn(rt: &tokio::runtime::Handle, me: String, peer: String, keys: PairKe
             } else {
                 None
             };
-            {
+            let now = {
                 let mut s = shared.lock().unwrap();
                 s.via = best.map(|v| if v == Via::Lan { "lan" } else { "relay" });
                 s.lan = lan.as_ref().is_some_and(|(p, _)| p.channel.is_some());
-            }
+                s.clone()
+            };
             if best != *active {
                 trace(|| format!("active {:?} -> {best:?}", *active));
                 *active = best;
                 on(if best.is_some() { LinkEvent::Up { peer: peer.clone() } } else { LinkEvent::Down { peer: peer.clone() } });
             }
-            on(LinkEvent::Changed { peer: peer.clone() });
+            if now != *reported {
+                *reported = now;
+                on(LinkEvent::Changed { peer: peer.clone() });
+            }
         };
 
         // Handles one transport event on a path; returns false when the pairing is revoked.
@@ -309,6 +315,13 @@ pub fn spawn(rt: &tokio::runtime::Handle, me: String, peer: String, keys: PairKe
                     }
                     Some(Cmd::AddLan(transport, rx)) => {
                         trace(|| format!("add LAN (had one: {})", lan.is_some()));
+                        // A working LAN path stays: anyone on the network can say hello with a
+                        // paired id, and only the handshake would prove it. A dead one goes after
+                        // three silent pings, and the other side dials again.
+                        if lan.as_ref().is_some_and(|(p, _)| p.channel.is_some()) {
+                            transport.stop();
+                            continue;
+                        }
                         let mut path = Path::new(Via::Lan, transport, &me, &peer, keys.clone());
                         path.present = true;
                         path.start();
@@ -348,7 +361,7 @@ pub fn spawn(rt: &tokio::runtime::Handle, me: String, peer: String, keys: PairKe
                     }
                 }
             }
-            settle(&relay, &lan, &mut active);
+            settle(&relay, &lan, &mut active, &mut reported);
         };
         shared.lock().unwrap().via = None;
         if revoked {

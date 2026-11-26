@@ -94,11 +94,12 @@ pub struct Incoming {
 
 /// Listens on all interfaces; returns the port. Every connection that says hello within 10 s goes
 /// to `on_incoming`; anything else is dropped.
-pub async fn listen(rt: tokio::runtime::Handle, on_incoming: Arc<dyn Fn(Incoming) + Send + Sync>) -> std::io::Result<u16> {
+/// Returns the port and a handle that stops the listener.
+pub async fn listen(rt: tokio::runtime::Handle, on_incoming: Arc<dyn Fn(Incoming) + Send + Sync>) -> std::io::Result<(u16, tokio::task::AbortHandle)> {
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", 0)).await?;
     let port = listener.local_addr()?.port();
     let handle = rt.clone();
-    rt.spawn(async move {
+    let task = rt.spawn(async move {
         // At most a few handshakes at once, so a flood can't pile up sockets.
         let slots = Arc::new(tokio::sync::Semaphore::new(8));
         loop {
@@ -117,7 +118,7 @@ pub async fn listen(rt: tokio::runtime::Handle, on_incoming: Arc<dyn Fn(Incoming
             });
         }
     });
-    Ok(port)
+    Ok((port, task.abort_handle()))
 }
 
 /// Opens a connection to another instance and says hello.

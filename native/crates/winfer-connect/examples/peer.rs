@@ -27,6 +27,7 @@ fn main() {
             }
             Event::PeerUp(p) => println!("[up] {p}"),
             Event::PeerDown(p) => println!("[down] {p}"),
+            Event::Unpaired(p) => println!("[unpaired] {p}"),
             Event::Changed => {}
         }),
     );

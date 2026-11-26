@@ -57,7 +57,13 @@ impl Config {
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        std::fs::write(path, serde_json::to_string_pretty(self).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+        // Whole or not at all: a reader never sees a half-written file (and would make a new id).
+        let tmp = path.with_extension(format!("{}-{:?}.tmp", std::process::id(), std::thread::current().id()).replace(['(', ')'], ""));
+        std::fs::write(&tmp, serde_json::to_string_pretty(self).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+        std::fs::rename(&tmp, path).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            e.to_string()
+        })
     }
 
     pub fn relay_url(&self) -> String {

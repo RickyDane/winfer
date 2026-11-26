@@ -22,6 +22,8 @@ pub enum Event {
     Changed,
     PeerUp(String),
     PeerDown(String),
+    /// This machine forgot a peer: unpaired here, or the peer revoked the pairing.
+    Unpaired(String),
     Message { peer: String, msg: Value },
 }
 
@@ -92,8 +94,9 @@ struct Lan {
     port: Option<u16>,
     discovery: Option<Discovery>,
     error: Option<String>,
-    /// Bumped on every start, so a stale listener's connections are dropped.
+    /// Bumped on every start and stop (never reset), so a stale listener's connections are dropped.
     generation: u64,
+    listener: Option<tokio::task::AbortHandle>,
 }
 
 pub type OnEvent = Arc<dyn Fn(Event) + Send + Sync>;
@@ -108,6 +111,8 @@ struct Inner {
     pairing: Mutex<Option<PairSession>>,
     pair_seq: Mutex<u64>,
     lan: Mutex<Lan>,
+    /// Held while writing the peers, so saves land in order.
+    saving: Mutex<()>,
     on: OnEvent,
 }
 
@@ -119,7 +124,7 @@ impl Connect {
     pub fn new(persist: Persist, kind: Kind, on: OnEvent) -> Connect {
         let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).thread_name("winfer-connect").enable_all().build().expect("tokio runtime");
         let config = persist.config();
-        Connect(Arc::new(Inner { rt, persist, kind, config: Mutex::new(config), peers: Mutex::default(), links: Mutex::default(), pairing: Mutex::default(), pair_seq: Mutex::new(0), lan: Mutex::default(), on }))
+        Connect(Arc::new(Inner { rt, persist, kind, config: Mutex::new(config), peers: Mutex::default(), links: Mutex::default(), pairing: Mutex::default(), pair_seq: Mutex::new(0), lan: Mutex::default(), saving: Mutex::default(), on }))
     }
 
     pub fn runtime(&self) -> tokio::runtime::Handle {
@@ -198,19 +203,21 @@ impl Connect {
     }
 
     fn touch(&self, peer_id: &str) {
-        let peers = {
+        {
             let mut peers = self.0.peers.lock().unwrap();
             let Some(p) = peers.iter_mut().find(|p| p.peer_id == peer_id) else { return };
             p.last_seen = Some(now_ms());
-            peers.clone()
-        };
-        self.save(peers);
+        }
+        self.save();
     }
 
-    /// Writes the peers off the calling thread (the keychain may prompt).
-    fn save(&self, peers: Vec<Peer>) {
+    /// Writes the peers off the calling thread (the keychain may prompt). Each write takes the
+    /// list as it is then, one at a time, so an older snapshot never lands after a newer one.
+    fn save(&self) {
         let this = self.clone();
         std::thread::spawn(move || {
+            let _saving = this.0.saving.lock().unwrap();
+            let peers = this.peers();
             let mut config = this.0.config.lock().unwrap().clone();
             let _ = this.0.persist.save_peers(&mut config, &peers);
             this.0.config.lock().unwrap().has_peers = config.has_peers;
@@ -301,7 +308,11 @@ impl Connect {
             self.start_lan();
         } else {
             self.0.links.lock().unwrap().clear();
-            *self.0.lan.lock().unwrap() = Lan::default();
+            let mut lan = self.0.lan.lock().unwrap();
+            if let Some(listener) = lan.listener.take() {
+                listener.abort();
+            }
+            *lan = Lan { generation: lan.generation + 1, ..Lan::default() };
         }
         self.changed();
     }
@@ -344,7 +355,7 @@ impl Connect {
             peers.clone()
         };
         if !peers.is_empty() {
-            self.save(peers);
+            self.save();
         }
         self.0.links.lock().unwrap().clear();
         self.connect_all();
@@ -353,26 +364,18 @@ impl Connect {
     }
 
     pub fn set_notify(&self, peer_id: &str, notify: bool) {
-        let peers = {
-            let mut peers = self.0.peers.lock().unwrap();
-            if let Some(p) = peers.iter_mut().find(|p| p.peer_id == peer_id) {
-                p.notify = notify;
-            }
-            peers.clone()
-        };
-        self.save(peers);
+        if let Some(p) = self.0.peers.lock().unwrap().iter_mut().find(|p| p.peer_id == peer_id) {
+            p.notify = notify;
+        }
+        self.save();
         self.changed();
     }
 
     pub fn rename_peer(&self, peer_id: &str, name: &str) {
-        let peers = {
-            let mut peers = self.0.peers.lock().unwrap();
-            if let Some(p) = peers.iter_mut().find(|p| p.peer_id == peer_id) {
-                p.name = name.trim().chars().take(64).collect();
-            }
-            peers.clone()
-        };
-        self.save(peers);
+        if let Some(p) = self.0.peers.lock().unwrap().iter_mut().find(|p| p.peer_id == peer_id) {
+            p.name = name.trim().chars().take(64).collect();
+        }
+        self.save();
         self.changed();
     }
 
@@ -383,12 +386,12 @@ impl Connect {
     }
 
     fn forget(&self, peer_id: &str, wipe_room: bool) {
-        let (peer, peers) = {
+        let peer = {
             let mut peers = self.0.peers.lock().unwrap();
             let Some(i) = peers.iter().position(|p| p.peer_id == peer_id) else { return };
-            (peers.remove(i), peers.clone())
+            peers.remove(i)
         };
-        self.save(peers);
+        self.save();
         let link = self.0.links.lock().unwrap().remove(peer_id);
         let relay_url = peer.relay_url.clone().unwrap_or_else(|| self.0.config.lock().unwrap().relay_url());
         // Give the `bye` a moment on the wire before the link and room go.
@@ -399,6 +402,7 @@ impl Connect {
                 let _ = tokio::task::spawn_blocking(move || transport::delete_room(&relay_url, &keys.room)).await;
             }
         });
+        (self.0.on)(Event::Unpaired(peer_id.to_string()));
         (self.0.on)(Event::PeerDown(peer_id.to_string()));
         self.changed();
     }
@@ -506,6 +510,7 @@ impl Connect {
                     PairError::Cancelled(_) => "The other side cancelled.".to_string(),
                     PairError::BadLink => "The pair link didn't match.".to_string(),
                     PairError::BadConfirm => "The codes didn't match.".to_string(),
+                    PairError::BadCommit => "The other side changed its key mid-pairing.".to_string(),
                     _ => format!("Pairing failed ({e:?})."),
                 };
                 drop(guard);
@@ -615,13 +620,12 @@ impl Connect {
     pub fn add_peer(&self, paired: Paired, relay_url: Option<String>) {
         let mut peer = Peer::from_paired(&paired, now_ms());
         peer.relay_url = relay_url;
-        let peers = {
+        {
             let mut peers = self.0.peers.lock().unwrap();
             peers.retain(|p| p.peer_id != peer.peer_id);
             peers.push(peer.clone());
-            peers.clone()
-        };
-        self.save(peers);
+        }
+        self.save();
         self.0.links.lock().unwrap().remove(&peer.peer_id);
         if self.0.config.lock().unwrap().enabled {
             self.connect(&peer);
@@ -652,8 +656,8 @@ impl Connect {
                     Connect(inner).on_incoming(inc, generation);
                 }
             });
-            let port = match lan::listen(rt, on_incoming).await {
-                Ok(port) => port,
+            let (port, listener) = match lan::listen(rt, on_incoming).await {
+                Ok(l) => l,
                 Err(e) => {
                     this.0.lan.lock().unwrap().error = Some(format!("can't listen: {e}"));
                     this.changed();
@@ -670,9 +674,11 @@ impl Connect {
             {
                 let mut lan = this.0.lan.lock().unwrap();
                 if lan.generation != generation {
+                    listener.abort();
                     return;
                 }
                 lan.port = Some(port);
+                lan.listener = Some(listener);
                 match discovery {
                     Ok(d) => lan.discovery = Some(d),
                     Err(e) => lan.error = Some(format!("mDNS: {e}")),
