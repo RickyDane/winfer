@@ -254,6 +254,8 @@ impl Host {
             "provider": if pane.provider == "shell" { None } else { Some(pane.provider.clone()) },
             "status": status_text, "message": message, "request": request, "reply": reply,
             "config": crate::chats::config(&pane.id).map(|(c, _)| c),
+            // Its own worktree's branch (none: it works in the project folder).
+            "branch": pane.worktree.as_ref().map(|w| w.branch.clone()),
         })
     }
 

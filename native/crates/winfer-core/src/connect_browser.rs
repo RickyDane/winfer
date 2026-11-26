@@ -18,6 +18,7 @@ type Sink = std::sync::Arc<dyn Fn(Vec<u8>) + Send + Sync>;
 #[derive(Default)]
 struct Shared {
     seq: u64,
+    /// Calls waiting on an answer: (answer by, where it goes).
     waiting: HashMap<String, (Instant, async_channel::Sender<Result<Value, String>>)>,
     frames: HashMap<String, Sink>,
     /// Remote workspaces with a browser seen, by peer.
@@ -38,14 +39,19 @@ pub fn split(id: &str) -> Option<(&str, &str)> {
 }
 
 /// Calls `op` on the browser of the remote workspace `id` and waits for its answer.
-pub async fn call(id: &str, op: &str, mut args: Value) -> Result<Value, String> {
+pub async fn call(id: &str, op: &str, args: Value) -> Result<Value, String> {
+    call_within(id, op, args, TIMEOUT).await
+}
+
+/// `call` for what takes longer than most calls (downloading Chromium there).
+pub async fn call_within(id: &str, op: &str, mut args: Value, timeout: Duration) -> Result<Value, String> {
     let (peer, ws) = split(id).ok_or("not a server's browser")?;
     let (tx, rx) = async_channel::bounded(1);
     let rid = {
         let mut s = SHARED.lock();
         s.seq += 1;
         let rid = format!("b{}", s.seq);
-        s.waiting.insert(rid.clone(), (Instant::now(), tx));
+        s.waiting.insert(rid.clone(), (Instant::now() + timeout, tx));
         if !std::mem::replace(&mut s.sweeping, true) {
             std::thread::spawn(sweep);
         }
@@ -80,7 +86,7 @@ fn sweep() {
         std::thread::sleep(Duration::from_secs(1));
         let late: Vec<async_channel::Sender<Result<Value, String>>> = {
             let mut s = SHARED.lock();
-            let ids: Vec<String> = s.waiting.iter().filter(|(_, (at, _))| at.elapsed() > TIMEOUT).map(|(id, _)| id.clone()).collect();
+            let ids: Vec<String> = s.waiting.iter().filter(|(_, (by, _))| Instant::now() > *by).map(|(id, _)| id.clone()).collect();
             ids.iter().filter_map(|id| s.waiting.remove(id)).map(|(_, tx)| tx).collect()
         };
         for tx in late {

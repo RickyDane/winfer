@@ -56,19 +56,16 @@ impl Account {
     }
 }
 
-fn entry(key: &str) -> Result<keyring::Entry, String> {
-    keyring::Entry::new(SERVICE, key).map_err(|e| e.to_string())
-}
+// Through the vault, which a throwaway copy (`WINFER_VAULT_FILE`) keeps in a file instead.
+use crate::vault::values;
 
 fn load() -> Option<Account> {
-    serde_json::from_str(&entry(ACCOUNT_KEY).ok()?.get_password().ok()?).ok()
+    serde_json::from_str(&values::get(SERVICE, ACCOUNT_KEY).ok()?).ok()
 }
 
 fn save(account: &Account) -> Result<(), String> {
     *TOKEN.lock().unwrap() = None;
-    entry(ACCOUNT_KEY)?
-        .set_password(&serde_json::to_string(account).map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())
+    values::set(SERVICE, ACCOUNT_KEY, &serde_json::to_string(account).map_err(|e| e.to_string())?)
 }
 
 /// A random (version 4) UUID as a URN, the form OpenAI expects for `ext_agent_host_id`.
@@ -82,15 +79,14 @@ fn uuid_urn() -> String {
 
 /// A stable id for this installation, required by the registration flow.
 fn host_id() -> Result<String, String> {
-    let entry = entry(HOST_KEY)?;
     // Ids saved before they had to be URNs were rejected by OpenAI; replace them.
-    if let Ok(id) = entry.get_password()
+    if let Ok(id) = values::get(SERVICE, HOST_KEY)
         && id.starts_with("urn:uuid:")
     {
         return Ok(id);
     }
     let id = uuid_urn();
-    entry.set_password(&id).map_err(|e| e.to_string())?;
+    values::set(SERVICE, HOST_KEY, &id)?;
     Ok(id)
 }
 

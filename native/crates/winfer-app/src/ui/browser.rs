@@ -214,6 +214,11 @@ mod ops {
     /// The workspace's tabs, starting its browser. None: this machine has no browser to start.
     pub async fn open(ws: String) -> Res<Option<Value>> {
         if is_remote(&ws) {
+            // A server without Chromium yet: offered to download it there.
+            let status = remote::call(&ws, "status", json!({})).await?;
+            if status["executable"].is_null() {
+                return Ok(None);
+            }
             return remote::call(&ws, "open", json!({})).await.map(Some);
         }
         let app = app();
@@ -223,6 +228,11 @@ mod ops {
         }
         let tabs = browser::browser_open(app.clone(), app.state::<BrowserManager>(), ws).await?;
         Ok(Some(serde_json::to_value(tabs).unwrap_or(Value::Null)))
+    }
+
+    /// Downloads Chromium on the server of `ws` (this machine's is `browser_install`).
+    pub async fn install_on_server(ws: String) -> Res<()> {
+        remote::call_within(&ws, "install", json!({}), std::time::Duration::from_secs(600)).await.map(drop)
     }
 
     pub async fn new_tab(ws: String, url: String) -> Res<String> {
@@ -657,6 +667,10 @@ pub struct BrowserPanel {
     message: Option<SharedString>,
     needs_install: bool,
     installing: bool,
+    /// Servers' browsers (their `‹peer›|‹workspace›` ids) that have no Chromium yet, and those
+    /// downloading it.
+    server_needs: HashSet<String>,
+    server_installing: HashSet<String>,
     address: Entity<InputState>,
     address_for: Option<(String, String, String)>,
     focus: FocusHandle,
@@ -730,8 +744,8 @@ impl BrowserPanel {
             }
         })
         .detach();
-        // Development aid: input for the shown tab from a file (`click x y` / `type text` lines,
-        // page pixels), consumed as it's read (`WINFER_NATIVE_BROWSER_INPUT_FILE`).
+        // Development aid: input for the shown tab from a file (`click x y` / `type text` /
+        // `key Enter` / `go url` lines, page pixels), consumed as it's read (`WINFER_NATIVE_BROWSER_INPUT_FILE`).
         #[cfg(debug_assertions)]
         if let Ok(path) = std::env::var("WINFER_NATIVE_BROWSER_INPUT_FILE") {
             cx.spawn(async move |this, cx| {
@@ -739,7 +753,7 @@ impl BrowserPanel {
                     cx.background_executor().timer(Duration::from_millis(500)).await;
                     let Ok(text) = std::fs::read_to_string(&path) else { continue };
                     let _ = std::fs::remove_file(&path);
-                    if this.update(cx, |this, _| this.dev_input(&text)).is_err() {
+                    if this.update(cx, |this, cx| this.dev_input(&text, cx)).is_err() {
                         break;
                     }
                 }
@@ -764,6 +778,8 @@ impl BrowserPanel {
             message: None,
             needs_install: false,
             installing: false,
+            server_needs: HashSet::new(),
+            server_installing: HashSet::new(),
             address,
             address_for: None,
             focus: cx.focus_handle(),
@@ -1164,7 +1180,7 @@ impl BrowserPanel {
     }
 
     #[cfg(debug_assertions)]
-    fn dev_input(&self, text: &str) {
+    fn dev_input(&mut self, text: &str, cx: &mut Context<Self>) {
         for line in text.lines() {
             let mut words = line.splitn(2, ' ');
             match (words.next(), words.next()) {
@@ -1176,6 +1192,12 @@ impl BrowserPanel {
                     }
                 }
                 (Some("type"), Some(t)) => self.send("Input.insertText", json!({"text": t})),
+                (Some("key"), Some(k)) => {
+                    for kind in ["keyDown", "keyUp"] {
+                        self.send("Input.dispatchKeyEvent", json!({"type": kind, "key": k, "code": k, "windowsVirtualKeyCode": if k == "Enter" { 13 } else { 0 }}));
+                    }
+                }
+                (Some("go"), Some(url)) => self.navigate(url.to_string(), cx),
                 _ => {}
             }
         }
@@ -1191,6 +1213,11 @@ impl BrowserPanel {
             (None, Some(ws)) => {
                 let id = winfer_core::connect_browser::remote_id(peer, ws);
                 self.remote_names.entry(id.clone()).or_insert_with(|| crate::connect::peer_name(peer).unwrap_or_else(|| "Server".into()));
+                // Listed without tabs (its browser isn't running) or failed before: start it now.
+                if self.tabs.get(&id).is_some_and(|t| t.is_empty()) {
+                    self.tabs.remove(&id);
+                }
+                self.failed.remove(&id);
                 self.open_workspace(id.clone(), cx);
                 id
             }
@@ -1220,7 +1247,7 @@ impl BrowserPanel {
     }
 
     fn open_workspace(&mut self, workspace: String, cx: &mut Context<Self>) {
-        if self.opening.contains(&workspace) || self.tabs.contains_key(&workspace) || self.failed.contains(&workspace) {
+        if self.opening.contains(&workspace) || self.tabs.contains_key(&workspace) || self.failed.contains(&workspace) || self.server_needs.contains(&workspace) {
             return;
         }
         self.opening.insert(workspace.clone());
@@ -1230,6 +1257,9 @@ impl BrowserPanel {
                 ops::open(target).await
             })
             .await;
+            if std::env::var_os("WINFER_CONNECT_TRACE").is_some() {
+                eprintln!("[browser panel] open {workspace}: {opened:?}");
+            }
             let _ = this.update(cx, |this, cx| {
                 this.opening.remove(&workspace);
                 match opened {
@@ -1240,6 +1270,13 @@ impl BrowserPanel {
                         }
                         this.failed.remove(&workspace);
                         this.set_tabs(workspace, serde_json::from_value(tabs).unwrap_or_default(), cx);
+                    }
+                    Ok(Ok(None)) if ops::is_remote(&workspace) => {
+                        this.server_needs.insert(workspace.clone());
+                        // Development aid: download it there without clicking.
+                        if cfg!(debug_assertions) && std::env::var_os("WINFER_NATIVE_INSTALL_BROWSER").is_some() {
+                            this.install_on_server(workspace, cx);
+                        }
                     }
                     Ok(Ok(None)) => {
                         this.needs_install = true;
@@ -1264,6 +1301,9 @@ impl BrowserPanel {
     }
 
     fn install(&mut self, cx: &mut Context<Self>) {
+        if let Some(ws) = self.workspace.clone().filter(|w| self.server_needs.contains(w)) {
+            return self.install_on_server(ws, cx);
+        }
         self.installing = true;
         self.message = Some("Downloading the browser (about 100 MB)…".into());
         cx.notify();
@@ -1275,6 +1315,38 @@ impl BrowserPanel {
                     Ok(Ok(())) => {
                         this.needs_install = false;
                         this.message = None;
+                    }
+                    Ok(Err(err)) => this.message = Some(err.into()),
+                    Err(err) => this.message = Some(err.to_string().into()),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Downloads Chromium on a server, then starts its browser.
+    fn install_on_server(&mut self, ws: String, cx: &mut Context<Self>) {
+        if !self.server_installing.insert(ws.clone()) {
+            return;
+        }
+        let name = self.remote_names.get(&ws).cloned().unwrap_or_else(|| "the server".into());
+        self.message = Some(format!("Downloading the browser on {name} (about 100 MB)…").into());
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let target = ws.clone();
+            let result = tauri::async_runtime::spawn(ops::install_on_server(target)).await;
+            if std::env::var_os("WINFER_CONNECT_TRACE").is_some() {
+                eprintln!("[browser panel] install on {ws}: {result:?}");
+            }
+            let _ = this.update(cx, |this, cx| {
+                this.server_installing.remove(&ws);
+                match result {
+                    Ok(Ok(())) => {
+                        this.server_needs.remove(&ws);
+                        this.message = None;
+                        // Started now, so the panel stays on it.
+                        this.open_workspace(ws.clone(), cx);
                     }
                     Ok(Err(err)) => this.message = Some(err.into()),
                     Err(err) => this.message = Some(err.to_string().into()),
@@ -2294,12 +2366,15 @@ impl Render for BrowserPanel {
         // Paired servers' browsers: all in Overview; in a workspace, those of the servers it has
         // tiles of.
         let linked = self.linked_peers(cx);
-        let mut remote: Vec<(String, String)> = self
-            .tabs
-            .iter()
-            .filter(|(id, tabs)| !tabs.is_empty() && remote_peer(id).is_some_and(|p| show_all || linked.contains(p) || self.shown_server.as_deref() == Some(p)))
-            .map(|(id, _)| (id.clone(), self.remote_names.get(id).cloned().unwrap_or_else(|| "Server".into())))
+        // With tabs, or starting, needing Chromium or failed (so its state shows, not this
+        // machine's).
+        let listed = self.tabs.iter().filter(|(_, tabs)| !tabs.is_empty()).map(|(id, _)| id).chain(&self.opening).chain(&self.server_needs).chain(&self.failed);
+        let mut remote: Vec<(String, String)> = listed
+            .filter(|id| remote_peer(id).is_some_and(|p| show_all || linked.contains(p) || self.shown_server.as_deref() == Some(p)))
+            .map(|id| (id.clone(), self.remote_names.get(id).cloned().unwrap_or_else(|| "Server".into())))
             .collect();
+        remote.sort();
+        remote.dedup();
         remote.sort_by(|a, b| a.1.cmp(&b.1));
         let mut workspaces = workspaces;
         workspaces.extend(remote.iter().cloned());
@@ -2357,7 +2432,22 @@ impl Render for BrowserPanel {
         let picking = self.picking;
         let undocked = self.undocked;
         let certs_off = self.workspace.as_ref().is_some_and(|w| self.invalid_certs.contains(w));
-        let body = if self.workspace.as_deref().is_some_and(|w| self.blocked(w)) && self.needs_install {
+        let server_needs = self.workspace.as_ref().filter(|w| self.server_needs.contains(*w)).map(|w| self.remote_names.get(w).cloned().unwrap_or_else(|| "The server".into()));
+        let body = if let Some(name) = server_needs {
+            let busy = self.workspace.as_ref().is_some_and(|w| self.server_installing.contains(w));
+            div().size_full().flex().flex_col().items_center().justify_center().gap_2().px_4().text_xs().text_color(c.muted)
+                .child(div().max_w(px(520.0)).text_center().child(
+                    self.message.clone().unwrap_or_else(|| format!("{name} has no browser yet. Its agents and this panel use Chromium there.").into()),
+                ))
+                .when(!busy, |d| {
+                    d.child(
+                        div().id("install-server-browser").rounded_md().bg(c.accent).text_color(c.on_accent).px_3().py_1().cursor_pointer()
+                            .on_click(cx.listener(|this, _, _, cx| this.install(cx)))
+                            .child(format!("Download on {name}")),
+                    )
+                })
+                .into_any_element()
+        } else if self.workspace.as_deref().is_some_and(|w| self.blocked(w)) && self.needs_install {
             div().size_full().flex().flex_col().items_center().justify_center().gap_2().text_xs().text_color(c.muted)
                 .child("The browser panel needs Chromium.")
                 .child(

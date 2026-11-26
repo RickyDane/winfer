@@ -194,5 +194,5 @@ server's merge queue, in the agent's worktree there.
 | `review.discard` | client | `reviewId`: closes the pane, deletes the worktree and its branch |
 | `review.dismiss` / `review.unqueue` / `review.clear` | client | `reviewId` (not for `clear`): drop the review / take it out of the queue / clear finished queue items |
 
-A server's `panes` mirror carries `server: {version, latest, update, docker, os, arch, stats: {cpus, load, memTotal, memUsed, diskTotal, diskUsed, uptime}}`. Sign-ins are never logged
+A server's `panes` mirror carries `server: {version, latest, update, docker, os, arch, stats: {cpus, load, memTotal, memUsed, diskTotal, diskUsed, uptime}}`. Its panes carry `branch`: the branch of the pane's own worktree there (absent when it works in the project folder). Sign-ins are never logged
 (`WINFER_CONNECT_TRACE` leaves `parts` out).

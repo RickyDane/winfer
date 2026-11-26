@@ -384,6 +384,21 @@ An `Engine` that owns workspaces, panes, sessions and their status, and exposes 
   (not tested live). The relay `BadProof` trace is a harmless race (a stale `hs3` after a reconnect restarted the
   handshake). Not done: "Move" an account (it would delete this Mac's own sign-in), the relay's `/install.sh` deploy and a
   live systemd/launchd test, which need the relay host or a real server.
+- **Real server test** (Ubuntu 24.04 x86_64, systemd user service, linger on): `install.sh --version
+  v0.1.101-connect.1`, paired from a throwaway desktop (LAN and relay both carried traffic), cloned a public repo as a
+  workspace, a server terminal, WinferCode chats (no sign-in there: "Not logged in" shown live and after a restart,
+  each in its own worktree), the server's browser (Chromium downloaded there, navigation, typing, clicks), restarts
+  without orphans, `status`/`deploy-key`. Fixed on the way: winferd read the login shell with `-ilc`, so an rc file
+  that restarts the user's services (`pkill screen` …) ran at every start and left them in winferd's cgroup — servers
+  now read a non-interactive login shell (`-lc`) and the unit uses `KillMode=process` (what terminals start in the
+  background survives a restart, as after ssh); Chromium's zip was unpacked with `tar` (GNU tar can't), now with the
+  `zip` crate; the downloaded Chromium needs `--no-sandbox` where unprivileged user namespaces are restricted (Ubuntu
+  23.10+ AppArmor: "No usable sandbox!"); the panel offered to download Chromium on the desktop instead of the server
+  (now "Download on ‹server›", with a 10-minute call timeout) and didn't start a server browser listed without tabs;
+  the desktop UI froze reading ChatGPT's sign-in from the keychain while naming a new session (now read in the
+  background, and through the vault, so `WINFER_VAULT_FILE` instances don't touch the real keychain); server tiles
+  said "shared folder" for agents in a worktree (panes now carry `branch`). Still open: `winferd update --check`
+  404s until a normal release ships winferd; a terminal on the server runs the user's rc file like any login.
 
 ## Headless risks / notes
 

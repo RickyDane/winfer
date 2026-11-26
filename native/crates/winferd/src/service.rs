@@ -27,7 +27,10 @@ fn home() -> Result<PathBuf, String> {
 pub fn systemd_unit(exe: &str) -> String {
     format!(
         "[Unit]\nDescription=winferd (winfer for servers)\nAfter=network-online.target\nWants=network-online.target\n\n\
-         [Service]\nExecStart={exe} run\nRestart=on-failure\nRestartSec=3\nKillMode=mixed\n\n\
+         [Service]\nExecStart={exe} run\nRestart=on-failure\nRestartSec=3\n\
+         # Only winferd itself: what its terminals start in the background (screen, tmux, nohup) keeps\n\
+         # running, as after an ssh session; its panes end with it (their terminal closes).\n\
+         KillMode=process\n\n\
          [Install]\nWantedBy=default.target\n"
     )
 }

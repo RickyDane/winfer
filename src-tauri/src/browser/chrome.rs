@@ -136,11 +136,11 @@ pub fn install(managed_dir: &Path) -> Result<Executable, String> {
         .args(["-fsSL", "-o"])
         .arg(&zip)
         .arg(&url))?;
-    let extracted = run(Command::new("tar")
-        .arg("-xf")
-        .arg(&zip)
-        .arg("-C")
-        .arg(managed_dir));
+    // Not `tar -xf`: GNU tar (Linux) doesn't read zip files. Keeps the files' Unix modes.
+    let extracted = std::fs::File::open(&zip)
+        .map_err(|e| e.to_string())
+        .and_then(|f| zip::ZipArchive::new(f).map_err(|e| format!("bad browser download: {e}")))
+        .and_then(|mut a| a.extract(managed_dir).map_err(|e| format!("couldn't unpack the browser: {e}")));
     let _ = std::fs::remove_file(&zip);
     extracted?;
 
@@ -155,6 +155,16 @@ pub fn install(managed_dir: &Path) -> Result<Executable, String> {
         path: exe,
         source: "managed",
     })
+}
+
+/// Unprivileged user namespaces are off (Ubuntu 23.10+ restricts them with AppArmor unless a
+/// profile allows the program): the downloaded Chromium has no such profile, and without them its
+/// sandbox can't start ("No usable sandbox!"). Installed browsers bring their own (a profile or
+/// a setuid sandbox).
+#[cfg(target_os = "linux")]
+fn userns_restricted() -> bool {
+    let on = |path: &str| std::fs::read_to_string(path).ok().map(|v| v.trim() == "1");
+    on("/proc/sys/kernel/apparmor_restrict_unprivileged_userns") == Some(true) || on("/proc/sys/kernel/unprivileged_userns_clone") == Some(false)
 }
 
 pub struct Launched {
@@ -233,7 +243,7 @@ pub fn spawn(exe: &Executable, profile_dir: &Path, port: u16) -> Result<Child, S
     // is too small for it.
     #[cfg(target_os = "linux")]
     {
-        if unsafe { libc::geteuid() } == 0 {
+        if unsafe { libc::geteuid() } == 0 || (exe.source == "managed" && userns_restricted()) {
             cmd.arg("--no-sandbox");
         }
         cmd.arg("--disable-dev-shm-usage");

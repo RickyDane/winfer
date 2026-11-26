@@ -21,6 +21,9 @@ static PROFILE: OnceLock<Profile> = OnceLock::new();
 /// Sets the profile, before anything else uses the backend (default: the desktop).
 pub fn configure(profile: Profile) {
     let _ = PROFILE.set(profile);
+    if profile.server {
+        env::skip_interactive_rc();
+    }
 }
 
 pub fn profile() -> Profile {

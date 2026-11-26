@@ -134,6 +134,23 @@ pub fn commit_message(review: Option<&Review>) -> Option<String> {
     winfer_core::review::commit_message(summary, review.prompt.as_deref())
 }
 
+/// Whether ChatGPT is signed in, as last read in the background: reading it touches the keychain,
+/// which can wait on a permission prompt, so never on the UI thread. Refreshed at most every 30 s.
+fn chatgpt_signed_in() -> bool {
+    use std::sync::Mutex;
+    use std::time::Instant;
+    static STATE: Mutex<(bool, Option<Instant>)> = Mutex::new((false, None));
+    let mut state = STATE.lock().unwrap();
+    if state.1.is_none_or(|at| at.elapsed() > Duration::from_secs(30)) {
+        state.1 = Some(Instant::now());
+        std::thread::spawn(|| {
+            let signed_in = serde_json::to_value(chatgpt::chatgpt_status()).is_ok_and(|v| v["signedIn"] == true);
+            STATE.lock().unwrap().0 = signed_in;
+        });
+    }
+    state.0
+}
+
 impl Root {
     /// The LLM to use: the chosen one if available, else the first that is; `None` when off.
     pub(super) fn llm_provider(&self, cx: &App) -> Option<(String, String)> {
@@ -144,7 +161,7 @@ impl Root {
             return None;
         }
         let mut available = Vec::new();
-        if serde_json::to_value(chatgpt::chatgpt_status()).is_ok_and(|v| v["signedIn"] == true) {
+        if chatgpt_signed_in() {
             available.push("chatgpt".to_string());
         }
         for id in ["codex", "claude"] {

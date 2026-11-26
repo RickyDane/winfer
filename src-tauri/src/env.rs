@@ -22,6 +22,16 @@ pub fn use_process_env() {
     let _ = LOGIN_ENV.set(std::env::vars().collect());
 }
 
+/// Reads a non-interactive login shell (its profile, not its rc file): for a server, where an
+/// interactive shell's rc file may restart the user's own services (`pkill screen`, …) and leave
+/// them in the server's service, to be stopped with it.
+#[allow(dead_code)]
+pub fn skip_interactive_rc() {
+    NON_INTERACTIVE.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+static NON_INTERACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// The login PATH. Looked up case-insensitively: Windows spells it `Path`.
 pub fn path_var() -> String {
     login_env()
@@ -220,7 +230,8 @@ fn resolve() -> Option<HashMap<String, String>> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| default_shell());
 
     let mut cmd = Command::new(&shell);
-    cmd.args(["-ilc", &format!("printf '{MARKER}'; env -0")]).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+    let flags = if NON_INTERACTIVE.load(std::sync::atomic::Ordering::Relaxed) { "-lc" } else { "-ilc" };
+    cmd.args([flags, &format!("printf '{MARKER}'; env -0")]).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
     // An interactive shell turns on job control and takes over the controlling terminal; killed on
     // the timeout below, it never hands it back and the TUI it ran under can't read keys anymore.
     // Its own session has no terminal to take.

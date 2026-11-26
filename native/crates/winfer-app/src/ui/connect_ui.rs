@@ -35,6 +35,8 @@ pub struct RemotePane {
     pub request_kind: Option<String>,
     pub request_text: Option<String>,
     pub reply: Option<String>,
+    /// The branch of its worktree there; None in the project folder (or from an older server).
+    pub branch: Option<String>,
 }
 
 impl RemotePane {
@@ -51,6 +53,7 @@ impl RemotePane {
             request_kind: v["request"]["kind"].as_str().map(str::to_string),
             request_text: v["request"]["text"].as_str().map(str::to_string),
             reply: v["reply"].as_str().map(str::to_string),
+            branch: v["branch"].as_str().map(str::to_string),
         })
     }
 }
@@ -144,6 +147,9 @@ pub(super) struct ConnectClient {
     dev_folder: bool,
     /// `WINFER_NATIVE_CONNECT_SPAWN`'s workspace request, once sent.
     dev_spawn: Option<String>,
+    /// The dev spawn's `pane.new` request, then the pane it made (`WINFER_NATIVE_CONNECT_OPEN=spawned`).
+    dev_spawn_pane: Option<String>,
+    dev_spawned: Option<String>,
     dev_review: bool,
     dev_usage: bool,
     dev_phone: bool,
@@ -464,7 +470,11 @@ impl Root {
                     let (provider, prompt) = (parts.next().unwrap_or("default"), parts.next().unwrap_or(""));
                     // `winfer@local/model`: a provider with its model.
                     let (provider, model) = provider.split_once('@').unwrap_or((provider, ""));
-                    self.connect_request(&peer, json!({"t": "pane.new", "workspaceId": ws, "provider": provider, "model": model, "text": prompt, "worktree": true}), Some("Dev spawn: agent".into()));
+                    self.connect.dev_spawn_pane = Some(self.connect_request(&peer, json!({"t": "pane.new", "workspaceId": ws, "provider": provider, "model": model, "text": prompt, "worktree": true}), Some("Dev spawn: agent".into())));
+                }
+                #[cfg(debug_assertions)]
+                if self.connect.dev_spawn_pane.as_deref() == Some(id) {
+                    self.connect.dev_spawned = msg["paneId"].as_str().map(str::to_string);
                 }
                 if let Some((local, fp, name)) = self.connect.pushes.remove(id)
                     && msg["ok"] == true
@@ -912,7 +922,7 @@ impl Root {
         #[cfg(debug_assertions)]
         if std::env::var_os("WINFER_NATIVE_CONNECT_OPEN").is_some() && !self.connect.dev_opened {
             let want = std::env::var("WINFER_NATIVE_CONNECT_OPEN").unwrap_or_default();
-            let first = self.connect.mirrors.iter().find_map(|(peer, m)| m.panes.iter().find(|p| want == "1" || p.provider == want).map(|p| (peer.clone(), p.id.clone())));
+            let first = self.connect.mirrors.iter().find_map(|(peer, m)| m.panes.iter().find(|p| want == "1" || p.provider == want || (want == "spawned" && self.connect.dev_spawned.as_ref() == Some(&p.id))).map(|p| (peer.clone(), p.id.clone())));
             if let Some((peer, pane)) = first {
                 self.connect.dev_opened = true;
                 self.open_remote_pane(&peer, &pane, window, cx);

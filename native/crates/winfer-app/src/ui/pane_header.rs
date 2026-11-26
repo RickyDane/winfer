@@ -342,7 +342,24 @@ impl Root {
         let branch = pane.worktree.as_ref().map(|t| (t.branch.trim_start_matches("winfer/").to_string(), t.path.clone()));
         let (t1, t3, t4, t5, t6, t7) = (target.clone(), target.clone(), target.clone(), target.clone(), target.clone(), target.clone());
         let menu_pane = pane.clone();
-        let branch_el = match branch {
+        // A paired machine's pane: its worktree is there (no changes to show here).
+        let remote_branch = pane.remote.as_ref().map(|r| {
+            self.connect.mirrors.get(&r.peer).and_then(|m| m.panes.iter().find(|p| p.id == r.pane)).and_then(|p| p.branch.clone())
+        });
+        let branch_el = match (remote_branch, branch) {
+            (Some(remote), _) => {
+                let teal = crate::theme::hex(if c.light { "#0f766e" } else { "#5eead4" });
+                let (label, tip) = match remote {
+                    Some(b) => (b.trim_start_matches("winfer/").to_string(), "Its own worktree on that machine"),
+                    None => ("shared folder".to_string(), "Works in the project folder there, not its own worktree"),
+                };
+                div().id(SharedString::from(format!("remote-branch-{id}"))).flex().max_w(px(176.0)).items_center().gap_1().text_size(px(10.5)).font_family(mono.clone()).text_color(if label == "shared folder" { c.subtle } else { teal })
+                    .tooltip(move |window, cx| Tooltip::new(tip).build(window, cx))
+                    .child(Icon::new(IconName::GitBranch).size(px(11.0)).flex_shrink_0())
+                    .child(div().min_w_0().truncate().child(label))
+                    .into_any_element()
+            }
+            (None, branch) => match branch {
             Some((b, path)) => {
                 let teal = crate::theme::hex(if c.light { "#0f766e" } else { "#5eead4" });
                 div().id(SharedString::from(format!("branch-{id}"))).flex().max_w(px(176.0)).items_center().gap_1().rounded_full().bg(Hsla { a: 0.11, ..teal }).px_1p5().py(px(0.5)).font_family(mono.clone()).text_size(px(10.5)).text_color(teal).cursor_pointer()
@@ -359,6 +376,7 @@ impl Root {
                 .child(Icon::new(IconName::GitBranch).size(px(11.0)).flex_shrink_0())
                 .child("shared folder")
                 .into_any_element(),
+            },
         };
         let url_el = pane.dev_url.clone().map(|u| {
             let open = u.clone();
