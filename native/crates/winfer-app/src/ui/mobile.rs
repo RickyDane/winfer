@@ -304,7 +304,8 @@ impl Root {
     pub(super) fn mobile_mirror(&self, cx: &App) -> Value {
         let s = self.state.read(cx);
         let panes: Vec<Value> = s.workspaces.iter().flat_map(ordered).map(|p| self.snapshot_pane(p, cx)).collect();
-        let workspaces: Vec<Value> = s.workspaces.iter().map(|w| json!({ "id": w.id, "name": w.name, "active": w.id == s.active_workspace_id })).collect();
+        // Not the workspaces holding other machines' tiles: those are theirs to show.
+        let workspaces: Vec<Value> = s.workspaces.iter().filter(|w| w.remote.is_none()).map(|w| json!({ "id": w.id, "name": w.name, "active": w.id == s.active_workspace_id })).collect();
         let providers: Vec<Value> = s.providers.iter().filter(|p| p.installed && p.id != "shell").map(|p| json!({ "id": p.id, "name": p.name })).collect();
         let compact_tools = s.rest.get("codeWeb").and_then(|v| v["compactTools"].as_bool()).unwrap_or(true);
         let show_bg_notes = s.rest.get("codeWeb").and_then(|v| v["showBgNotes"].as_bool()).unwrap_or(true);
@@ -364,7 +365,7 @@ impl Root {
         let show_bg_notes = s.rest.get("codeWeb").and_then(|v| v["showBgNotes"].as_bool()).unwrap_or(true);
         let layout = json!([
             s.active_workspace_id,
-            s.workspaces.iter().map(|w| json!([w.id, w.name, ordered(w).iter().map(|p| p.id.clone()).collect::<Vec<_>>()])).collect::<Vec<_>>(),
+            s.workspaces.iter().filter(|w| w.remote.is_none()).map(|w| json!([w.id, w.name, ordered(w).iter().map(|p| p.id.clone()).collect::<Vec<_>>()])).collect::<Vec<_>>(),
             s.providers.iter().filter(|p| p.installed).map(|p| p.id.clone()).collect::<Vec<_>>(),
             s.default_provider,
             s.theme,

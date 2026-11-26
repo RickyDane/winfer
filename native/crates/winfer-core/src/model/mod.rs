@@ -139,6 +139,20 @@ pub struct Workspace {
     pub preset_index: usize,
     #[serde(default = "yes")]
     pub use_worktrees: bool,
+    /// Set on a workspace that holds tiles of a paired machine's workspace: listed under that
+    /// machine in the sidebar, not with the local workspaces. Kept in the ui state
+    /// (`remoteWorkspaces`): the workspaces table has no column for it.
+    #[serde(skip)]
+    pub remote: Option<RemoteWorkspace>,
+}
+
+/// A paired machine's workspace that a local workspace shows tiles of.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteWorkspace {
+    pub peer: String,
+    /// The workspace's id on that machine.
+    pub workspace: String,
 }
 
 fn yes() -> bool {
@@ -311,8 +325,8 @@ pub struct AppState {
 }
 
 /// `ui` fields the typed state above owns; everything else round-trips through `rest`.
-const OWNED_UI: [&str; 26] = [
-    "viewer",
+const OWNED_UI: [&str; 27] = [
+    "viewer", "remoteWorkspaces",
     "activeWorkspaceId", "sidebarOpen", "expandedWorkspaces", "browserOpen", "agentModels", "autoApprove",
     "systemPrompt", "enabledTools", "defaultProvider", "editor", "shortcuts", "browserWidth", "sidebarWidth", "sidePanel",
     "theme", "view", "terminalFontSize", "overviewLayout", "showPaneCost", "pageTabIconsOnly",
@@ -494,6 +508,12 @@ impl AppState {
                 p.remote = Some(r.clone());
             }
         }
+        let remote: HashMap<String, RemoteWorkspace> = ui.get("remoteWorkspaces").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
+        for w in &mut workspaces {
+            if let Some(r) = remote.get(&w.id) {
+                w.remote = Some(r.clone());
+            }
+        }
         self.rest = ui.into_iter().filter(|(k, _)| !OWNED_UI.contains(&k.as_str())).collect();
         self.workspaces = workspaces;
         self.sync_overview();
@@ -526,6 +546,7 @@ impl AppState {
             "pageTabIconsOnly": self.page_tab_icons_only, "recentSessions": recent, "paneTasks": tasks,
             "sessionTitles": self.session_titles,
             "remoteTiles": self.all_panes().filter_map(|p| Some((p.id.clone(), p.remote.clone()?))).collect::<HashMap<_, _>>(),
+            "remoteWorkspaces": self.workspaces.iter().filter_map(|w| Some((w.id.clone(), w.remote.clone()?))).collect::<HashMap<_, _>>(),
         });
         ui.extend(owned.as_object().unwrap().clone());
         serde_json::json!({ "workspaces": self.workspaces, "ui": ui })
@@ -645,14 +666,44 @@ impl AppState {
 
     pub fn remove_workspace(&mut self, id: &str) {
         self.workspaces.retain(|w| w.id != id);
-        if self.workspaces.is_empty() {
-            self.workspaces.push(new_workspace("home", "~"));
+        self.expanded_workspaces.retain(|w| w != id);
+        if self.workspaces.iter().all(|w| w.remote.is_some()) {
+            self.workspaces.insert(0, new_workspace("home", "~"));
         }
         if self.active_workspace_id == id {
-            self.active_workspace_id = self.workspaces[0].id.clone();
-            self.focused_pane_id = first_pane(self.workspaces.first());
+            let next = self.workspaces.iter().find(|w| w.remote.is_none()).map(|w| w.id.clone()).unwrap_or_default();
+            self.active_workspace_id = next;
+            self.focused_pane_id = first_pane(self.active());
         }
         self.sync_overview();
+    }
+
+    /// The local workspace showing tiles of `peer`'s workspace `workspace`, made (and switched
+    /// to) when there's none yet; `name` is what it's called.
+    pub fn remote_workspace(&mut self, peer: &str, workspace: &str, name: &str) -> String {
+        let want = RemoteWorkspace { peer: peer.to_string(), workspace: workspace.to_string() };
+        if let Some(w) = self.workspaces.iter_mut().find(|w| w.remote.as_ref() == Some(&want)) {
+            w.name = name.to_string();
+            let id = w.id.clone();
+            self.set_active_workspace(&id);
+            return id;
+        }
+        let mut ws = new_workspace(name, "");
+        ws.use_worktrees = false;
+        ws.remote = Some(want);
+        let id = ws.id.clone();
+        self.workspaces.push(ws);
+        self.active_workspace_id = id.clone();
+        self.focused_pane_id = None;
+        id
+    }
+
+    /// A machine's workspace whose last tile closed goes away.
+    fn drop_empty_remote_workspaces(&mut self) {
+        let empty: Vec<String> = self.workspaces.iter().filter(|w| w.remote.is_some() && w.panes.iter().all(|p| p.archived)).map(|w| w.id.clone()).collect();
+        for id in empty {
+            self.remove_workspace(&id);
+        }
     }
 
     pub fn toggle_workspace_expanded(&mut self, id: &str) {
@@ -749,6 +800,7 @@ impl AppState {
             }
         }
         self.after_leaving_tiles(id);
+        self.drop_empty_remote_workspaces();
         self.sync_overview();
     }
 
@@ -901,6 +953,27 @@ mod tests {
         assert_eq!(clean_agent_title("C:\\WINDOWS\\system32\\cmd.exe", &[]), None);
         assert_eq!(clean_agent_title("Administrator: C:\\x\\cmd.exe", &[]), None);
         assert_eq!(clean_agent_title("⠂ ⠂", &[]), None);
+    }
+
+    #[test]
+    fn other_machines_tiles_get_their_own_workspace() {
+        let mut s = AppState::new();
+        s.hydrate(serde_json::json!({ "workspaces": [], "ui": null }));
+        let home = s.active_workspace_id.clone();
+        let ws = s.remote_workspace("peer", "w1", "web · server");
+        assert_eq!(s.active_workspace_id, ws);
+        let tile = s.add_pane("claude", AddPane { workspace_id: Some(ws.clone()), worktree: Some(false), ..Default::default() });
+        assert_eq!(s.remote_workspace("peer", "w1", "web · server"), ws, "the same machine workspace is reused");
+        assert_eq!(s.workspaces.len(), 2);
+        // Kept across a restart.
+        let snap = s.snapshot();
+        let mut again = AppState::new();
+        again.hydrate(snap);
+        assert_eq!(again.workspaces.iter().find(|w| w.id == ws).and_then(|w| w.remote.clone()), Some(RemoteWorkspace { peer: "peer".into(), workspace: "w1".into() }));
+        // The last tile closing takes it away, back to a local workspace.
+        s.remove_pane(&tile);
+        assert_eq!(s.workspaces.len(), 1);
+        assert_eq!(s.active_workspace_id, home);
     }
 
     #[test]

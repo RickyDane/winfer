@@ -504,6 +504,10 @@ impl Root {
         let card_bg = mix_color(c.panel, c.app, 0.68);
         let mut list = div().mt_1().flex().flex_col().gap_1p5();
         for (i, ws) in workspaces.iter().enumerate() {
+            // Other machines' workspaces are listed under them (Connected).
+            if ws.remote.is_some() {
+                continue;
+            }
             let active = ws.id == active_ws;
             let expanded = expanded_ids.contains(&ws.id);
             let hue = name_hue(&ws.name) / 360.0;

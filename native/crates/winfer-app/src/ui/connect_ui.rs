@@ -384,7 +384,14 @@ impl Root {
         let reference = crate::model::RemoteRef { peer: peer.to_string(), pane: pane_id.to_string(), machine: machine.clone() };
         let title = format!("{} · {machine}", remote.title);
         self.state.update(cx, |s, cx| {
-            let id = s.add_pane(&remote.provider, crate::model::AddPane { worktree: Some(false), custom_title: Some(title), cwd: Some(String::new()), ..Default::default() });
+            // In a workspace of that machine's workspace (listed under the machine), not the one
+            // open here.
+            let ws = s.remote_workspace(peer, &remote.workspace_id, &format!("{} · {machine}", remote.workspace));
+            if s.view() != crate::model::View::Workspace {
+                s.view = Some(crate::model::View::Workspace);
+            }
+            let id = s.add_pane(&remote.provider, crate::model::AddPane { workspace_id: Some(ws), worktree: Some(false), custom_title: Some(title), cwd: Some(String::new()), ..Default::default() });
+            s.focus_pane(&id);
             if let Some(p) = s.workspaces.iter_mut().flat_map(|w| w.panes.iter_mut()).find(|p| p.id == id) {
                 p.remote = Some(reference);
                 p.status = remote.status;
@@ -1051,7 +1058,7 @@ impl Root {
         if tool == "list_panes_all" {
             let s = self.state.read(cx);
             let me = crate::connect::get().map(|c| c.status().name).unwrap_or_default();
-            let spaces = s.workspaces.iter().map(|w| w.name.clone()).collect::<Vec<_>>().join(", ");
+            let spaces = s.workspaces.iter().filter(|w| w.remote.is_none()).map(|w| w.name.clone()).collect::<Vec<_>>().join(", ");
             let rows: Vec<String> = s.workspaces.iter().flat_map(|w| super::mobile::ordered(w).into_iter().filter(|p| !p.archived).map(move |p| (w, p))).enumerate()
                 .map(|(i, (w, p))| format!("{me}:{} · {} · {} · workspace {} · {}", i + 1, p.provider, super::agent_api::status_name(p.status), w.name, s.pane_label(p)))
                 .collect();
@@ -1073,7 +1080,7 @@ impl Root {
         // The workspace: the target pane's, the one named, or the first.
         let ws = match (&tool[..], a["pane"].as_str(), a["workspace"].as_str()) {
             (_, Some(pane), _) => s.workspaces.iter().find(|w| w.panes.iter().any(|p| p.id == pane)),
-            ("spawn_agent", None, Some(name)) => s.workspaces.iter().find(|w| w.name.eq_ignore_ascii_case(name)),
+            ("spawn_agent", None, Some(name)) => s.workspaces.iter().find(|w| w.remote.is_none() && w.name.eq_ignore_ascii_case(name)),
             _ => s.workspaces.iter().find(|w| w.id == s.active_workspace_id).or(s.workspaces.first()),
         }
         .cloned();
@@ -1335,7 +1342,8 @@ impl Root {
             let toggle = peer.peer_id.clone();
             let add_peer = peer.peer_id.clone();
             let about = mirror.server.as_ref().map(|sv| format!("\nwinferd {}{}", sv.version, sv.health.as_ref().map_or(String::new(), |h| format!("\n{h}")))).unwrap_or_default();
-            let tip = format!("{}\n{label}{about}\nClick to show or hide its sessions", peer.name);
+            let tip = format!("{}\n{label}{about}\nClick to show or hide its sessions{}", peer.name, if up && mirror.loaded { ", right-click for more" } else { "" });
+            let menu_ready = up && mirror.loaded;
             let header = div().id(SharedString::from(format!("peer-{}", peer.peer_id))).flex().items_center().gap_2().px_2().py(px(6.0)).rounded(px(10.0)).cursor_pointer().text_size(px(13.0))
                 .text_color(if up { c.fg } else { c.muted })
                 .hover(move |d| d.bg(c.hover).text_color(c.fg))
@@ -1345,6 +1353,12 @@ impl Root {
                         this.connect.collapsed.insert(toggle.clone());
                     }
                     cx.notify();
+                }))
+                .on_mouse_down(MouseButton::Right, cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                    if menu_ready {
+                        let items = this.remote_new_menu(&add_peer);
+                        this.open_menu(e.position, Some("New session on this machine".into()), items, cx);
+                    }
                 }))
                 .child(div().relative().size(px(22.0)).flex_shrink_0().flex().items_center().justify_center().rounded(px(6.0)).bg(c.hover)
                     .child(Icon::new(icon).size(px(12.0)).text_color(c.muted))
@@ -1369,14 +1383,6 @@ impl Root {
                 })
                 .when(waiting > 0, |d| d.child(div().text_size(px(10.5)).text_color(c.warning).child(format!("{waiting} need{} you", if waiting == 1 { "s" } else { "" }))))
                 .when(waiting == 0 && agents > 0, |d| d.child(div().text_size(px(10.5)).text_color(c.subtle).font_family(mono.clone()).child(format!("{agents} agent{}", if agents == 1 { "" } else { "s" }))))
-                .when(up && mirror.loaded, |d| d.child(div().id(SharedString::from(format!("peer-new-{}", peer.peer_id))).rounded_sm().p_0p5().text_color(c.subtle).hover(move |d| d.bg(c.active).text_color(c.fg))
-                    .tooltip(|window, cx| Tooltip::new("New session on this machine").build(window, cx))
-                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, e: &MouseDownEvent, _, cx| {
-                        cx.stop_propagation();
-                        let items = this.remote_new_menu(&add_peer);
-                        this.open_menu(e.position, Some("New session on this machine".into()), items, cx);
-                    }))
-                    .child(Icon::new(IconName::Plus).size(px(12.0)))))
                 .child(Icon::new(if collapsed { IconName::ChevronRight } else { IconName::ChevronDown }).size(px(13.0)).text_color(c.subtle));
             let mut group = div().flex().flex_col().child(header);
             if !collapsed {
@@ -1442,9 +1448,14 @@ impl Root {
         let asking = pane.status == AgentStatus::NeedsInput && pane.request_kind.as_deref() == Some("approval");
         let (approve_peer, approve_pane) = (peer.to_string(), pane.id.clone());
         let tip = format!("{} · {}{}", pane.title, pane.workspace, detail.as_ref().map_or(String::new(), |d| format!("\n{d}")));
+        // Its tile is the one in front here.
+        let s = self.state.read(cx);
+        let selected = s.view() == crate::model::View::Workspace
+            && s.all_panes().any(|t| t.remote.as_ref().is_some_and(|r| r.peer == peer && r.pane == pane.id) && t.workspace_id == s.active_workspace_id && s.focused_pane_id.as_deref() == Some(t.id.as_str()));
         div().id(SharedString::from(format!("rrow-{peer}-{}", pane.id))).flex().items_center().gap(px(9.0)).rounded(px(7.0)).px_1p5().py(px(5.0))
             .text_size(px(12.5)).text_color(c.muted).when(!up, |d| d.opacity(0.6))
             .hover(move |d| d.bg(c.hover).text_color(c.fg))
+            .when(selected, |d| d.bg(c.active).text_color(c.fg))
             .when(up, |d| d.cursor_pointer())
             .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
             .on_click(cx.listener(move |this, _, window, cx| {

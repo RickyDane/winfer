@@ -866,7 +866,7 @@ impl Root {
     /// Gives the host a fresh snapshot of workspaces and feeds pane events to plugins.
     fn push_plugin_state(&mut self, cx: &App) {
         let s = self.state.read(cx);
-        let workspaces: Vec<Value> = s.workspaces.iter().map(|w| {
+        let workspaces: Vec<Value> = s.workspaces.iter().filter(|w| w.remote.is_none()).map(|w| {
             let mut v = serde_json::to_value(w).unwrap_or_default();
             if let Some(panes) = v["panes"].as_array_mut() {
                 for (p, pane) in panes.iter_mut().zip(&w.panes) {

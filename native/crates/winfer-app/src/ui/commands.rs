@@ -734,7 +734,7 @@ impl Root {
                 }
             }),
             C::WorkspaceSwitchIndex(n) => {
-                let id = self.state.read(cx).workspaces.get(n.wrapping_sub(1)).map(|w| w.id.clone());
+                let id = self.state.read(cx).workspaces.iter().filter(|w| w.remote.is_none()).nth(n.wrapping_sub(1)).map(|w| w.id.clone());
                 if let Some(id) = id {
                     self.execute(C::WorkspaceSwitch(id), window, cx);
                 }

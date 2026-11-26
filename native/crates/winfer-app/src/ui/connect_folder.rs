@@ -222,7 +222,11 @@ impl Root {
             .child(div().px_4().pt_3().pb_1().flex().items_center().gap_2()
                 .child(Icon::new(IconName::Server).size(px(13.0)).text_color(c.accent))
                 .child(div().text_size(px(13.0)).font_weight(FontWeight::MEDIUM).text_color(c.fg).child(format!("New workspace on {}", d.name))))
-            .child(div().p_2().child(Input::new(&d.input).appearance(false)))
+            // The field stands out from the list: a darker well with a search icon.
+            .child(div().mx_3().mt_2().mb_1().h(px(38.0)).px_2p5().flex().items_center().gap_2().rounded_lg()
+                .bg(if c.light { hsla(0.0, 0.0, 0.0, 0.05) } else { hsla(0.0, 0.0, 0.0, 0.28) }).border_1().border_color(c.edge)
+                .child(Icon::new(IconName::Search).size(px(14.0)).text_color(c.subtle))
+                .child(div().flex_1().min_w_0().child(Input::new(&d.input).appearance(false))))
             .child(list)
             .child(footer);
         Some(
