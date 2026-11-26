@@ -451,6 +451,7 @@ impl Host {
                 }
                 // A chat's thread from its events.
                 if let Some(messages) = crate::chats::thread(&pane.id, msg["limit"].as_u64().unwrap_or(200).clamp(1, 500) as usize) {
+                    crate::chats::watch(&pane.id, peer);
                     return reply(json!({"t": "thread", "paneId": pane.id, "messages": messages, "source": "winfer"}));
                 }
                 // A terminal agent's transcript, read off the thread that waits on nothing.

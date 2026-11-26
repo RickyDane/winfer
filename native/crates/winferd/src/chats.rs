@@ -4,8 +4,9 @@
 
 use parking_lot::Mutex;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
+use std::time::{Duration, Instant};
 use winfer_core::code::mobile;
 use winfer_core::code::protocol::{Cmd, Decision, LineBuffer, parse_line};
 use winfer_core::code::state::CodeState;
@@ -21,29 +22,78 @@ struct Chat {
 
 static CHATS: LazyLock<Mutex<HashMap<String, Chat>>> = LazyLock::new(Default::default);
 
-/// Output of the chat pane `pane` (JSON lines, maybe cut mid-line).
-pub fn tap(pane: &str, bytes: &[u8]) {
-    let mut chats = CHATS.lock();
-    let chat = chats.entry(pane.to_string()).or_default();
-    for line in chat.lines.push(bytes) {
-        // Not JSON (a crash's text): not a message of the chat.
-        if line.trim_start().starts_with('{')
-            && let Some(ev) = parse_line(&line)
-        {
-            chat.state.apply(ev);
+/// Clients reading a chat's thread (`thread.get`), with when each lease ends: they get its
+/// changes as they happen, as phones do from a desktop's chats.
+static WATCHING: LazyLock<Mutex<HashMap<String, HashMap<String, Instant>>>> = LazyLock::new(Default::default);
+/// Chats with a push on its way (bursts of output coalesce into one).
+static PENDING: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(Default::default);
+
+/// `client` read the chat's thread: it gets the chat's changes for the next minute.
+pub fn watch(pane: &str, client: &str) {
+    WATCHING.lock().entry(pane.to_string()).or_default().insert(client.to_string(), Instant::now() + Duration::from_secs(60));
+}
+
+/// Sends the chat's thread to those watching it, shortly (once per burst).
+fn push_soon(pane: &str) {
+    {
+        let mut watching = WATCHING.lock();
+        let Some(clients) = watching.get_mut(pane) else { return };
+        let now = Instant::now();
+        clients.retain(|_, until| *until > now);
+        if clients.is_empty() {
+            watching.remove(pane);
+            return;
         }
     }
-    // Nothing is sent from this copy: the process gets commands from `send`.
-    chat.state.outbox.clear();
+    if !PENDING.lock().insert(pane.to_string()) {
+        return;
+    }
+    let pane = pane.to_string();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(50));
+        PENDING.lock().remove(&pane);
+        let Some(messages) = thread(&pane, 200) else { return };
+        let clients: Vec<String> = WATCHING.lock().get(&pane).map(|c| c.keys().cloned().collect()).unwrap_or_default();
+        let msg = serde_json::json!({"t": "thread", "paneId": pane, "messages": messages, "source": "winfer"});
+        for client in clients {
+            crate::host::send_to(&client, msg.clone());
+        }
+    });
+}
+
+/// Output of the chat pane `pane` (JSON lines, maybe cut mid-line).
+pub fn tap(pane: &str, bytes: &[u8]) {
+    let changed = {
+        let mut chats = CHATS.lock();
+        let chat = chats.entry(pane.to_string()).or_default();
+        let mut changed = false;
+        for line in chat.lines.push(bytes) {
+            // Not JSON (a crash's text): not a message of the chat.
+            if line.trim_start().starts_with('{')
+                && let Some(ev) = parse_line(&line)
+            {
+                chat.state.apply(ev);
+                changed = true;
+            }
+        }
+        // Nothing is sent from this copy: the process gets commands from `send`.
+        chat.state.outbox.clear();
+        changed
+    };
+    if changed {
+        push_soon(pane);
+    }
 }
 
 /// A message sent to the chat as a command (the chat doesn't echo those).
 pub fn note_user(pane: &str, text: &str) {
     CHATS.lock().entry(pane.to_string()).or_default().state.apply(winfer_core::code::protocol::Ev::User { text: text.to_string() });
+    push_soon(pane);
 }
 
 pub fn forget(pane: &str) {
     CHATS.lock().remove(pane);
+    WATCHING.lock().remove(pane);
 }
 
 fn answered(chat: &Chat) -> usize {
