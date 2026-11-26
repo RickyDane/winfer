@@ -118,7 +118,10 @@ jobs:
       - uses: ./.github/actions/sccache
       - name: Build
         working-directory: native
-        run: cargo build --release --locked -p winferd --target ${{ matrix.target }}
+        run: |
+          # The stamped version is the workspace crates' own: only their lock entries change.
+          cargo update --workspace
+          cargo build --release --locked -p winferd --target ${{ matrix.target }}
       - name: Package and upload
         run: |
           name=winferd-${{ matrix.asset }}
