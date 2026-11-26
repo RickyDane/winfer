@@ -155,6 +155,8 @@ Settings → Connect → Relay URL to `http://127.0.0.1:8799` on both. `WINFER_C
   while you were active on that machine in the last 2 minutes.
 - [ ] An agent here calls `list_machines`, `list_remote_panes`, `send_to_pane` with `"<machine>:1"`, `read_pane`, and
   `spawn_remote_agent`.
+- [ ] Workspaces from agents, on a desktop and on a server alike: `add_workspace` (folder, clone), `remove_workspace`
+  (refused for its own), `new_remote_workspace`/`remove_remote_workspace` on the other kind of machine; folders stay.
 - [ ] An agent here: `new_remote_workspace` on a server, `spawn_remote_agent` there (its answer names `machine:N`),
   `remote_pane_action` approve, `list_reviews`, `review_action` merge; `machine_usage`; `pair_machine` link → the server
   command pairs a new server with no click; `push_sign_in` (test account only).

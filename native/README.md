@@ -61,7 +61,8 @@ Done:
   Settings → Connect; the sidebar's Connected section with each machine's sessions, approve/decline/interrupt/close and
   new sessions there; remote panes as live tiles (terminals and winfer code chats) where opening one takes over its
   size; native notifications for remote sessions; agent tools for all of it (`list_machines`, `list_remote_panes`,
-  `spawn_remote_agent`, `remote_pane_action`, `machine:N` panes in `read_pane`/`send_to_pane`, `new_remote_workspace`,
+  `spawn_remote_agent`, `remote_pane_action`, `machine:N` panes in `read_pane`/`send_to_pane`, `add_workspace`/`remove_workspace`,
+  `new_remote_workspace`/`remove_remote_workspace` (servers and desktops alike),
   `list_reviews`/`review_action`, `machine_usage`, `update_server`, `pair_machine`, `list_sign_ins`/`push_sign_in`;
   a server's own agents reach paired machines the same way)
 - [x] Android mirror: live H.264 (openh264) with screenshot fallback, tap, swipe, scroll, keys, emulator start

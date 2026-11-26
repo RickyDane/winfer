@@ -5,6 +5,7 @@ pub mod backend;
 pub mod connect;
 pub mod connect_browser;
 pub mod connect_term;
+pub mod folders;
 pub mod hooks;
 pub mod layout;
 pub mod model;

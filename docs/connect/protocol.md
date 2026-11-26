@@ -129,8 +129,12 @@ host's pane id or a number in the host's own `list_panes_all` order: callers pas
 addresses never depend on a stale mirror. Clients time out after 30 s.
 
 Agents see these as tools (both kinds of machine): `list_machines`, `list_remote_panes`, `spawn_remote_agent`,
-`remote_pane_action`, `read_pane`/`send_to_pane` on `"<machine>:<n>"`, `list_reviews`, `review_action`. Desktops also
-have `new_remote_workspace` (`workspace.new` / `git.clone` on a server), `machine_usage` (`usage.get`), `update_server`
+`remote_pane_action`, `read_pane`/`send_to_pane` on `"<machine>:<n>"`, `list_reviews`, `review_action`, and for
+workspaces `add_workspace`/`remove_workspace` (this machine; not the caller's own) and
+`new_remote_workspace`/`remove_remote_workspace` (any paired machine: `tool.call` `add_workspace` (folder or clone, up
+to 10 min) / `remove_workspace`; the folder stays). Desktops answer `fs.list`, `workspace.new`, `git.clone`,
+`workspace.remove` and `server.key` like servers, so "New workspace on ‹machine›" works for both. Desktops also
+have `machine_usage` (`usage.get`), `update_server`
 (`server.update`), `pair_machine` (a link the desktop confirms by itself, joining a link, or nearby/address pairing that
 the user confirms) and `list_sign_ins`/`push_sign_in` (`account.push`). Not for agents: unpairing machines or phones.
 

@@ -678,6 +678,25 @@ impl AppState {
         self.sync_overview();
     }
 
+    /// The workspace for the folder `root` (the one already there, if any), made without
+    /// switching to it: another machine or an agent asked, not the user here.
+    pub fn workspace_for_folder(&mut self, root: &str, name: &str) -> String {
+        if let Some(w) = self.workspaces.iter().find(|w| w.remote.is_none() && w.root_dir == root) {
+            return w.id.clone();
+        }
+        let ws = new_workspace(name, root);
+        let id = ws.id.clone();
+        self.workspaces.push(ws);
+        self.sync_overview();
+        id
+    }
+
+    /// This machine's workspace with that id or name (any case).
+    pub fn workspace_named(&self, key: &str) -> Option<&Workspace> {
+        let key = key.trim();
+        self.workspaces.iter().filter(|w| w.remote.is_none()).find(|w| w.id == key).or_else(|| self.workspaces.iter().filter(|w| w.remote.is_none()).find(|w| w.name.eq_ignore_ascii_case(key)))
+    }
+
     /// The local workspace showing tiles of `peer`'s workspace `workspace`, made (and switched
     /// to) when there's none yet; `name` is what it's called.
     pub fn remote_workspace(&mut self, peer: &str, workspace: &str, name: &str) -> String {

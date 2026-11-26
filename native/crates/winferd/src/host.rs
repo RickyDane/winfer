@@ -360,6 +360,18 @@ impl Host {
                     crate::browser::on_request(host, peer, msg);
                 }
             }
+            "tool.call" if msg["name"] == "add_workspace" => {
+                // A clone takes a while: answered from its own thread.
+                let (peer, msg) = (peer.to_string(), msg.clone());
+                std::thread::spawn(move || {
+                    let Some(host) = HOST.get() else { return };
+                    let (ok, text) = match host.workspace_add(&msg["args"]) {
+                        Ok(t) => (true, t),
+                        Err(t) => (false, t),
+                    };
+                    send_to(&peer, json!({"t": "tool.result", "id": msg["id"], "ok": ok, "text": text}));
+                });
+            }
             "tool.call" => {
                 let result = self.remote_tool(peer, msg["name"].as_str().unwrap_or_default(), &msg["args"]);
                 let (ok, text) = match result {
@@ -386,18 +398,11 @@ impl Host {
                 reply(json!({"t": "ack", "ok": true, "workspaceId": id, "name": name}));
             }
             "workspace.remove" => {
-                // Its sessions close; the folder (and any worktrees) stay.
-                let id = msg["workspaceId"].as_str().unwrap_or_default();
-                let Some(panes) = self.with_state(|s| s.workspaces.iter().find(|w| w.id == id).map(|w| w.panes.iter().map(|p| p.id.clone()).collect::<Vec<_>>())) else {
-                    return reply(no("That workspace is gone."));
-                };
-                for pane in &panes {
-                    terminal::close(pane);
-                    crate::chats::forget(pane);
+                let key = msg["workspaceId"].as_str().or(msg["name"].as_str()).unwrap_or_default();
+                match self.workspace_remove(key, &client_name(peer)) {
+                    Ok(_) => reply(ok()),
+                    Err(e) => reply(no(&e)),
                 }
-                self.with_state(|s| s.remove_workspace(id));
-                eprintln!("removed a workspace ({} session{}), asked by {}", panes.len(), if panes.len() == 1 { "" } else { "s" }, client_name(peer));
-                reply(ok());
             }
             "server.key" if !peer.starts_with("phone:") => {
                 let name = connect::get().map(|c| c.status().name).unwrap_or_default();
@@ -616,7 +621,44 @@ impl Host {
             return ws.id.clone();
         }
         let name = name.map(str::trim).filter(|n| !n.is_empty()).map(str::to_string).unwrap_or_else(|| path.file_name().map_or(root.clone(), |n| n.to_string_lossy().to_string()));
-        s.create_workspace(&name, &root)
+        s.workspace_for_folder(&root, &name)
+    }
+
+    /// An agent's add_workspace (here or from another machine): a folder on this server, or a
+    /// repository cloned first. Blocks while cloning.
+    fn workspace_add(&self, a: &Value) -> Result<String, String> {
+        let me = connect::get().map(|c| c.status().name).unwrap_or_else(|| "this server".into());
+        let name = a["name"].as_str();
+        let named = |id: &str| self.with_state(|s| s.workspaces.iter().find(|w| w.id == id).map(|w| w.name.clone())).unwrap_or_default();
+        if let Some(url) = a["git_url"].as_str().filter(|u| !u.trim().is_empty()) {
+            let dest = crate::machine::clone(url, a["branch"].as_str(), a["parent"].as_str().unwrap_or("~"))?;
+            let id = self.add_workspace(&dest, name);
+            return Ok(format!("Cloned into {} on {me}; it's workspace “{}” there.", crate::machine::display(&dest), named(&id)));
+        }
+        let path = a["path"].as_str().filter(|p| !p.trim().is_empty()).ok_or("Give a folder path or a git_url to clone.")?;
+        let dir = crate::machine::expand(path);
+        if !dir.is_dir() {
+            return Err(format!("There's no folder {path} on {me}."));
+        }
+        let id = self.add_workspace(&dir, name);
+        Ok(format!("Workspace “{}” ({}) is open on {me}.", named(&id), crate::machine::display(&dir)))
+    }
+
+    /// Removes a workspace (by id or name): its sessions close, the folder and worktrees stay.
+    fn workspace_remove(&self, key: &str, by: &str) -> Result<String, String> {
+        let me = connect::get().map(|c| c.status().name).unwrap_or_else(|| "this server".into());
+        let Some((id, name, panes)) = self.with_state(|s| s.workspace_named(key).map(|w| (w.id.clone(), w.name.clone(), w.panes.iter().map(|p| p.id.clone()).collect::<Vec<_>>()))) else {
+            let names = self.with_state(|s| s.workspaces.iter().filter(|w| w.remote.is_none()).map(|w| w.name.clone()).collect::<Vec<_>>().join(", "));
+            return Err(format!("No workspace “{key}” on {me}. There: {names}."));
+        };
+        for pane in &panes {
+            terminal::close(pane);
+            crate::chats::forget(pane);
+        }
+        self.with_state(|s| s.remove_workspace(&id));
+        let n = panes.len();
+        eprintln!("removed workspace {name} ({n} session{}), asked by {by}", if n == 1 { "" } else { "s" });
+        Ok(format!("Removed workspace “{name}” from {me}{}; its folder stays.", if n == 0 { String::new() } else { format!(" and closed its {n} session{}", if n == 1 { "" } else { "s" }) }))
     }
 
     pub(crate) fn with_state<R>(&self, f: impl FnOnce(&mut AppState) -> R) -> R {
@@ -791,6 +833,7 @@ impl Host {
         }
         let a = &a;
         match tool {
+            "remove_workspace" => self.workspace_remove(a["workspace"].as_str().unwrap_or_default(), &client_name(peer)),
             "list_panes_all" => {
                 let s = self.state.lock();
                 let me = connect::get().map(|c| c.status().name).unwrap_or_default();
@@ -889,6 +932,32 @@ impl Host {
                 Ok(if rows.is_empty() { "No paired machines.".into() } else { rows.join("\n") })
             }
             "list_remote_panes" => return Some(self.forward(call, a["machine"].as_str().unwrap_or_default(), "list_panes_all", json!({}), &caller())),
+            "add_workspace" => {
+                let (call, a) = (call.to_string(), a.clone());
+                std::thread::spawn(move || {
+                    let Some(host) = HOST.get() else { return };
+                    match host.workspace_add(&a) {
+                        Ok(t) => mcp_reply(&call, true, &t),
+                        Err(t) => mcp_reply(&call, false, &t),
+                    }
+                });
+                return Some(None);
+            }
+            "remove_workspace" => {
+                let key = a["workspace"].as_str().unwrap_or_default();
+                let mine = self.with_state(|s| s.pane(me).map(|p| p.workspace_id.clone()));
+                if mine.is_some() && self.with_state(|s| s.workspace_named(key).map(|w| w.id.clone())) == mine {
+                    return Some(Some(Err("That's the workspace you're running in: it can't be removed from inside it.".into())));
+                }
+                self.workspace_remove(key, &caller())
+            }
+            "new_remote_workspace" => {
+                let args = json!({"path": a["path"], "git_url": a["git_url"], "branch": a["branch"], "parent": a["parent"], "name": a["name"]});
+                return Some(self.forward_for(call, a["machine"].as_str().unwrap_or_default(), "add_workspace", args, &caller(), 600));
+            }
+            "remove_remote_workspace" => {
+                return Some(self.forward(call, a["machine"].as_str().unwrap_or_default(), "remove_workspace", json!({"workspace": a["workspace"]}), &caller()));
+            }
             "spawn_remote_agent" => {
                 let args = json!({"provider": a["provider"], "prompt": a["prompt"], "worktree": a["worktree"], "workspace": a["workspace"], "model": a["model"], "effort": a["effort"]});
                 return Some(self.forward(call, a["machine"].as_str().unwrap_or_default(), "spawn_agent", args, &caller()));
@@ -960,6 +1029,11 @@ impl Host {
 
     /// Runs `tool` on a paired machine; the MCP call is answered when it replies (or in 30 s).
     fn forward(&self, call: &str, machine: &str, tool: &str, args: Value, caller: &str) -> Option<Result<String, String>> {
+        self.forward_for(call, machine, tool, args, caller, 30)
+    }
+
+    /// `forward`, waiting up to `secs` (clones take longer).
+    fn forward_for(&self, call: &str, machine: &str, tool: &str, args: Value, caller: &str, secs: u64) -> Option<Result<String, String>> {
         let connect = connect::get()?;
         let norm = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
         let peers = connect.peers();
@@ -974,7 +1048,7 @@ impl Host {
         connect::send(&peer.peer_id, json!({"t": "tool.call", "id": id, "name": tool, "args": args, "caller": caller}));
         let name = peer.name.clone();
         std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_secs(30));
+            std::thread::sleep(std::time::Duration::from_secs(secs));
             if let Some(call) = TOOL_WAITS.lock().remove(&id) {
                 mcp_reply(&call, false, &format!("{name} didn't answer in time."));
             }
@@ -1127,6 +1201,20 @@ fn mcp_reply(call: &str, ok: bool, text: &str) {
 }
 
 /// The Connect tools this server's agents get (with winfer's own).
+/// add_workspace's and new_remote_workspace's arguments.
+pub(crate) fn workspace_props(machine: Option<&Value>) -> Value {
+    let mut props = json!({
+        "path": {"type": "string", "description": "An existing folder, e.g. ~/code/app"},
+        "git_url": {"type": "string", "description": "Repository to clone (into ~ unless parent is given)"},
+        "branch": {"type": "string"}, "parent": {"type": "string", "description": "Folder to clone into (default ~)"},
+        "name": {"type": "string", "description": "Workspace name (default: the folder's)"},
+    });
+    if let Some(m) = machine {
+        props["machine"] = m.clone();
+    }
+    props
+}
+
 fn server_tools() -> Vec<Value> {
     let machine = json!({"type": "string", "description": "Machine name from list_machines"});
     let pane = json!({"type": "string", "description": "\"<machine>:<number>\" from list_remote_panes"});
@@ -1140,6 +1228,10 @@ fn server_tools() -> Vec<Value> {
         json!({"name": "remote_pane_action", "description": "Act on an agent pane on a paired machine: approve or decline what it asks, interrupt it, or close the pane.", "inputSchema": {"type": "object", "properties": {
             "pane": pane, "action": {"type": "string", "enum": ["approve", "decline", "interrupt", "close"]}
         }, "required": ["pane", "action"]}}),
+        json!({"name": "add_workspace", "description": "Open a workspace on this machine: an existing folder (path), or a git repository it clones first (git_url, optional branch and parent folder).", "inputSchema": {"type": "object", "properties": workspace_props(None)}}),
+        json!({"name": "remove_workspace", "description": "Remove a workspace from this machine: its sessions close; the folder and worktrees stay. Not the one you run in.", "inputSchema": {"type": "object", "properties": {"workspace": {"type": "string", "description": "Workspace name"}}, "required": ["workspace"]}}),
+        json!({"name": "new_remote_workspace", "description": "Open a workspace on a paired machine: an existing folder there (path), or a git repository it clones first (git_url). Returns the workspace's name for spawn_remote_agent.", "inputSchema": {"type": "object", "properties": workspace_props(Some(&machine)), "required": ["machine"]}}),
+        json!({"name": "remove_remote_workspace", "description": "Remove a workspace from a paired machine: its sessions there close; the folder and worktrees stay.", "inputSchema": {"type": "object", "properties": {"machine": machine, "workspace": {"type": "string", "description": "Workspace name there (list_remote_panes)"}}, "required": ["machine", "workspace"]}}),
         json!({"name": "list_reviews", "description": "List the finished work waiting for review on this server, and its merge queue: review id, agent, branch, changes, tests, summary.", "inputSchema": {"type": "object", "properties": {}}}),
         json!({"name": "review_action", "description": "Act on a review from list_reviews: merge it (through the merge queue; tests: run the tests first), run its tests, send it back to its agent with text, discard the work, or dismiss the review.", "inputSchema": {"type": "object", "properties": {
             "review": {"type": "string"}, "action": {"type": "string", "enum": ["merge", "tests", "send", "discard", "dismiss"]},
