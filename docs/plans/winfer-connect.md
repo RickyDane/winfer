@@ -316,7 +316,11 @@ An `Engine` that owns workspaces, panes, sessions and their status, and exposes 
   link). Update flow: `winferd update [--check]` (or the desktop's "Update" pill on the server's row,
   `server.update`) downloads the newest stable release (`winferd-version.txt`), checks its sha256, swaps the binary and
   re-executes itself (same pid); servers check every 6 h and report `server {version, update, docker}` in their mirror.
-  Docker servers get the `docker pull` command instead. Still to do: a first release to exercise the CI jobs.
+  Docker servers get the `docker pull` command instead. First release run done: `v0.1.101-connect.1` (a pre-release,
+  `release.yml` with `winferd_only`, so no desktop bundles, update feed or `:latest`/`:nebula` image) built all four
+  tarballs and the amd64+arm64 image; `install.sh --version v0.1.101-connect.1` installed it in a clean Debian container
+  and the image has winferd, Chromium, git, ssh and node. Fixed on the way: the version stamp left `Cargo.lock` stale for
+  `--locked`.
 
 - **H4** done in its first form (`winfer_core::accounts_sync`): Settings → Accounts → push icon → "Push to ‹machine›"
   sends `account.push {provider, accountId, label, parts}` (Claude: `credentials` from the Keychain or
@@ -378,8 +382,8 @@ An `Engine` that owns workspaces, panes, sessions and their status, and exposes 
   not seen on screen); `winferd deploy-key` / "Copy deploy key" in the clone dialog for private repos over ssh (the
   key is offered by its clones); a server signs out of sign-ins a machine pushed to it when that machine is unpaired
   (not tested live). The relay `BadProof` trace is a harmless race (a stale `hs3` after a reconnect restarted the
-  handshake). Not done: "Move" an account (it would delete this Mac's own sign-in), a first release run, the relay's
-  `/install.sh` deploy and a live systemd/launchd test, which need a push, the relay host or a real server.
+  handshake). Not done: "Move" an account (it would delete this Mac's own sign-in), the relay's `/install.sh` deploy and a
+  live systemd/launchd test, which need the relay host or a real server.
 
 ## Headless risks / notes
 
