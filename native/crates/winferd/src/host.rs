@@ -449,9 +449,12 @@ impl Host {
                 if pane.provider == "winfer" && SESSIONS.get(&pane.id).is_none_or(|s| !s.spawned.load(Ordering::Relaxed)) {
                     self.start_pane(&pane.id);
                 }
+                // Its changes go to the reader live (also the history a chat just started replays).
+                if pane.provider == "winfer" {
+                    crate::chats::watch(&pane.id, peer);
+                }
                 // A chat's thread from its events.
                 if let Some(messages) = crate::chats::thread(&pane.id, msg["limit"].as_u64().unwrap_or(200).clamp(1, 500) as usize) {
-                    crate::chats::watch(&pane.id, peer);
                     return reply(json!({"t": "thread", "paneId": pane.id, "messages": messages, "source": "winfer"}));
                 }
                 // A terminal agent's transcript, read off the thread that waits on nothing.

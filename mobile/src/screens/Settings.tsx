@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { b64uDecode } from "../b64";
 import type { DesktopClient } from "../client";
 import { go, haptic, isIOS, isStandalone, useClient } from "../hooks";
-import { activePairing, loadPairings, removePairing, setActive } from "../pairing";
+import { activeIsServer, activePairing, loadPairings, removePairing, setActive } from "../pairing";
 import { Icon } from "./common";
 import { setCompactToolsOverride, useCompactTools } from "./compactTools";
 import { setShowBgNotesOverride, useShowBgNotes } from "./bgNotes";
@@ -37,7 +37,7 @@ export function Settings({ client, mock, onChanged }: { client: DesktopClient; m
     setPush("busy");
     try {
       const vapid = state.welcome?.vapidPublicKey;
-      if (!vapid) throw new Error("Connect to your desktop first.");
+      if (!vapid) throw new Error(`Connect to your ${activeIsServer() ? "server" : "desktop"} first.`);
       if ((await Notification.requestPermission()) !== "granted") {
         setPush(Notification.permission === "denied" ? "denied" : "off");
         return;

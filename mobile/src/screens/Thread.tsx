@@ -3,6 +3,7 @@ import type { DesktopClient } from "../client";
 import { ago, firstMessages, go, haptic, useClient, useTick, vtName } from "../hooks";
 import { isFreeText, type Message, type Pane, type RequestOption } from "../protocol";
 import { Composer, Pill, PillIcon } from "./Composer";
+import { activeIsServer } from "../pairing";
 import { Avatar, ConnNotice, Icon, ProviderMark, STATUS_LABEL, providerInfo, toolIcon, toolText, toolTint, type IconName } from "./common";
 import { VizReport } from "./Viz";
 import { buildDisplayRows, describeStep, useCompactTools, workGroupSummary } from "./compactTools";
@@ -264,7 +265,7 @@ export function Welcome({ status, where, onPick, disabled }: { status: string; w
           ))}
         </div>
       )}
-      <p className="welcome-hint">Type a message below, and it's sent to the agent on your desktop</p>
+      <p className="welcome-hint">Type a message below, and it's sent to the agent on your {activeIsServer() ? "server" : "desktop"}</p>
     </div>
   );
 }

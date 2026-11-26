@@ -3,6 +3,7 @@ import type { DesktopClient } from "../client";
 import { firstMessages, go, haptic, useClient } from "../hooks";
 import type { ModelOption } from "../protocol";
 import { Icon, ProviderMark, linkState, providerInfo } from "./common";
+import { activeIsServer } from "../pairing";
 import { Composer, Pill, PillIcon } from "./Composer";
 import { EffortIcon, EffortListSheet, ModelListSheet, Sheet, backendOf, effortLabel } from "./Pickers";
 import { Sky } from "./Sky";
@@ -129,7 +130,9 @@ export function NewSession({ client, workspaceId }: { client: DesktopClient; wor
           {workspaces.length === 0 ? (
             <div className="empty">
               <h3>{online ? "No workspaces" : "Desktop not connected"}</h3>
-              <p className="sub">{online ? "Update winfer on the desktop to start sessions from your phone." : "Sessions start once your desktop is back online."}</p>
+              <p className="sub">{online
+                  ? activeIsServer() ? "Update winferd on the server to start sessions from your phone." : "Update winfer on the desktop to start sessions from your phone."
+                  : `Sessions start once your ${activeIsServer() ? "server" : "desktop"} is back online.`}</p>
             </div>
           ) : (
             <Welcome
@@ -208,7 +211,7 @@ export function NewSession({ client, workspaceId }: { client: DesktopClient; wor
                   <b>{w.name}</b>
                   <small>
                     {sessions(state.panes.filter((p) => p.workspaceId === w.id).length)}
-                    {w.active ? " · open on the desktop" : ""}
+                    {w.active && !activeIsServer() ? " · open on the desktop" : ""}
                   </small>
                 </span>
                 {w.id === chosenWs?.id && <Icon name="check" size={16} className="pick-check" />}
