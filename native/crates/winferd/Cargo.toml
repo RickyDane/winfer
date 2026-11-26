@@ -15,6 +15,7 @@ path = "src/main.rs"
 winfer-core = { path = "../winfer-core" }
 winfer-backend.workspace = true
 winfer-connect = { path = "../winfer-connect" }
+libc = "0.2.190"
 tauri.workspace = true
 serde_json.workspace = true
 async-channel = "2"

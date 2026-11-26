@@ -387,7 +387,7 @@ An `Engine` that owns workspaces, panes, sessions and their status, and exposes 
 - **Real server test** (Ubuntu 24.04 x86_64, systemd user service, linger on): `install.sh --version
   v0.1.101-connect.1`, paired from a throwaway desktop (LAN and relay both carried traffic), cloned a public repo as a
   workspace, a server terminal, WinferCode chats (no sign-in there: "Not logged in" shown live and after a restart,
-  each in its own worktree), the server's browser (Chromium downloaded there, navigation, typing, clicks), restarts
+  each in its own worktree), the server's browser (Chromium downloaded there, navigation, typing, clicks), restarts (a new start reclaims the old browser)
   without orphans, `status`/`deploy-key`. Fixed on the way: winferd read the login shell with `-ilc`, so an rc file
   that restarts the user's services (`pkill screen` …) ran at every start and left them in winferd's cgroup — servers
   now read a non-interactive login shell (`-lc`) and the unit uses `KillMode=process` (what terminals start in the
@@ -397,7 +397,9 @@ An `Engine` that owns workspaces, panes, sessions and their status, and exposes 
   (now "Download on ‹server›", with a 10-minute call timeout) and didn't start a server browser listed without tabs;
   the desktop UI froze reading ChatGPT's sign-in from the keychain while naming a new session (now read in the
   background, and through the vault, so `WINFER_VAULT_FILE` instances don't touch the real keychain); server tiles
-  said "shared folder" for agents in a worktree (panes now carry `branch`). Still open: `winferd update --check`
+  said "shared folder" for agents in a worktree (panes now carry `branch`). winferd had no SIGTERM handling: `systemctl stop` left
+  the server's Chromium running (with `KillMode=process`) and every run looked unclean — it now stops from its main
+  loop through `backend::shutdown()`. Uninstalled again afterwards; the server was left as before the test. Still open: `winferd update --check`
   404s until a normal release ships winferd; a terminal on the server runs the user's rc file like any login.
 
 ## Headless risks / notes

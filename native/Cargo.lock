@@ -11729,6 +11729,7 @@ dependencies = [
  "async-channel",
  "base64 0.23.1",
  "dirs 7.0.0",
+ "libc",
  "parking_lot",
  "qrcode",
  "serde_json",

@@ -97,6 +97,20 @@ pub fn name(args: &[String]) -> Option<String> {
     flag(args, "--name").or_else(|| std::env::var("WINFERD_NAME").ok()).or_else(saved).map(|n| n.trim().to_string()).filter(|n| !n.is_empty())
 }
 
+static STOPPING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// SIGTERM (systemctl stop, docker stop) and SIGINT stop winferd cleanly from its main loop.
+fn on_stop_signal() {
+    extern "C" fn stop(_: libc::c_int) {
+        STOPPING.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    // SAFETY: the handler only stores to an atomic, which is async-signal-safe.
+    unsafe {
+        libc::signal(libc::SIGTERM, stop as *const () as libc::sighandler_t);
+        libc::signal(libc::SIGINT, stop as *const () as libc::sighandler_t);
+    }
+}
+
 fn run(args: &[String]) {
     let Some(_lock) = backend::acquire_instance_lock() else {
         fail("winferd is already running (one per user and data folder)");
@@ -119,8 +133,16 @@ fn run(args: &[String]) {
         control::request_pair(&link);
     }
     eprintln!("winferd {} · {} · data in {}", env!("CARGO_PKG_VERSION"), connect.status().name, backend::data_dir().display());
+    on_stop_signal();
     loop {
         std::thread::sleep(Duration::from_secs(1));
+        if STOPPING.load(std::sync::atomic::Ordering::Relaxed) {
+            // Ends the workspace browsers (the unit's KillMode=process leaves children running)
+            // and marks the run clean.
+            eprintln!("winferd stopping");
+            backend::shutdown();
+            std::process::exit(0);
+        }
         host.tick();
         control::tick(connect, &host);
         phone::tick();
