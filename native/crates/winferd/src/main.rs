@@ -2,6 +2,7 @@
 //! winfer instances it's paired with (Winfer Connect). See docs/plans/winfer-connect.md (headless).
 
 mod browser;
+mod chats;
 mod control;
 mod host;
 mod machine;

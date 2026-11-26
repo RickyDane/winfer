@@ -144,6 +144,8 @@ pub(super) struct ConnectClient {
     dev_review: bool,
     dev_usage: bool,
     dev_phone: bool,
+    /// The remote tile asking, and since when (`WINFER_NATIVE_CONNECT_APPROVE`).
+    dev_asked: Option<(String, Instant)>,
     /// Agents' calls waiting on another machine: our request id → their MCP call id.
     tool_calls: HashMap<String, String>,
     /// Sign-ins pushed and not yet answered: request id → (account here, its fingerprint, machine name).
@@ -444,7 +446,9 @@ impl Root {
                 {
                     let mut parts = what.split('|').skip(1);
                     let (provider, prompt) = (parts.next().unwrap_or("default"), parts.next().unwrap_or(""));
-                    self.connect_request(&peer, json!({"t": "pane.new", "workspaceId": ws, "provider": provider, "text": prompt, "worktree": true}), Some("Dev spawn: agent".into()));
+                    // `winfer@local/model`: a provider with its model.
+                    let (provider, model) = provider.split_once('@').unwrap_or((provider, ""));
+                    self.connect_request(&peer, json!({"t": "pane.new", "workspaceId": ws, "provider": provider, "model": model, "text": prompt, "worktree": true}), Some("Dev spawn: agent".into()));
                 }
                 if let Some((local, fp, name)) = self.connect.pushes.remove(id)
                     && msg["ok"] == true
@@ -773,7 +777,7 @@ impl Root {
             }
         }
         // Development aid: open a folder on the first server as a workspace and start an agent there
-        // in a worktree (`WINFER_NATIVE_CONNECT_SPAWN=path|provider|prompt`).
+        // in a worktree (`WINFER_NATIVE_CONNECT_SPAWN=path|provider[@model]|prompt`).
         #[cfg(debug_assertions)]
         if let Ok(what) = std::env::var("WINFER_NATIVE_CONNECT_SPAWN")
             && self.connect.dev_spawn.is_none()
@@ -853,6 +857,20 @@ impl Root {
                     })
                     .detach();
                 }
+            }
+        }
+        // Development aid: approve what a remote tile asks, as its sidebar button does, once it has
+        // asked for a few seconds (`WINFER_NATIVE_CONNECT_APPROVE=1`).
+        #[cfg(debug_assertions)]
+        if std::env::var_os("WINFER_NATIVE_CONNECT_APPROVE").is_some() {
+            let asking = self.state.read(cx).all_panes().find(|p| p.remote.is_some() && p.status == AgentStatus::NeedsInput).map(|p| p.id.clone());
+            match asking {
+                Some(id) if self.connect.dev_asked.as_ref().is_some_and(|(p, at)| *p == id && at.elapsed() > Duration::from_secs(4)) => {
+                    self.connect.dev_asked = None;
+                    self.execute(Command::Approve(PaneRef::Id(id)), window, cx);
+                }
+                Some(id) if self.connect.dev_asked.as_ref().is_none_or(|(p, _)| *p != id) => self.connect.dev_asked = Some((id, Instant::now())),
+                _ => {}
             }
         }
         if !self.connect.synced && self.state.read(cx).hydrated {

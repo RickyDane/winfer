@@ -145,6 +145,8 @@ A phone can pair with a server directly (`winferd mobile pair` prints the QR cod
 on a paired desktop sends `mobile.pair` → `mobile.pairing {deviceId, link, qrSvg, expiresAt}`). The phone speaks the
 mobile protocol (docs/mobile/protocol.md) to the server, which answers it as it answers paired desktops; pushes go out
 on every finish and question (no one sits at a server). Its phones' keys live in `vault.json` (0600) in its data folder.
+A chat pane's `thread` and `request` come from the server's copy of the chat's events, as a desktop gives them; `approve`,
+`decline`, `choose` and `send` answer what it waits on. Asking for an agent that isn't running starts it.
 
 ### Browser on a server
 

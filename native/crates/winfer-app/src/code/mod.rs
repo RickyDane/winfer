@@ -5,7 +5,7 @@
 pub use winfer_core::code::bg_note;
 pub mod commands;
 pub mod links;
-pub mod mobile;
+pub use winfer_core::code::mobile;
 pub mod toolbody;
 pub mod viz;
 pub mod viz_svg;

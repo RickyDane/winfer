@@ -102,7 +102,7 @@ impl Host {
             Event::FirstOutput(id) => {
                 self.state.lock().starting.remove(&id);
                 if let Some(text) = self.first_messages.lock().remove(&id) {
-                    write_chat(&id, &Cmd::Send { text, images: vec![], files: vec![], skill: None, steer: false });
+                    send_chat_text(&id, &text);
                 }
             }
             Event::StartingProcess(id) => {
@@ -233,6 +233,10 @@ impl Host {
         let mut status_text = status_name(pane.status).to_string();
         let mut message = s.status_messages.get(&pane.id).cloned();
         let request = (pane.status == AgentStatus::NeedsInput).then(|| {
+            // A chat says exactly what it waits on.
+            if let Some(r) = crate::chats::request(&pane.id) {
+                return r;
+            }
             let screen = SESSIONS.get(&pane.id).map(|x| x.read_text(40)).unwrap_or_default();
             winfer_core::request::describe_request(&screen, message.as_deref())
         });
@@ -421,6 +425,14 @@ impl Host {
                 let Some(pane) = msg["paneId"].as_str().and_then(|id| self.state.lock().pane(id).cloned()) else {
                     return reply(json!({"t": "error", "error": "That agent is gone."}));
                 };
+                // A chat that isn't running starts, and replays its history into the thread.
+                if pane.provider == "winfer" && SESSIONS.get(&pane.id).is_none_or(|s| !s.spawned.load(Ordering::Relaxed)) {
+                    self.start_pane(&pane.id);
+                }
+                // A chat's thread from its events.
+                if let Some(messages) = crate::chats::thread(&pane.id, msg["limit"].as_u64().unwrap_or(200).clamp(1, 500) as usize) {
+                    return reply(json!({"t": "thread", "paneId": pane.id, "messages": messages, "source": "winfer"}));
+                }
                 // What the agent's terminal shows (its transcript isn't read here yet).
                 let screen = SESSIONS.get(&pane.id).map(|s| s.read_text(120)).unwrap_or_default();
                 let screen = screen.trim_end();
@@ -428,7 +440,20 @@ impl Host {
                 reply(json!({"t": "thread", "paneId": pane.id, "messages": messages, "source": "screen"}));
             }
             "config.get" => reply(json!({"t": "config", "paneId": msg["paneId"], "models": []})),
-            "models.get" | "pane.set" | "choose" => reply(no("A winfer server can't do that yet.")),
+            "models.get" | "pane.set" => reply(no("A winfer server can't do that yet.")),
+            "choose" => {
+                let Some(pane) = msg["paneId"].as_str().and_then(|id| self.state.lock().pane(id).cloned()) else { return reply(no("That agent is gone.")) };
+                if !crate::chats::asks_question(&pane.id) {
+                    return reply(no("A winfer server can only answer a chat's questions so far."));
+                }
+                match crate::chats::answer(&pane.id, msg["option"].as_u64().unwrap_or(0).max(1) as usize, msg["text"].as_str().unwrap_or_default()) {
+                    Ok(answer) => {
+                        self.log(&pane, format!("Chose \"{}\" from {}", cut(&answer, 60), client_name(peer)));
+                        reply(ok());
+                    }
+                    Err(e) => reply(no(&e)),
+                }
+            }
             "send" | "approve" | "decline" | "interrupt" | "pane.close" => {
                 let pane = msg["paneId"].as_str().and_then(|id| self.state.lock().pane(id).cloned());
                 let Some(pane) = pane else { return reply(no("That agent is gone.")) };
@@ -439,9 +464,18 @@ impl Host {
                         if text.is_empty() {
                             return reply(no("Nothing to send."));
                         }
-                        self.type_into(&pane, text);
+                        // A chat's question takes the text as its answer.
+                        if crate::chats::asks_question(&pane.id) {
+                            if let Err(e) = crate::chats::answer(&pane.id, 0, text) {
+                                return reply(no(&e));
+                            }
+                        } else {
+                            self.type_into(&pane, text);
+                        }
                         self.log(&pane, format!("Answered from {via}: {}", cut(text, 80)));
                     }
+                    "approve" if crate::chats::decide(&pane.id, true) => self.log(&pane, format!("Approved from {via}")),
+                    "decline" if crate::chats::decide(&pane.id, false) => self.log(&pane, format!("Declined from {via}")),
                     "approve" => {
                         let input = self.state.lock().providers.iter().find(|p| p.id == pane.provider).and_then(|p| p.approve_input.clone()).unwrap_or_else(|| "\r".into());
                         if let Some(session) = SESSIONS.get(&pane.id) {
@@ -461,6 +495,7 @@ impl Host {
                     }
                     _ => {
                         terminal::close(&pane.id);
+                        crate::chats::forget(&pane.id);
                         self.state.lock().remove_pane(&pane.id);
                     }
                 }
@@ -492,8 +527,32 @@ impl Host {
     }
 
     pub(crate) fn type_into(&self, pane: &Pane, text: &str) {
+        let running = SESSIONS.get(&pane.id).is_some_and(|s| s.spawned.load(Ordering::Relaxed) && !s.exited.load(Ordering::Relaxed));
+        if !running {
+            // Not started since the daemon started (or ended): start it, and the text goes in once
+            // it's up (a chat takes it as its first message; a terminal agent once it has drawn).
+            if pane.provider == "winfer" {
+                self.first_messages.lock().insert(pane.id.clone(), text.to_string());
+                self.start_pane(&pane.id);
+            } else {
+                self.start_pane(&pane.id);
+                let (pane, text) = (pane.clone(), text.to_string());
+                std::thread::spawn(move || {
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+                    while std::time::Instant::now() < deadline && SESSIONS.get(&pane.id).is_none_or(|s| s.read_text(5).trim().is_empty()) {
+                        std::thread::sleep(std::time::Duration::from_millis(300));
+                    }
+                    std::thread::sleep(std::time::Duration::from_secs(3));
+                    if let Some(host) = HOST.get() {
+                        host.type_into(&pane, &text);
+                    }
+                });
+            }
+            status::submitted(&mut *self.state.lock(), &pane.id, text);
+            return;
+        }
         if pane.provider == "winfer" && SESSIONS.get(&pane.id).is_some_and(|s| s.is_code()) {
-            write_chat(&pane.id, &Cmd::Send { text: text.to_string(), images: vec![], files: vec![], skill: None, steer: false });
+            send_chat_text(&pane.id, text);
         } else if let Some(session) = SESSIONS.get(&pane.id) {
             if text.contains('\n') {
                 session.send(&format!("\x1b[200~{}\x1b[201~", text.replace("\r\n", "\r").replace('\n', "\r")));
@@ -553,11 +612,14 @@ impl Host {
             // `winferd code --serve`: JSON lines the desktop's chat view reads; typed text is a send.
             let pane_id = id.to_string();
             session.attach_code(CodeHooks {
-                tap: Box::new(|_| {}),
+                tap: Box::new({
+                    let pane_id = pane_id.clone();
+                    move |bytes| crate::chats::tap(&pane_id, bytes)
+                }),
                 input: Box::new(move |text| {
                     let text = text.trim_end_matches(['\r', '\n']);
                     if !text.trim().is_empty() {
-                        write_chat(&pane_id, &Cmd::Send { text: text.to_string(), images: vec![], files: vec![], skill: None, steer: false });
+                        send_chat_text(&pane_id, text);
                     }
                 }),
             });
@@ -723,7 +785,24 @@ fn client_name(client: &str) -> String {
     if client.starts_with("phone:") { "your phone".into() } else { connect::peer_name(client).unwrap_or_else(|| "another machine".into()) }
 }
 
-fn write_chat(pane_id: &str, cmd: &Cmd) {
+/// A message to a chat. One line goes in as typed text, which the chat shows as your message to
+/// everyone following it; text it would take for an approval answer (`y`, `n`, `1`, `3`) and
+/// several lines go as a command, noted in the server's copy of the chat.
+fn send_chat_text(pane_id: &str, text: &str) {
+    let text = text.trim();
+    if text.contains('\n') || matches!(text, "y" | "n" | "1" | "3") {
+        crate::chats::note_user(pane_id, text);
+        write_chat(pane_id, &Cmd::Send { text: text.to_string(), images: vec![], files: vec![], skill: None, steer: false });
+    } else {
+        let line = format!("{text}\n");
+        let id = pane_id.to_string();
+        backend::background(move || {
+            let _ = pty::pty_write(backend::app().state(), id, line);
+        });
+    }
+}
+
+pub(crate) fn write_chat(pane_id: &str, cmd: &Cmd) {
     let line = format!("{}\n", cmd.json());
     let id = pane_id.to_string();
     backend::background(move || {

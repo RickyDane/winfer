@@ -298,7 +298,7 @@ An `Engine` that owns workspaces, panes, sessions and their status, and exposes 
 
 - **H0** done: backend, Connect and winfer-core build and pass their tests on Debian bookworm without display libraries
   (shell falls back to bash/sh when zsh is missing).
-- **H1** in part: `winfer-core` has requests, layout, the chat protocol/state/names/bg notes, the model, theme metadata
+- **H1** in part (also `code::mobile`, a chat's phone thread and requests, since the chat work below): `winfer-core` has requests, layout, the chat protocol/state/names/bg notes, the model, theme metadata
   and the terminal palette, the backend start (`backend::Profile`: desktop or server), Connect glue, remote terminals,
   PTY sessions and agent status (over a `status::Cell`; the app wraps its GPUI entity). Telemetry, window focus and the
   voice orchestrator come in through `winfer_core::hooks`. Still in the app: the chat session runner
@@ -361,6 +361,13 @@ An `Engine` that owns workspaces, panes, sessions and their status, and exposes 
   Also fixed: tiles of another machine's panes lost that link on restart (the panes table has no column for it) and
   came back as this machine's own agents; the link is now saved with the UI state. Not yet: tab titles set by script
   (an existing backend limit), a browser shown without a tile of the server, adaptive JPEG quality on the relay.
+- **Chats on a server** (the H2 gap): winferd keeps a copy of each chat pane's state from its output
+  (`winferd/src/chats.rs`, `winfer_core::code::mobile`), so phones get a chat's real thread and the exact approval or
+  question it waits on, and Allow/Deny/answers go in as chat commands (not keys the chat ignores). Messages from a
+  phone go in as typed lines, which the chat echoes to everyone following it. A message or thread request for an agent
+  that isn't running (after a daemon restart) starts it first instead of being dropped. Tested against a Linux
+  container with a stand-in local model (OpenAI Responses API): desktop first message and Approve, phone thread, Allow
+  and Deny, history after a restart.
 
 ## Headless risks / notes
 

@@ -18,6 +18,7 @@ pub mod version;
 
 pub mod code {
     pub mod bg_note;
+    pub mod mobile;
     pub mod names;
     pub mod protocol;
     pub mod state;

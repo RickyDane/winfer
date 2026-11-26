@@ -190,6 +190,10 @@ Build with `cargo build -p winferd` (Linux: in Docker, `rust:1-bookworm`; it lin
   lists the server's agents, starts one, answers it; with the desktop closed an agent finishing there pushes to the
   phone. `winferd mobile list` / `revoke <name>`; the phone stays paired across a daemon restart.
 
+- [ ] Chat on a server: start a winfer code chat on the server with a first message → it runs there; approve its tool
+  call from the desktop (sidebar "Needs you → Approve") and from a phone paired with the server (Allow/Deny show the
+  exact command); the phone's thread shows the conversation in order; restart winferd → the thread is still there.
+  Dev aids: `WINFER_NATIVE_CONNECT_SPAWN='~/repo|winfer@local/<model>|task'`, `WINFER_NATIVE_CONNECT_APPROVE=1`.
 - [ ] Browser on a server: open a tile of a server agent, have it use its browser tools (or open a page through
   `$WINFER_CDP_URL`) → the browser panel shows the server's tab after the workspace's own (its name in the strip);
   click and type in it, go back/forward, open and close a tab; stop the server → its tabs leave the panel. Restart
