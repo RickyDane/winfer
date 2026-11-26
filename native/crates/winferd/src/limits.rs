@@ -58,7 +58,6 @@ pub fn poll(manual: bool) {
     POLLER.lock().save();
 }
 
-/// A `usage://report` from an agent's status line here.
 /// Each agent pane's context as its last report gave it (`source`: its transcript), for
 /// phones reading its thread.
 static CONTEXTS: LazyLock<Mutex<HashMap<String, Value>>> = LazyLock::new(Default::default);
@@ -78,6 +77,7 @@ pub fn transcript(pane: &winfer_core::model::Pane) -> Option<(String, String)> {
     Some(("codex".to_string(), c["source"].as_str()?.to_string()))
 }
 
+/// A `usage://report` from an agent's status line here.
 pub fn report(host: &Host, payload: &Value) {
     if let Some(pane) = payload["paneId"].as_str()
         && payload["report"]["context"].is_object()

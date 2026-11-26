@@ -37,9 +37,9 @@ pub fn start(app: tauri::AppHandle, data_dir: &std::path::Path) {
         }
         let _ = match event {
             Event::Changed => {
-                // Unpaired machines lose their linked sign-ins.
-                // (Not while the list is empty: it loads after the first events. A link to a machine
-                // that's gone only ever fails to send.)
+                // Links to machines no longer paired go (one unpaired while this one was off, say).
+                // Not while the list is empty: it loads after the first events, and a failed read
+                // looks empty too. An unpairing seen here goes through `Unpaired` below.
                 if let Some(c) = CONNECT.get() {
                     let paired: Vec<String> = c.peers().into_iter().map(|p| p.peer_id).collect();
                     if !paired.is_empty() {
@@ -53,6 +53,14 @@ pub fn start(app: tauri::AppHandle, data_dir: &std::path::Path) {
                     crate::connect_browser::peer_up(&app, &peer);
                 }
                 app.emit("connect://peer", json!({"peer": peer, "up": true}))
+            }
+            Event::Unpaired(peer) => {
+                // Its pushed sign-ins leave with it, even when it was the last machine paired.
+                if let Some(c) = CONNECT.get() {
+                    let paired: Vec<String> = c.peers().into_iter().map(|p| p.peer_id).filter(|p| *p != peer).collect();
+                    crate::accounts_sync::retain_peers(&paired);
+                }
+                Ok(())
             }
             Event::PeerDown(peer) => {
                 crate::connect_term::drop_peer(&peer);

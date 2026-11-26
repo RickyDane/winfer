@@ -10,6 +10,12 @@ use winfer_core::backend;
 fn dir() -> PathBuf {
     let dir = backend::data_dir().join("control");
     let _ = std::fs::create_dir_all(&dir);
+    // Pair links and phone links pass through here: this user's only.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+    }
     dir
 }
 

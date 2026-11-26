@@ -242,9 +242,8 @@ impl Root {
                 if SESSIONS.get(&pane_id).is_none_or(|s| !s.spawned.load(std::sync::atomic::Ordering::Relaxed)) {
                     self.start_detached(&pane_id, cx);
                 }
-                let snapshot = crate::connect_term::attach(&pane_id, peer);
                 let chat = SESSIONS.get(&pane_id).is_some_and(|s| s.is_code());
-                crate::connect::send(peer, json!({"t": "term.snapshot", "paneId": pane_id, "data": crate::connect_term::b64(&snapshot), "chat": chat, "provider": pane.provider}));
+                crate::connect_term::attach(&pane_id, peer, chat, &pane.provider);
                 let (cols, rows) = size(msg);
                 crate::connect_term::set_sized_by(&pane_id, peer);
                 if let Some(session) = SESSIONS.get(&pane_id) {
@@ -256,11 +255,8 @@ impl Root {
             }
             "term.in" => {
                 let data = String::from_utf8_lossy(&crate::connect_term::unb64(msg["data"].as_str().unwrap_or_default())).to_string();
-                if !data.is_empty() {
-                    let id = pane_id.clone();
-                    backend::background(move || {
-                        let _ = winfer_backend::pty::pty_write(backend::app().state(), id, data);
-                    });
+                if !data.is_empty() && let Some(session) = SESSIONS.get(&pane_id) {
+                    session.write_remote(&data);
                 }
             }
             "term.resize" => {

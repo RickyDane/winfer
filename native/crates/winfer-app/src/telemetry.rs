@@ -110,7 +110,6 @@ fn now_ms() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
 }
 
-/// Loads the saved state, the events left from last run, and starts sending.
 /// The core's telemetry hooks (`winfer_core::hooks`).
 struct CoreHooks;
 
@@ -144,6 +143,7 @@ pub fn install_hooks() {
     winfer_core::hooks::install(Box::new(CoreHooks));
 }
 
+/// Loads the saved state, the events left from last run, and starts sending.
 pub fn init(data_dir: &Path) {
     let first_run = !data_dir.join(FILE).exists();
     let mut saved: Saved = std::fs::read_to_string(data_dir.join(FILE)).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();

@@ -359,6 +359,12 @@ impl Session {
         }
     }
 
+    /// Writes to the process through its one writer thread, so keys from another machine stay in
+    /// order with each other and with what's typed here (no chat input hook).
+    pub fn write_remote(&self, data: &str) {
+        let _ = self.input.send(data.to_string());
+    }
+
     /// Replaces what the screen shows (the chat's transcript as text, for read_pane and summaries).
     pub fn set_screen_text(&self, text: &str) {
         let mut bytes = b"\x1b[2J\x1b[3J\x1b[H".to_vec();

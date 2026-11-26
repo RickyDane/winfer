@@ -606,7 +606,10 @@ impl Host {
                         std::thread::sleep(std::time::Duration::from_millis(300));
                     }
                     std::thread::sleep(std::time::Duration::from_secs(3));
-                    if let Some(host) = HOST.get() {
+                    // Once: an agent that didn't come up (not installed, signed out) isn't
+                    // started again and again.
+                    let up = SESSIONS.get(&pane.id).is_some_and(|s| s.spawned.load(Ordering::Relaxed) && !s.exited.load(Ordering::Relaxed));
+                    if up && let Some(host) = HOST.get() {
                         host.type_into(&pane, &text);
                     }
                 });
@@ -632,7 +635,12 @@ impl Host {
     fn new_pane(&self, req: &Value, peer: &str) -> Value {
         let (id, name, ws) = {
             let mut s = self.state.lock();
-            let ws = req["workspaceId"].as_str().and_then(|id| s.workspaces.iter().find(|w| w.id == id)).or(s.workspaces.first()).map(|w| w.id.clone());
+            // A workspace asked for by id is that one or none; without one, the first.
+            let ws = match req["workspaceId"].as_str().filter(|id| !id.is_empty()) {
+                Some(id) => s.workspaces.iter().find(|w| w.id == id),
+                None => s.workspaces.first(),
+            }
+            .map(|w| w.id.clone());
             let Some(ws) = ws else { return json!({"t": "ack", "ok": false, "error": "That workspace is gone."}) };
             let wanted = req["provider"].as_str().filter(|p| !p.is_empty() && *p != "default").map_or_else(|| s.default_provider_id(), str::to_string);
             let Some(name) = s.providers.iter().find(|p| p.id == wanted && p.installed).map(|p| p.name.clone()) else {
@@ -707,9 +715,8 @@ impl Host {
                 if SESSIONS.get(&pane_id).is_none_or(|s| !s.spawned.load(Ordering::Relaxed)) {
                     self.start_pane(&pane_id);
                 }
-                let snapshot = connect_term::attach(&pane_id, peer);
                 let chat = SESSIONS.get(&pane_id).is_some_and(|s| s.is_code());
-                connect::send(peer, json!({"t": "term.snapshot", "paneId": pane_id, "data": connect_term::b64(&snapshot), "chat": chat, "provider": pane.provider}));
+                connect_term::attach(&pane_id, peer, chat, &pane.provider);
                 let (cols, rows) = size(msg);
                 connect_term::set_sized_by(&pane_id, peer);
                 if let Some(session) = SESSIONS.get(&pane_id) {
@@ -718,10 +725,8 @@ impl Host {
             }
             "term.in" => {
                 let data = String::from_utf8_lossy(&connect_term::unb64(msg["data"].as_str().unwrap_or_default())).to_string();
-                if !data.is_empty() {
-                    backend::background(move || {
-                        let _ = pty::pty_write(backend::app().state(), pane_id, data);
-                    });
+                if !data.is_empty() && let Some(session) = SESSIONS.get(&pane_id) {
+                    session.write_remote(&data);
                 }
             }
             "term.resize" => {

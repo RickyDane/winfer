@@ -69,12 +69,14 @@ pub fn tap(pane: &str, bytes: &[u8], chat: bool) {
     }
 }
 
-/// A peer attaches: what it missed, and from now on the live output (in order).
-pub fn attach(pane: &str, peer: &str) -> Vec<u8> {
+/// A peer attaches: `term.snapshot` with what it missed, then the live output. Sent under the
+/// lock `tap` takes, so no chunk comes before the snapshot or twice.
+pub fn attach(pane: &str, peer: &str, chat: bool, provider: &str) {
     let mut host = HOST.lock().unwrap();
     let t = host.entry(pane.to_string()).or_default();
     t.watchers.insert(peer.to_string());
-    t.ring.iter().copied().collect()
+    let snapshot: Vec<u8> = t.ring.iter().copied().collect();
+    crate::connect::send(peer, json!({"t": "term.snapshot", "paneId": pane, "data": b64(&snapshot), "chat": chat, "provider": provider}));
 }
 
 pub fn detach(pane: &str, peer: &str) {
@@ -188,18 +190,21 @@ pub fn is_reclaimed(local: &str) -> bool {
 mod tests {
     use super::*;
 
+    fn ring(pane: &str) -> Vec<u8> {
+        HOST.lock().unwrap().get(pane).map(|t| t.ring.iter().copied().collect()).unwrap_or_default()
+    }
+
     #[test]
     fn rings_keep_the_tail_and_chats_restart_on_a_line() {
         let pane = "ring-test";
         tap(pane, &vec![b'x'; TERM_RING + 10], false);
-        assert_eq!(attach(pane, "peer").len(), TERM_RING);
-        detach(pane, "peer");
+        assert_eq!(ring(pane).len(), TERM_RING);
         let chat = "ring-chat";
         let line = b"{\"t\":\"text\"}\n";
         for _ in 0..(CHAT_RING / line.len() + 5) {
             tap(chat, line, true);
         }
-        let snap = attach(chat, "peer");
+        let snap = ring(chat);
         assert!(snap.len() <= CHAT_RING);
         assert!(snap.starts_with(b"{\"t\""));
     }
