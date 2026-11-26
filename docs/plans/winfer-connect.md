@@ -399,7 +399,18 @@ An `Engine` that owns workspaces, panes, sessions and their status, and exposes 
   background, and through the vault, so `WINFER_VAULT_FILE` instances don't touch the real keychain); server tiles
   said "shared folder" for agents in a worktree (panes now carry `branch`). winferd had no SIGTERM handling: `systemctl stop` left
   the server's Chromium running (with `KillMode=process`) and every run looked unclean — it now stops from its main
-  loop through `backend::shutdown()`. Uninstalled again afterwards; the server was left as before the test. Still open: `winferd update --check`
+  loop through `backend::shutdown()`. Uninstalled again afterwards; the server was left as before the test.
+- **Real server, second round** (test pre-releases `v0.1.101-connect.2`, `.4`, `.5`): `install.sh … --pair` in one
+  command; `winferd update --version` replaced and restarted it in place twice (`--check` now says when no stable
+  release has winferd instead of failing on the 404); a private GitHub repo cloned with the deploy key (clones now
+  set `core.sshCommand`, so later fetches offer the key too); review/merge with tests through a fake local model
+  (merge commit on the server); a phone paired with `winferd mobile pair`, read the thread, sent a message and
+  allowed a tool call. Fixed on the way: winferd's vault file had two unlocked read-modify-write writers (the vault
+  and Connect's store), which dropped phone pairings and the browser cookie key — both now write under
+  `<file>.lock`, atomically; server chats now push their thread live to phones (Allow → reply on the phone in
+  0.8 s, was up to 15 s); a desktop no longer names or estimates a server's sessions with its own LLM (a throwaway
+  test desktop had fallen back to the local `claude`/`codex`); the phone says "server" instead of "desktop" when
+  paired with one (needs the relay's PWA redeployed). Removed again afterwards. Still open: `winferd update --check`
   404s until a normal release ships winferd; a terminal on the server runs the user's rc file like any login.
 
 ## Headless risks / notes
