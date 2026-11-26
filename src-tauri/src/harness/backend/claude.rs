@@ -124,9 +124,17 @@ pub fn args(opts: &Opts) -> Vec<String> {
             LeanSkills::Only(ids) => Some(claude_skills::prepare(ids)),
         };
         let skills = !matches!(picked, Some(None));
+        let mut tools = LEAN_TOOLS.to_string();
+        if skills {
+            tools.push_str(",Skill");
+        }
+        if opts.ultracode {
+            // Ultracode drives Claude Code's dynamic Workflow tool (and TaskStop to manage runs).
+            tools.push_str(",Workflow,TaskStop");
+        }
         args.extend([
             "--tools".into(),
-            if skills { format!("{LEAN_TOOLS},Skill") } else { LEAN_TOOLS.into() },
+            tools,
             "--strict-mcp-config".into(),
             "--setting-sources".into(),
             if picked.is_none() { "user,project,local" } else { "project,local" }.into(),
@@ -362,14 +370,30 @@ const ENV: &[(&str, &str)] = &[
 
 /// [`ENV`] plus the subagents' model: Claude Code's default for subagents a spawn (or an agent
 /// definition) doesn't give one of their own.
+/// When Ultracode is on, `CLAUDE_CODE_WORKFLOWS=1` makes dynamic workflows available at startup
+/// (Pro plans default them off, which otherwise forces `ultracodeAvailable: false`).
 /// And the account's config dir.
 fn env(opts: &Opts) -> Vec<(String, String)> {
     let mut env: Vec<(String, String)> = ENV.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
     if let Some(m) = &opts.sub_model {
         env.push(("CLAUDE_CODE_SUBAGENT_MODEL".into(), m.clone()));
     }
+    if opts.ultracode {
+        env.push(("CLAUDE_CODE_WORKFLOWS".into(), "1".into()));
+    }
     env.extend(opts.account_env());
     env
+}
+
+/// Flag settings that turn Ultracode on or off. Turning it on also enables dynamic workflows in
+/// the flag layer (outranking user/project settings and Pro's default-off) so Claude Code actually
+/// activates `ultracode` instead of recording `ultracodeRequested: true, ultracode: false`.
+fn ultracode_settings(on: bool) -> Value {
+    if on {
+        json!({ "enableWorkflows": true, "disableWorkflows": false, "ultracode": true })
+    } else {
+        json!({ "ultracode": false })
+    }
 }
 
 /// Claude Code's plan files on `account`: `<config dir>/plans`.
@@ -401,7 +425,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
     };
     let _ = proc.write(&json!({ "type": "control_request", "request_id": "init", "request": { "subtype": "initialize" } }));
     if opts.ultracode {
-        let _ = proc.write(&json!({ "type": "control_request", "request_id": "init-ultracode", "request": { "subtype": "apply_flag_settings", "settings": { "ultracode": true } } }));
+        let _ = proc.write(&json!({ "type": "control_request", "request_id": "init-ultracode", "request": { "subtype": "apply_flag_settings", "settings": ultracode_settings(true) } }));
     }
     let mut b = Bridge {
         model: String::new(),
@@ -478,7 +502,12 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                 match &cmd {
                     Cmd::SetModel(m) => opts.model = m.clone(),
                     Cmd::SetEffort(e) => opts.effort = e.clone(),
-                    Cmd::SetUltracode(on) => opts.ultracode = *on,
+                    Cmd::SetUltracode(on) if *on != opts.ultracode => {
+                        opts.ultracode = *on;
+                        // Lean `--tools` and `CLAUDE_CODE_WORKFLOWS` are read at startup, so
+                        // toggling Ultracode respawns once idle (just like subagent model / Codex).
+                        respawn = true;
+                    }
                     Cmd::SetSubagent { model, .. } if *model != opts.sub_model => {
                         opts.sub_model = model.clone();
                         respawn = true;
@@ -528,7 +557,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
             }
         }
         let path = b.micro_compact_file();
-        if path.is_some() || (respawn && b.idle() && (b.session.is_some() || opts.resume.is_none())) {
+        if path.is_some() || (respawn && b.idle()) {
             respawn = false;
             match micro_compact(&mut b, &mut proc, &mut opts, path.as_deref(), &rx, &me) {
                         Ok((held, ended)) => {
@@ -579,13 +608,15 @@ fn micro_compact(b: &mut Bridge, proc: &mut LineProcess, opts: &mut Opts, path: 
     let mut held = Vec::new();
     let ended = super::drain_closed(rx, &mut held);
     let saved = path.map_or(0, |p| microcompact::trim_file(p, Format::Claude, 1, true).unwrap_or(0));
-    opts.resume = b.session.clone();
+    if let Some(session) = &b.session {
+        opts.resume = Some(session.clone());
+    }
     opts.mode = b.mode;
     *proc = LineProcess::spawn("claude", &args(opts), &super::env_pairs(&env(opts)), &opts.cwd, me.clone())?;
     b.live.restarted();
     let _ = proc.write(&json!({ "type": "control_request", "request_id": "init", "request": { "subtype": "initialize" } }));
     if opts.ultracode {
-        let _ = proc.write(&json!({ "type": "control_request", "request_id": "init-ultracode", "request": { "subtype": "apply_flag_settings", "settings": { "ultracode": true } } }));
+        let _ = proc.write(&json!({ "type": "control_request", "request_id": "init-ultracode", "request": { "subtype": "apply_flag_settings", "settings": ultracode_settings(true) } }));
     }
     if saved > 0 {
         b.live.usage.context = b.live.usage.context.saturating_sub(saved as u64 / 4);
@@ -718,14 +749,20 @@ impl Bridge {
                 self.control(proc, json!({ "subtype": "set_permission_mode", "mode": permission_mode(mode) }));
             }
             // Live: Claude Code applies `effortLevel` from flag settings to the running session (as
-            // its own /effort does); null goes back to the model's default.
+            // its own /effort does); null goes back to the model's default. Changing `effortLevel`
+            // alone clears `ultracode` inside Claude Code, so preserve it when Ultracode is on.
             Cmd::SetEffort(e) => {
                 let level = e.map(|e| if e == "minimal" { "low".to_string() } else { e });
-                self.control(proc, json!({ "subtype": "apply_flag_settings", "settings": { "effortLevel": level } }));
+                let settings = if self.ultracode {
+                    json!({ "effortLevel": level, "enableWorkflows": true, "disableWorkflows": false, "ultracode": true })
+                } else {
+                    json!({ "effortLevel": level })
+                };
+                self.control(proc, json!({ "subtype": "apply_flag_settings", "settings": settings }));
             }
             Cmd::SetUltracode(on) => {
                 self.ultracode = on;
-                self.control(proc, json!({ "subtype": "apply_flag_settings", "settings": { "ultracode": on } }));
+                self.control(proc, json!({ "subtype": "apply_flag_settings", "settings": ultracode_settings(on) }));
             }
             // Applied by `run`, which restarts Claude Code with it.
             Cmd::SetSubagent { .. } => {}
@@ -1220,8 +1257,12 @@ fn task_event(v: &Value) -> Option<TaskEv> {
     let id = v["task_id"].as_str().filter(|s| !s.is_empty())?.to_string();
     let s = |k: &Value| k.as_str().filter(|s| !s.is_empty()).map(str::to_string);
     let mut t = TaskEv {
-        id, tool_id: s(&v["tool_use_id"]), title: s(&v["description"]), agent: s(&v["subagent_type"]),
-        output_file: s(&v["output_file"]), exit_code: v["exit_code"].as_i64().and_then(|n| i32::try_from(n).ok()),
+        id,
+        tool_id: s(&v["tool_use_id"]),
+        title: s(&v["description"]).or_else(|| s(&v["workflow_name"])),
+        agent: s(&v["subagent_type"]).or_else(|| (v["task_type"] == "local_workflow").then(|| "workflow".into())),
+        output_file: s(&v["output_file"]),
+        exit_code: v["exit_code"].as_i64().and_then(|n| i32::try_from(n).ok()),
         ..Default::default()
     };
     match v["subtype"].as_str() {
@@ -1339,6 +1380,18 @@ fn background_shell_name(name: &str, input: &Value) -> Option<String> {
     Some(d.map_or_else(|| crate::harness::bg::short_command(input["command"].as_str().unwrap_or("")), str::to_string))
 }
 
+/// Extracts `name` from a Workflow script's `export const meta = { name: "...", ... }` header.
+fn workflow_script_name(script: &str) -> Option<String> {
+    let (_, after_meta) = script.split_once("meta")?;
+    let (_, after_brace) = after_meta.split_once('{')?;
+    let header = after_brace.split_once('}').map_or(after_brace, |(h, _)| h);
+    let (_, after_key) = header.split_once("name")?;
+    let rest = after_key.trim_start().strip_prefix(':')?.trim_start();
+    let quote = rest.chars().next().filter(|c| matches!(*c, '"' | '\'' | '`'))?;
+    let value = rest[quote.len_utf8()..].split(quote).next()?.trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
 /// A one-line summary of a tool call for its card.
 pub fn title(name: &str, input: &Value) -> String {
     let s = |k: &str| input[k].as_str().unwrap_or("").to_string();
@@ -1350,6 +1403,19 @@ pub fn title(name: &str, input: &Value) -> String {
         "WebFetch" => s("url"),
         "WebSearch" => s("query"),
         "Task" | "Agent" => s("description"),
+        "Workflow" | "RunWorkflow" => {
+            let named = s("name");
+            if !named.is_empty() {
+                named
+            } else {
+                let path = s("scriptPath");
+                if !path.is_empty() {
+                    crate::harness::tools::short_path(&path)
+                } else {
+                    workflow_script_name(&s("script")).unwrap_or_else(|| "dynamic workflow".into())
+                }
+            }
+        }
         "Skill" => format!("{} {}", s("skill"), s("args")).trim_end().to_string(),
         "TodoWrite" => "update todos".into(),
         n if n.starts_with("mcp__winfer") && n.ends_with("__bg") => crate::harness::tools::title("bg", input),
@@ -1463,24 +1529,75 @@ mod tests {
     }
 
     #[test]
-    fn set_ultracode_sends_apply_flag_settings() {
+    fn set_ultracode_enables_workflows_and_survives_effort_changes() {
         let (mut b, _rx) = bridge();
         let (me, lines) = channel();
         let mut proc = LineProcess::spawn("cat", &[], &[], &std::env::temp_dir(), me).unwrap();
         assert!(b.on_cmd(Cmd::SetUltracode(true), &mut proc));
         assert!(b.ultracode);
+        assert!(b.on_cmd(Cmd::SetEffort(Some("xhigh".into())), &mut proc));
         assert!(b.on_cmd(Cmd::SetUltracode(false), &mut proc));
         assert!(!b.ultracode);
+        assert!(b.on_cmd(Cmd::SetEffort(Some("high".into())), &mut proc));
         let mut sent = Vec::new();
-        while sent.len() < 2 {
+        while sent.len() < 4 {
             match lines.recv_timeout(std::time::Duration::from_secs(2)) {
                 Ok(In::Line(l)) => if let Ok(v) = serde_json::from_str::<Value>(&l) { sent.push(v); }
                 _ => break,
             }
         }
         drop(proc);
-        assert!(sent.iter().any(|v| v["request"]["subtype"] == "apply_flag_settings" && v["request"]["settings"]["ultracode"] == true));
-        assert!(sent.iter().any(|v| v["request"]["subtype"] == "apply_flag_settings" && v["request"]["settings"]["ultracode"] == false));
+        assert_eq!(sent.len(), 4);
+        assert_eq!(sent[0]["request"]["subtype"], "apply_flag_settings");
+        assert_eq!(sent[0]["request"]["settings"], json!({ "enableWorkflows": true, "disableWorkflows": false, "ultracode": true }));
+        assert_eq!(sent[1]["request"]["settings"], json!({ "effortLevel": "xhigh", "enableWorkflows": true, "disableWorkflows": false, "ultracode": true }));
+        assert_eq!(sent[2]["request"]["settings"], json!({ "ultracode": false }));
+        assert_eq!(sent[3]["request"]["settings"], json!({ "effortLevel": "high" }));
+    }
+
+    #[test]
+    fn ultracode_adds_workflow_tools_and_env_only_when_enabled() {
+        let mut opts = Opts {
+            cwd: std::env::temp_dir(),
+            model: String::new(),
+            effort: None,
+            ultracode: false,
+            mode: Mode::Ask,
+            resume: None,
+            system: None,
+            mcp: Default::default(),
+            allowed_commands: Vec::new(),
+            trim_at: 60,
+            compact_at: 85,
+            lean: true,
+            skills: LeanSkills::All,
+            bg_owner: String::new(),
+            sub_model: None,
+            sub_effort: None,
+            account: None,
+        };
+        let has = |args: &[String], flag: &str, value: &str| args.windows(2).any(|w| w[0] == flag && w[1] == value);
+        assert!(!env(&opts).iter().any(|(k, _)| k == "CLAUDE_CODE_WORKFLOWS"));
+        assert!(has(&args(&opts), "--tools", &format!("{LEAN_TOOLS},Skill")));
+        opts.ultracode = true;
+        assert!(env(&opts).contains(&("CLAUDE_CODE_WORKFLOWS".into(), "1".into())));
+        assert!(has(&args(&opts), "--tools", &format!("{LEAN_TOOLS},Skill,Workflow,TaskStop")));
+        opts.skills = LeanSkills::Only(Vec::new());
+        assert!(has(&args(&opts), "--tools", &format!("{LEAN_TOOLS},Workflow,TaskStop")));
+    }
+
+    #[test]
+    fn workflow_tool_titles_and_task_events_show_workflow_names() {
+        assert_eq!(title("Workflow", &json!({ "name": "review-pr" })), "review-pr");
+        assert!(title("Workflow", &json!({ "scriptPath": "/tmp/sessions/wf_1.js" })).ends_with("wf_1.js"));
+        assert_eq!(
+            title("Workflow", &json!({ "script": "export const meta = {\n  name: \"audit-auth\",\n  description: \"Audit\"\n};\n" })),
+            "audit-auth",
+        );
+        assert_eq!(title("Workflow", &json!({ "script": "run()" })), "dynamic workflow");
+        let wf = json!({ "type": "system", "subtype": "task_started", "task_id": "w1", "task_type": "local_workflow", "workflow_name": "audit-auth" });
+        let t = task_event(&wf).unwrap();
+        assert_eq!((t.id.as_str(), t.title.as_deref(), t.agent.as_deref(), t.status.as_deref()), ("w1", Some("audit-auth"), Some("workflow"), Some("running")));
     }
 
     #[test]
