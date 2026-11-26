@@ -396,6 +396,20 @@ impl Root {
                     .child(div().truncate().text_size(px(13.0)).font_weight(FontWeight::MEDIUM).text_color(c.fg).child(name.clone()))
                     .child(div().text_size(px(11.5)).text_color(c.subtle).child("A phone paired with it follows its agents with this machine off.")))
                 .child(button(c, SharedString::from(format!("server-pair-{peer}")), Some(IconName::QrCode), "Pair a phone", Look::Plain, true).on_click(cx.listener(move |this, _, _, cx| this.pair_phone_with(&target, cx)))));
+            // Its phones, each with Unpair.
+            let phones = self.connect.mirrors.get(&peer).and_then(|m| m.server.as_ref()).map(|sv| sv.phones.clone()).unwrap_or_default();
+            for (device, phone, push) in phones {
+                let (target, label) = (peer.clone(), phone.clone());
+                list = list.child(div().flex().items_center().gap_3().pl(px(58.0)).pr_3p5().py_2().border_t_1().border_color(c.border)
+                    .child(Icon::new(IconName::Smartphone).size(px(14.0)).text_color(c.muted))
+                    .child(div().flex_1().min_w_0().truncate().text_size(px(12.5)).text_color(c.fg).child(phone))
+                    .child(div().text_size(px(11.5)).text_color(c.subtle).child(if push { "notifications on" } else { "notifications off" }))
+                    .child(button(c, SharedString::from(format!("server-unpair-{device}")), None, "Unpair", Look::Plain, true).on_click(cx.listener(move |this, _, _, cx| {
+                        let name = crate::connect::peer_name(&target).unwrap_or_else(|| "the server".into());
+                        this.connect_request(&target, serde_json::json!({"t": "mobile.revoke", "deviceId": device}), Some(format!("Couldn't unpair {label} from {name}")));
+                        this.toast(format!("Unpaired {label} from {name}"), cx);
+                    }))));
+            }
             if let Some((_, p, qr)) = shown.as_ref().filter(|(p, _, _)| *p == peer) {
                 let link = p["link"].as_str().unwrap_or_default().to_string();
                 let left = ((p["expiresAt"].as_f64().unwrap_or(0.0) - now) / 1000.0).max(0.0) as u64;
@@ -403,7 +417,7 @@ impl Root {
                     .child(div().size(px(160.0)).flex_shrink_0().overflow_hidden().rounded_lg().bg(gpui_kit::white()).p_2().children(qr.clone().map(|q| img(q).size_full())))
                     .child(div().flex_1().min_w_0().flex().flex_col().gap_2()
                         .child(div().text_size(px(12.5)).text_color(c.fg).child(format!("Scan with your phone's camera to pair it with {name}.")))
-                        .child(div().text_size(px(11.5)).text_color(c.subtle).child("Then add the page to your Home Screen and allow notifications. Its phones are listed with `winferd mobile list` on the server."))
+                        .child(div().text_size(px(11.5)).text_color(c.subtle).child("Then add the page to your Home Screen and allow notifications. It shows up here once it's paired."))
                         .child(div().flex().items_center().gap_1p5().text_size(px(11.5)).text_color(c.warning).child(Icon::new(IconName::KeyRound).size(px(12.0))).child("The code holds the key to its agents: don't share it. It works once."))
                         .child(div().flex_1())
                         .child(div().flex().items_center().gap_2()

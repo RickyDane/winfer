@@ -32,7 +32,7 @@ FROM ${BIN} AS bin
 FROM node:22-bookworm-slim
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl git bash procps less tini \
-    chromium fonts-liberation fonts-noto-color-emoji \
+    chromium fonts-liberation fonts-noto-color-emoji openssh-client \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=bin /usr/local/bin/winferd /usr/local/bin/winferd
 COPY native/crates/winferd/docker/entrypoint.sh /usr/local/bin/winferd-entrypoint

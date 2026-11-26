@@ -712,6 +712,8 @@ pub struct BrowserPanel {
     blank_pending: HashSet<String>,
     /// Paired servers' browsers seen (`‹peer›|‹workspace›` ids): "‹machine› · ‹workspace›".
     remote_names: HashMap<String, String>,
+    /// A paired server whose browser was asked for (its row's menu), shown in any workspace.
+    shown_server: Option<String>,
 }
 
 impl BrowserPanel {
@@ -803,6 +805,7 @@ impl BrowserPanel {
             dev_url_opened: false,
             blank_pending: HashSet::new(),
             remote_names: HashMap::new(),
+            shown_server: None,
         }
     }
 
@@ -1176,6 +1179,27 @@ impl BrowserPanel {
                 _ => {}
             }
         }
+    }
+
+    /// Shows a paired server's browser: its first open one, else it starts the one of `workspace`
+    /// there.
+    pub fn show_server(&mut self, peer: &str, workspace: Option<&str>, cx: &mut Context<Self>) -> bool {
+        let mut ids: Vec<&String> = self.tabs.iter().filter(|(id, t)| !t.is_empty() && remote_peer(id) == Some(peer)).map(|(id, _)| id).collect();
+        ids.sort();
+        let id = match (ids.first(), workspace) {
+            (Some(id), _) => id.to_string(),
+            (None, Some(ws)) => {
+                let id = winfer_core::connect_browser::remote_id(peer, ws);
+                self.remote_names.entry(id.clone()).or_insert_with(|| crate::connect::peer_name(peer).unwrap_or_else(|| "Server".into()));
+                self.open_workspace(id.clone(), cx);
+                id
+            }
+            (None, None) => return false,
+        };
+        self.shown_server = Some(peer.to_string());
+        self.workspace = Some(id);
+        cx.notify();
+        true
     }
 
     /// This machine has no browser yet (a server's runs its own).
@@ -1834,7 +1858,13 @@ impl BrowserPanel {
 
     fn update_address(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let current = self.active().map(|(w, t)| (w.clone(), t.id.clone(), t.url.clone()));
-        let Some((ws, id, url)) = current else { return };
+        let Some((ws, id, url)) = current else {
+            // No tab shown (its server went away): no address either.
+            if self.address_for.take().is_some() && !self.address.read(cx).focus_handle(cx).is_focused(window) {
+                self.address.update(cx, |input, cx| input.set_value(String::new(), window, cx));
+            }
+            return;
+        };
         let key = (ws, id, url.clone());
         if self.address_for.as_ref() != Some(&key) && !self.address.read(cx).focus_handle(cx).is_focused(window) {
             self.address_for = Some(key);
@@ -2267,7 +2297,7 @@ impl Render for BrowserPanel {
         let mut remote: Vec<(String, String)> = self
             .tabs
             .iter()
-            .filter(|(id, tabs)| !tabs.is_empty() && remote_peer(id).is_some_and(|p| show_all || linked.contains(p)))
+            .filter(|(id, tabs)| !tabs.is_empty() && remote_peer(id).is_some_and(|p| show_all || linked.contains(p) || self.shown_server.as_deref() == Some(p)))
             .map(|(id, _)| (id.clone(), self.remote_names.get(id).cloned().unwrap_or_else(|| "Server".into())))
             .collect();
         remote.sort_by(|a, b| a.1.cmp(&b.1));

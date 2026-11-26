@@ -12,6 +12,7 @@ use super::*;
 use crate::model::Workspace;
 use crate::code::names::model_name;
 use crate::request::{AgentRequest, RequestOption, describe_request};
+use crate::code::mobile::{chat_config, chat_models};
 use crate::ui::code_pickers::{effort_levels, match_model};
 use serde_json::{Value, json};
 use std::time::Instant;
@@ -94,21 +95,6 @@ pub fn question_request(p: &agent_api::PendingQuestions) -> AgentRequest {
     AgentRequest { kind: "question", text: format!("{head}{}{multi}", q.question), options: Some(options) }
 }
 
-/// A chat pane's model and effort as the phone shows them.
-fn chat_config(state: &crate::code::state::CodeState) -> Value {
-    let offered = match_model(&state.models, &state.model).and_then(|i| i.efforts.clone());
-    json!({
-        "model": state.model,
-        "label": if state.model.is_empty() { String::new() } else { model_name(&state.model, state.actual_model.as_deref()) },
-        "effort": if state.effort.is_empty() { "default" } else { state.effort.as_str() },
-        "efforts": effort_levels(offered),
-        "mode": state.mode.label(),
-        "yolo": matches!(state.mode, crate::code::protocol::Mode::Yolo | crate::code::protocol::Mode::YoloPlan),
-        "cwd": state.cwd,
-        "branch": state.branch,
-    })
-}
-
 /// The desktop's theme, so the phone wears the same colors.
 fn theme_json(id: &str) -> Value {
     let def = crate::theme::theme_by_id(id);
@@ -172,16 +158,6 @@ fn provider_models_json(
             "efforts": fallback_efforts,
         }))
         .collect()
-}
-
-/// The models a chat pane offers, each with the effort levels it takes.
-fn chat_models(state: &crate::code::state::CodeState) -> Vec<Value> {
-    state.models.iter().map(|m| json!({
-        "id": m.spec,
-        "name": if m.label.is_empty() { model_name(&m.spec, None) } else { m.label.clone() },
-        "detail": m.detail,
-        "efforts": effort_levels(m.efforts.clone()),
-    })).collect()
 }
 
 impl Root {

@@ -194,6 +194,12 @@ Build with `cargo build -p winferd` (Linux: in Docker, `rust:1-bookworm`; it lin
   call from the desktop (sidebar "Needs you → Approve") and from a phone paired with the server (Allow/Deny show the
   exact command); the phone's thread shows the conversation in order; restart winferd → the thread is still there.
   Dev aids: `WINFER_NATIVE_CONNECT_SPAWN='~/repo|winfer@local/<model>|task'`, `WINFER_NATIVE_CONNECT_APPROVE=1`.
+- [ ] Server follow-ups: Review → Changes on a server review shows its diff; History → the server's chip lists its
+  merges; Settings → Mobile → Your servers lists a phone paired with it and Unpair removes it there; a phone's thread
+  of a server's Claude Code shows its conversation; the server row's menu → "Show its browser"; a cloned workspace
+  with no sessions shows "New session" under the server; `winferd deploy-key` prints a key and the clone dialog's
+  "Copy deploy key" copies it (shown for `git@`/`ssh://` URLs). Dev aids: `WINFER_NATIVE_CONNECT_REVIEW=changes`,
+  `WINFER_NATIVE_CONNECT_HISTORY=1`, `WINFER_NATIVE_CONNECT_UNPAIR=1`, `WINFER_NATIVE_CONNECT_BROWSER=1`.
 - [ ] Browser on a server: open a tile of a server agent, have it use its browser tools (or open a page through
   `$WINFER_CDP_URL`) → the browser panel shows the server's tab after the workspace's own (its name in the strip);
   click and type in it, go back/forward, open and close a tab; stop the server → its tabs leave the panel. Restart

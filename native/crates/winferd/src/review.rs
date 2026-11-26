@@ -284,9 +284,29 @@ pub fn on_request(host: &'static Host, msg: &Value) -> Value {
         REVIEWS.queue.lock().retain(|i| i.review_id != id || (i.pending() && i.state != "waiting"));
         return ok;
     }
+    if kind == "review.history" {
+        // This server's merges (History), newest first.
+        let query = msg["query"].as_str().unwrap_or_default().to_string();
+        return match winfer_backend::store::history_search(winfer_core::backend::app().state(), query, None) {
+            Ok(records) => json!({"t": "review.history", "records": records}),
+            Err(e) => no(&e),
+        };
+    }
     let Some(review) = REVIEWS.items.lock().iter().find(|r| r.id == id).cloned() else { return no("That review is gone.") };
     let pane = host.with_state(|s| s.pane(&review.pane_id).cloned());
     match kind {
+        "review.diff" => {
+            let Some(info) = &review.worktree else { return no("Only work in a worktree has changes to show.") };
+            match worktree::diff(info) {
+                Ok(d) => {
+                    let mut v = serde_json::to_value(d).unwrap_or_default();
+                    v["t"] = json!("review.diff");
+                    v["reviewId"] = json!(id);
+                    v
+                }
+                Err(e) => no(&e.to_string()),
+            }
+        }
         "review.merge" => {
             let Some(info) = &review.worktree else { return no("Only work in a worktree can be merged.") };
             let mut queue = REVIEWS.queue.lock();

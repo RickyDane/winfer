@@ -24,6 +24,7 @@ usage:
   winferd status                                         paired machines, links and panes
   winferd unpair <name>                                  forget a paired machine
   winferd mobile pair|list|revoke <name>                 pair a phone with this server (QR code), list or forget phones
+  winferd deploy-key                                     this server's ssh key, for cloning private repositories
   winferd service install|uninstall                      run at login/boot (systemd user unit, launchd agent)
   winferd update [--check] [--version <tag>]             update to the newest release (and restart the daemon)
   winferd --version
@@ -52,6 +53,16 @@ fn main() {
         },
         Some("status") => std::process::exit(control::status()),
         Some("mobile") => std::process::exit(phone::cli(rest)),
+        Some("deploy-key") => {
+            let name = name(rest).unwrap_or_else(|| "server".into());
+            match machine::deploy_key(&name) {
+                Ok(key) => {
+                    println!("{key}\n\nAdd this as a deploy key (read access) to a private repository, then clone it over ssh.");
+                    std::process::exit(0);
+                }
+                Err(e) => fail(&e),
+            }
+        }
         Some("unpair") if !rest.is_empty() => std::process::exit(control::unpair(&rest.join(" "))),
         Some("unpair") => fail("usage: winferd unpair <name>"),
         Some("service") => {

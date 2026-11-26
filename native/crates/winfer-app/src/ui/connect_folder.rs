@@ -16,6 +16,8 @@ pub(super) struct FolderDialog {
     error: Option<String>,
     /// The `fs.list` whose answer is awaited.
     listing: Option<String>,
+    /// A deploy key request under way.
+    pub key_request: Option<String>,
     /// A clone or workspace request under way.
     busy: Option<String>,
 }
@@ -43,7 +45,7 @@ impl Root {
         })
         .detach();
         input.read(cx).focus_handle(cx).focus(window, cx);
-        self.connect.folder = Some(FolderDialog { peer: peer.into(), name, input, path: "~".into(), parent: None, dirs: None, error: None, listing: None, busy: None });
+        self.connect.folder = Some(FolderDialog { peer: peer.into(), name, input, path: "~".into(), parent: None, dirs: None, error: None, listing: None, busy: None, key_request: None });
         self.folder_list("~", cx);
     }
 
@@ -126,6 +128,18 @@ impl Root {
             cx.notify();
             return true;
         }
+        if msg["t"] == "server.key" || (msg["t"] == "ack" && d.key_request.as_deref() == Some(id)) {
+            d.key_request = None;
+            match msg["key"].as_str() {
+                Some(key) => {
+                    cx.write_to_clipboard(ClipboardItem::new_string(key.to_string()));
+                    self.toast("Deploy key copied. Add it to the repository (read access), then clone.", cx);
+                }
+                None => d.error = Some(msg["error"].as_str().unwrap_or("Couldn't get its deploy key").to_string()),
+            }
+            cx.notify();
+            return true;
+        }
         if msg["t"] == "ack" && d.busy.as_deref() == Some(id) {
             d.busy = None;
             if msg["ok"] == true {
@@ -160,6 +174,22 @@ impl Root {
         }
         if url {
             list = list.child(div().px_3().py_2().text_size(px(12.5)).text_color(c.muted).child(format!("Enter clones it into {} and opens it as a workspace.", d.path)));
+            // A private repo over ssh needs the server's own key.
+            if query.starts_with("git@") || query.starts_with("ssh://") {
+                let name = d.name.clone();
+                list = list.child(div().flex().items_center().gap_2().px_3().py_1p5().text_size(px(12.0)).text_color(c.subtle)
+                    .child(div().flex_1().child(format!("Private? Add {name}'s deploy key to the repository first.")))
+                    .child(div().id("folder-key").px_2().h(px(22.0)).flex().items_center().gap_1().rounded_md().border_1().border_color(c.border).cursor_pointer().text_color(c.fg).hover(move |s| s.bg(c.hover))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            let Some(peer) = this.connect.folder.as_ref().map(|d| d.peer.clone()) else { return };
+                            let id = this.connect_request(&peer, json!({"t": "server.key"}), None);
+                            if let Some(d) = this.connect.folder.as_mut() {
+                                d.key_request = Some(id);
+                            }
+                            cx.notify();
+                        }))
+                        .child(Icon::new(IconName::KeyRound).size(px(11.0))).child("Copy deploy key")));
+            }
         } else if d.listing.is_some() && d.dirs.is_none() {
             list = list.child(div().px_3().py_2().text_xs().text_color(c.subtle).child(format!("Asking {}…", d.name)));
         } else {

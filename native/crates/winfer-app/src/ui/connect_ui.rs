@@ -84,6 +84,8 @@ pub struct ServerInfo {
     pub docker: bool,
     /// "load 0.4/8 · mem 2.1/7.8 GB · disk 41% · up 3 d", when it reports them.
     pub health: Option<String>,
+    /// Phones paired with it directly: (device id, name, notifications on).
+    pub phones: Vec<(String, String, bool)>,
 }
 
 fn gb(bytes: f64) -> String {
@@ -114,6 +116,7 @@ impl ServerInfo {
             update: v["update"].as_str().map(str::to_string),
             docker: v["docker"].as_bool().unwrap_or(false),
             health: health(&v["stats"]),
+            phones: v["phones"].as_array().into_iter().flatten().filter_map(|p| Some((p["deviceId"].as_str()?.to_string(), p["name"].as_str().unwrap_or("Phone").to_string(), p["push"] == true))).collect(),
         })
     }
 }
@@ -144,6 +147,13 @@ pub(super) struct ConnectClient {
     dev_review: bool,
     dev_usage: bool,
     dev_phone: bool,
+    dev_history: bool,
+    dev_unpaired: bool,
+    dev_browser: bool,
+    /// Development aid: the server whose History to show once it's open.
+    pub dev_history_of: Option<String>,
+    /// The `review.diff` request the Changes dialog waits on.
+    pub diff_request: Option<String>,
     /// The remote tile asking, and since when (`WINFER_NATIVE_CONNECT_APPROVE`).
     dev_asked: Option<(String, Instant)>,
     /// Agents' calls waiting on another machine: our request id → their MCP call id.
@@ -377,7 +387,7 @@ impl Root {
             self.on_mobile_request(&request, window, cx);
             return;
         }
-        if matches!(kind, "fs" | "ack") && self.on_folder_reply(&peer, msg, cx) {
+        if matches!(kind, "fs" | "ack" | "server.key") && self.on_folder_reply(&peer, msg, cx) {
             return;
         }
         match kind {
@@ -402,6 +412,8 @@ impl Root {
                 }
             }
             "reviews" => self.on_remote_reviews(&peer, msg, cx),
+            "review.diff" => self.on_remote_diff(&peer, msg, cx),
+            "review.history" => self.on_remote_history(&peer, msg, cx),
             "usage" => self.on_remote_usage(&peer, msg, cx),
             "mobile.pairing" => self.on_server_pairing(&peer, msg, cx),
             "panes" => {
@@ -439,6 +451,10 @@ impl Root {
             "ack" | "error" => {
                 let id = msg["id"].as_str().unwrap_or_default();
                 self.usage_request_failed(id);
+                if self.connect.diff_request.as_deref() == Some(id) && msg["ok"] != true {
+                    self.connect.diff_request = None;
+                    self.on_remote_diff(&peer, msg, cx);
+                }
                 #[cfg(debug_assertions)]
                 if self.connect.dev_spawn.as_deref() == Some(id)
                     && let Some(ws) = msg["workspaceId"].as_str()
@@ -787,8 +803,52 @@ impl Root {
             let path = what.split('|').next().unwrap_or("~").to_string();
             self.connect.dev_spawn = Some(self.connect_request(&server.peer_id, json!({"t": "workspace.new", "path": path}), Some("Dev spawn: workspace".into())));
         }
-        // Development aid: open Review once a server's review arrives, and with `merge` queue it
-        // there with tests (`WINFER_NATIVE_CONNECT_REVIEW=open|merge`).
+        // Development aid: the first server's browser, as its menu's "Show its browser" does
+        // (`WINFER_NATIVE_CONNECT_BROWSER=1`).
+        #[cfg(debug_assertions)]
+        if std::env::var_os("WINFER_NATIVE_CONNECT_BROWSER").is_some()
+            && !self.connect.dev_browser
+            && let Some((peer, ws)) = self.connect.mirrors.iter().find_map(|(p, m)| m.loaded.then(|| (p.clone(), m.workspaces.first().map(|w| w.0.clone()))))
+        {
+            self.connect.dev_browser = true;
+            if self.browser.update(cx, |b, cx| b.show_server(&peer, ws.as_deref(), cx)) {
+                self.update_state(cx, |s| {
+                    s.browser_open = true;
+                    s.side_panel = Some(crate::model::SidePanel::Browser);
+                });
+            }
+        }
+        // Development aid: unpair the first server's first phone, as its Unpair button does
+        // (`WINFER_NATIVE_CONNECT_UNPAIR=1`).
+        #[cfg(debug_assertions)]
+        if std::env::var_os("WINFER_NATIVE_CONNECT_UNPAIR").is_some()
+            && !self.connect.dev_unpaired
+            && let Some((peer, device)) = self.connect.mirrors.iter().find_map(|(p, m)| Some((p.clone(), m.server.as_ref()?.phones.first()?.0.clone())))
+        {
+            self.connect.dev_unpaired = true;
+            self.connect_request(&peer, json!({"t": "mobile.revoke", "deviceId": device}), Some("Dev unpair".into()));
+        }
+        // Development aid: History with the first server's merges (`WINFER_NATIVE_CONNECT_HISTORY=1`).
+        #[cfg(debug_assertions)]
+        if std::env::var_os("WINFER_NATIVE_CONNECT_HISTORY").is_some()
+            && !self.connect.dev_history
+            && let Some(server) = crate::connect::get().and_then(|c| c.status().peers.into_iter().find(|p| p.kind == Kind::Server && p.link.via.is_some()))
+            && self.connect.mirrors.get(&server.peer_id).is_some_and(|m| m.loaded)
+        {
+            self.connect.dev_history = true;
+            self.update_state(cx, |s| s.overlay = crate::model::Overlay::History);
+            self.connect.dev_history_of = Some(server.peer_id.clone());
+        }
+        // Development aid: History showing that server's merges, once History is open.
+        #[cfg(debug_assertions)]
+        if let Some(peer) = self.connect.dev_history_of.clone()
+            && self.dev_show_history_of(&peer, cx)
+        {
+            self.connect.dev_history_of = None;
+        }
+        // Development aid: open Review once a server's review arrives; with `merge` queue it there
+        // with tests, `changes` shows its diff, `history` that server's History
+        // (`WINFER_NATIVE_CONNECT_REVIEW=open|merge|changes|history`).
         #[cfg(debug_assertions)]
         if let Ok(what) = std::env::var("WINFER_NATIVE_CONNECT_REVIEW")
             && !self.connect.dev_review
@@ -800,6 +860,16 @@ impl Root {
             if what == "merge" {
                 self.review.queue_tests = true;
                 self.dev_enqueue(first, cx);
+            } else if what == "changes" {
+                let id = format!("review:{first}");
+                self.update_state(cx, |s| {
+                    s.overlay = crate::model::Overlay::None;
+                    s.diff_pane_id = Some(id);
+                });
+            } else if what == "history" {
+                let peer = first.split('|').next().unwrap_or_default().to_string();
+                self.update_state(cx, |s| s.overlay = crate::model::Overlay::History);
+                self.connect.dev_history_of = Some(peer);
             }
         }
         // Development aid: Settings → Usage showing the first server's (`WINFER_NATIVE_CONNECT_USAGE=limits|spend`).
@@ -959,7 +1029,7 @@ impl Root {
                 let mut rows = div().flex().flex_col().gap_0p5().pl_2();
                 if !up && live.is_empty() {
                     rows = rows.child(div().px_2().py_1().text_size(px(11.5)).text_color(c.subtle).child(label.clone()));
-                } else if live.is_empty() && mirror.loaded {
+                } else if live.is_empty() && mirror.loaded && mirror.workspaces.len() <= 1 {
                     rows = rows.child(div().px_2().py_1().text_size(px(11.5)).text_color(c.subtle).child("No sessions"));
                 }
                 // Finished work on that machine waiting to be merged: opens Review at its first.
@@ -978,11 +1048,17 @@ impl Root {
                 let many_workspaces = mirror.workspaces.len() > 1;
                 for (ws_id, ws_name) in &mirror.workspaces {
                     let panes: Vec<&&RemotePane> = live.iter().filter(|p| &p.workspace_id == ws_id).collect();
-                    if panes.is_empty() {
-                        continue;
-                    }
                     if many_workspaces {
                         rows = rows.child(div().px_2().pt_1().text_size(px(10.5)).font_weight(FontWeight::SEMIBOLD).text_color(c.subtle).child(ws_name.clone()));
+                    }
+                    // A workspace with no sessions yet (just opened or cloned): start one there.
+                    if panes.is_empty() && many_workspaces && up {
+                        let (target, ws) = (peer.peer_id.clone(), ws_id.clone());
+                        rows = rows.child(div().id(SharedString::from(format!("peer-ws-new-{}-{ws_id}", peer.peer_id))).flex().items_center().gap_2().px_2().py_1().rounded_md().cursor_pointer().text_size(px(12.0)).text_color(c.subtle)
+                            .hover(move |d| d.bg(c.hover).text_color(c.fg))
+                            .on_click(cx.listener(move |this, _, _, cx| this.remote_new_pane(&target, Some(ws.clone()), None, cx)))
+                            .child(Icon::new(IconName::Plus).size(px(12.0)))
+                            .child("New session"));
                     }
                     for p in panes {
                         rows = rows.child(self.render_remote_row(&peer.peer_id, p, up, c, cx));
@@ -1060,6 +1136,19 @@ impl Root {
             }
         }
         items.push(MenuItem::Separator);
+        let p = peer.to_string();
+        let first_ws = mirror.workspaces.first().map(|w| w.0.clone());
+        items.push(MenuItem::run("Show its browser", move |this: &mut Root, _: &mut Window, cx: &mut Context<Root>| {
+            let shown = this.browser.update(cx, |b, cx| b.show_server(&p, first_ws.as_deref(), cx));
+            if shown {
+                this.update_state(cx, |s| {
+                    s.browser_open = true;
+                    s.side_panel = Some(crate::model::SidePanel::Browser);
+                });
+            } else {
+                this.toast("That machine has no workspace yet.", cx);
+            }
+        }));
         let p = peer.to_string();
         items.push(MenuItem::run("New workspace (folder or git clone)…", move |this: &mut Root, window: &mut Window, cx: &mut Context<Root>| this.open_remote_folder(&p, window, cx)));
         items

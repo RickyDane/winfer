@@ -24,6 +24,11 @@ fn devices() -> Vec<Value> {
     mobile::mobile_status().ok().and_then(|s| serde_json::to_value(s).ok()).and_then(|v| v["devices"].as_array().cloned()).unwrap_or_default()
 }
 
+/// Paired phones as a desktop lists them: `[{deviceId, name, push}]`.
+pub fn paired() -> Vec<Value> {
+    devices().into_iter().filter(|d| d["paired"] == true).map(|d| json!({"deviceId": d["deviceId"], "name": d["name"], "push": d["push"] == true})).collect()
+}
+
 /// The daemon's part (each second): pairings and revocations asked for by the CLI, and the
 /// phones for `winferd status`.
 pub fn tick() {
@@ -39,7 +44,7 @@ pub fn tick() {
     let _ = std::fs::write(dir.join("phones.json"), Value::Array(devices()).to_string());
 }
 
-fn revoke(which: &str) -> Value {
+pub fn revoke(which: &str) -> Value {
     let found = devices().into_iter().find(|d| d["deviceId"] == which || d["name"].as_str().is_some_and(|n| n.eq_ignore_ascii_case(which)));
     match found {
         Some(d) => match mobile::mobile_revoke(d["deviceId"].as_str().unwrap_or_default().to_string()) {

@@ -147,6 +147,11 @@ mobile protocol (docs/mobile/protocol.md) to the server, which answers it as it 
 on every finish and question (no one sits at a server). Its phones' keys live in `vault.json` (0600) in its data folder.
 A chat pane's `thread` and `request` come from the server's copy of the chat's events, as a desktop gives them; `approve`,
 `decline`, `choose` and `send` answer what it waits on. Asking for an agent that isn't running starts it.
+`config.get`, `models.get` and `pane.set` work as on a desktop (a chat's model and effort). A terminal agent's thread
+is its transcript (the one its status line names; Codex's session log), else its screen.
+The mirror's `server.phones` lists the phones (`[{deviceId, name, push}]`); a desktop sends `mobile.revoke {deviceId}`
+to unpair one. `server.key` → `server.key {key}`: the server's ssh deploy key (made on first use, also
+`winferd deploy-key`), which its git clones offer.
 
 ### Browser on a server
 
@@ -182,6 +187,8 @@ server's merge queue, in the agent's worktree there.
 | `reviews` | server | `items: [{id, paneId, workspaceId, provider, title, prompt?, finishedAt, branch?, base?, dir, stats?, lastOutput, summary: {state, text?, error?}, tests: {state, run?: {command, ok, ms}, error?}, testCommand?, conflict?: {base, text}}]`, `queue: [{reviewId, branch, base, state (waiting/syncing/testing/merging/merged/conflict/failed), detail?, files}]` |
 | `review.merge` | client | `reviewId`, `tests` (run them first) → `ack`; queued, progress comes in `reviews` |
 | `review.tests` | client | `reviewId` → `ack`; the result comes in `reviews` |
+| `review.diff` | client | `reviewId` → `review.diff {reviewId, diff, untracked, ahead, dirty, diffTruncated?, diffBytes?}` (Changes) |
+| `review.history` | client | `query` → `review.history {records}`, the server's merges (History → the server's name) |
 | `review.send` | client | `reviewId`, `text`: typed into the agent's pane; the review closes (a new one comes when it finishes again) |
 | `review.resolve` | client | `reviewId`: asks the agent to merge its base in and resolve the queue's conflict |
 | `review.discard` | client | `reviewId`: closes the pane, deletes the worktree and its branch |

@@ -66,6 +66,8 @@ enum LineKind {
 
 pub struct DiffDialog {
     pane: String,
+    /// A paired server's review (`peer`, its review id): its changes come over Connect.
+    remote: Option<(String, String)>,
     info: WorktreeInfo,
     lines: Option<Arc<Vec<(LineKind, SharedString)>>>,
     ahead: u64,
@@ -517,17 +519,51 @@ impl Root {
     }
 
     fn open_diff(&mut self, pane: String, cx: &mut Context<Self>) {
+        // `review:‹peer›|‹review›`: a server's review.
+        if let Some(id) = pane.strip_prefix("review:") {
+            let Some(r) = self.review.reviews.iter().find(|r| r.id == id && r.remote.is_some()) else {
+                return self.update_state(cx, |s| s.diff_pane_id = None);
+            };
+            let info = WorktreeInfo { path: r.dir.clone(), branch: r.branch.clone().unwrap_or_default(), base: r.base.clone().unwrap_or_default(), ..Default::default() };
+            self.diff_dialog = Some(DiffDialog { pane, remote: r.remote.clone(), info, lines: None, ahead: 0, dirty: false, error: None, loading: false });
+            return self.reload_diff(cx);
+        }
         let Some(info) = self.state.read(cx).pane(&pane).and_then(|p| p.worktree.clone()) else {
             return self.update_state(cx, |s| s.diff_pane_id = None);
         };
-        self.diff_dialog = Some(DiffDialog { pane, info, lines: None, ahead: 0, dirty: false, error: None, loading: false });
+        self.diff_dialog = Some(DiffDialog { pane, remote: None, info, lines: None, ahead: 0, dirty: false, error: None, loading: false });
         self.reload_diff(cx);
+    }
+
+    /// A server's `review.diff` (or its failure), for the dialog showing that review.
+    pub(super) fn on_remote_diff(&mut self, peer: &str, msg: &Value, cx: &mut Context<Self>) {
+        let Some(d) = self.diff_dialog.as_mut().filter(|d| d.remote.as_ref().is_some_and(|(p, r)| p == peer && msg["reviewId"].as_str().is_none_or(|id| id == r))) else { return };
+        d.loading = false;
+        if msg["t"] == "review.diff" {
+            d.lines = Some(Arc::new(Self::parse_diff(msg)));
+            d.ahead = msg["ahead"].as_u64().unwrap_or(0);
+            d.dirty = msg["dirty"] == true;
+        } else {
+            d.error = Some(msg["error"].as_str().unwrap_or("Couldn't load the changes.").to_string());
+        }
+        cx.notify();
+    }
+
+    fn parse_diff(v: &Value) -> Vec<(LineKind, SharedString)> {
+        let untracked: Vec<String> = serde_json::from_value(v["untracked"].clone()).unwrap_or_default();
+        let truncated = (v["diffTruncated"] == true).then(|| (v["diffBytes"].as_f64().unwrap_or(0.0) / 1048576.0).round() as u64);
+        diff_lines(v["diff"].as_str().unwrap_or_default(), &untracked, truncated)
     }
 
     fn reload_diff(&mut self, cx: &mut Context<Self>) {
         let Some(dialog) = self.diff_dialog.as_mut() else { return };
         dialog.loading = true;
         dialog.error = None;
+        if let Some((peer, review)) = dialog.remote.clone() {
+            let id = self.connect_request(&peer, serde_json::json!({"t": "review.diff", "reviewId": review}), None);
+            self.connect.diff_request = Some(id);
+            return cx.notify();
+        }
         let info = dialog.info.clone();
         cx.spawn(async move |this, cx| {
             let loaded = tauri::async_runtime::spawn(async move {
@@ -537,11 +573,7 @@ impl Root {
             .await
             .map_err(|e| e.to_string())
             .and_then(|r| r);
-            let parsed = loaded.map(|v| {
-                let untracked: Vec<String> = serde_json::from_value(v["untracked"].clone()).unwrap_or_default();
-                let truncated = (v["diffTruncated"] == true).then(|| (v["diffBytes"].as_f64().unwrap_or(0.0) / 1048576.0).round() as u64);
-                (diff_lines(v["diff"].as_str().unwrap_or_default(), &untracked, truncated), v["ahead"].as_u64().unwrap_or(0), v["dirty"] == true)
-            });
+            let parsed = loaded.map(|v| (Self::parse_diff(&v), v["ahead"].as_u64().unwrap_or(0), v["dirty"] == true));
             let _ = this.update(cx, |this, cx| {
                 if let Some(d) = this.diff_dialog.as_mut() {
                     d.loading = false;
@@ -566,6 +598,7 @@ impl Root {
         let mono = crate::fonts::mono(cx);
         let pane = dialog.pane.clone();
         let info = dialog.info.clone();
+        let remote = dialog.remote.is_some();
         let button = move |id: &'static str, icon: IconName| div().id(id).rounded_sm().p_1p5().text_color(c.subtle).cursor_pointer().hover(move |d| d.bg(c.hover).text_color(c.fg)).child(Icon::new(icon).size(px(14.0)));
         let summary = dialog.lines.as_ref().map(|_| {
             let commits = if dialog.ahead == 1 { "commit" } else { "commits" };
@@ -614,16 +647,16 @@ impl Root {
                                 )
                                 .when_some(summary, |d, t| d.child(div().text_xs().text_color(c.muted).child(t)))
                                 .child(button("diff-refresh", IconName::RefreshCw).on_click(cx.listener(|this, _, _, cx| this.reload_diff(cx))))
-                                .child(
+                                .when(!remote, |d| d.child(
                                     div().id("diff-merge").flex().items_center().gap_1p5().rounded_md().bg(c.accent).text_color(c.on_accent).px_2p5().py_1().text_xs().cursor_pointer()
                                         .on_click(cx.listener(move |this, _, window, cx| this.execute(Command::MergeWorktree(PaneRef::Id(merge_target.clone())), window, cx)))
                                         .child(Icon::new(IconName::GitMerge).size(px(13.0)))
                                         .child(format!("Merge into {}", info.base)),
-                                )
-                                .child(button("diff-discard", IconName::Trash).on_click(cx.listener(move |this, _, window, cx| {
+                                ))
+                                .when(!remote, |d| d.child(button("diff-discard", IconName::Trash).on_click(cx.listener(move |this, _, window, cx| {
                                     this.update_state(cx, |s| s.diff_pane_id = None);
                                     this.execute(Command::DiscardWorktree(PaneRef::Id(discard_target.clone())), window, cx);
-                                })))
+                                }))))
                                 .child(button("diff-close", IconName::X).on_click(cx.listener(|this, _, _, cx| this.update_state(cx, |s| s.diff_pane_id = None)))),
                         )
                         .child(div().flex_1().min_h_0().font_family(mono.clone()).text_size(px(12.0)).child(body)),

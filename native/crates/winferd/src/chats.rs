@@ -112,6 +112,62 @@ pub fn answer(pane: &str, n: usize, typed: &str) -> Result<String, String> {
     Ok(answer)
 }
 
+/// The chat's model and effort as a phone shows them, and the models it offers.
+pub fn config(pane: &str) -> Option<(Value, Vec<Value>)> {
+    let chats = CHATS.lock();
+    let state = &chats.get(pane)?.state;
+    Some((mobile::chat_config(state), mobile::chat_models(state)))
+}
+
+/// Switches the chat's model and/or effort; checks them against what it offers.
+pub fn set(pane: &str, model: Option<&str>, effort: Option<&str>) -> Result<(), String> {
+    use winfer_core::code::names::{effort_levels, match_model};
+    {
+        let chats = CHATS.lock();
+        let state = &chats.get(pane).ok_or("Only WinferCode agents have a model to change.")?.state;
+        let spec = model.map_or(state.model.clone(), str::to_string);
+        if model.is_some() && !state.models.iter().any(|m| m.spec == spec) {
+            return Err("That model isn't available.".into());
+        }
+        if let Some(level) = effort
+            && !effort_levels(match_model(&state.models, &spec).and_then(|i| i.efforts.clone())).iter().any(|l| l == level)
+        {
+            return Err("That model doesn't take that effort.".into());
+        }
+    }
+    if let Some(m) = model {
+        crate::host::write_chat(pane, &Cmd::SetModel(m.to_string()));
+    }
+    if let Some(level) = effort {
+        crate::host::write_chat(pane, &Cmd::SetEffort((level != "default").then(|| level.to_string())));
+    }
+    Ok(())
+}
+
+/// `models.get`: what a new agent of `provider` can run here.
+pub fn models(provider: &str) -> Value {
+    use winfer_core::code::names::{effort_levels, model_name};
+    let list: Vec<Value> = if provider == "winfer" {
+        winfer_backend::harness::backend::all_models()
+            .into_iter()
+            .map(|m| serde_json::json!({"id": m.spec, "name": if m.label.is_empty() { model_name(&m.spec, None) } else { m.label.clone() }, "detail": m.detail, "efforts": effort_levels(m.efforts.clone())}))
+            .collect()
+    } else {
+        tauri::async_runtime::block_on(winfer_backend::providers::providers_models(provider.to_string()))
+            .unwrap_or_default()
+            .into_iter()
+            .map(|m| serde_json::json!({"id": m.id, "name": m.label, "efforts": []}))
+            .collect()
+    };
+    let defaults = (provider == "winfer").then(winfer_backend::harness::config::Config::load);
+    serde_json::json!({
+        "t": "models", "provider": provider, "models": list,
+        "defaultModel": defaults.as_ref().map(|c| c.model.clone()).filter(|m| !m.is_empty()),
+        "defaultEffort": defaults.as_ref().and_then(|c| c.effort.clone()),
+        "defaultEfforts": if provider == "winfer" { effort_levels(None) } else { Vec::new() },
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

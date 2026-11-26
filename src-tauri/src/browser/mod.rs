@@ -1084,6 +1084,7 @@ impl BrowserManager {
     }
 
     /// The workspaces whose browser is open, with their tabs (starts nothing).
+    #[allow(dead_code)] // used by winferd, not the Tauri app
     pub fn open_tabs(&self) -> Vec<(String, Value)> {
         let instances: Vec<Arc<Instance>> = self.instances.lock().unwrap().values().cloned().collect();
         instances.iter().map(|i| (i.workspace_id.clone(), serde_json::to_value(&*i.tabs.lock().unwrap()).unwrap_or_default())).collect()
@@ -1462,6 +1463,15 @@ pub async fn browser_history(
     Ok(())
 }
 
+/// JPEG quality for a screencast about to attach (by attach id), when it isn't the default 80:
+/// a server streaming to a desktop over the relay sends lighter frames.
+static SCREENCAST_QUALITY: std::sync::LazyLock<Mutex<HashMap<String, u8>>> = std::sync::LazyLock::new(Default::default);
+
+#[allow(dead_code)] // used by winferd, not the Tauri app
+pub fn set_screencast_quality(attach_id: &str, quality: u8) {
+    SCREENCAST_QUALITY.lock().unwrap().insert(attach_id.to_string(), quality.clamp(20, 95));
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Viewport {
@@ -1548,7 +1558,7 @@ pub async fn browser_attach(
     let result = cdp
         .call(
             "Page.startScreencast",
-            json!({ "format": "jpeg", "quality": 80, "everyNthFrame": 1 }),
+            json!({ "format": "jpeg", "quality": SCREENCAST_QUALITY.lock().unwrap().remove(&attach_id).unwrap_or(80), "everyNthFrame": 1 }),
             Some(&session),
         )
         .await;

@@ -27,6 +27,9 @@ pub struct Link {
     pub provider: String,
     /// Fingerprint of the sign-in both sides last had.
     pub fp: String,
+    /// The other machine pushed it here (rather than this one pushing it there).
+    #[serde(default)]
+    pub received: bool,
 }
 
 static LINKS: Mutex<Option<Vec<Link>>> = Mutex::new(None);
@@ -50,10 +53,34 @@ pub fn links() -> Vec<Link> {
     with_links(|l| l.clone())
 }
 
-/// Forgets the links with machines no longer paired.
+/// Forgets the links with machines no longer paired. A server also signs out of what they
+/// pushed to it: their sign-ins leave with them.
 pub fn retain_peers(paired: &[String]) {
-    if links().iter().any(|l| !paired.contains(&l.peer)) {
-        with_links(|l| l.retain(|x| paired.contains(&x.peer)));
+    let gone: Vec<Link> = links().into_iter().filter(|l| !paired.contains(&l.peer)).collect();
+    if gone.is_empty() {
+        return;
+    }
+    with_links(|l| l.retain(|x| paired.contains(&x.peer)));
+    if crate::backend::profile().server {
+        for link in gone.iter().filter(|l| l.received) {
+            sign_out(&link.local);
+        }
+    }
+}
+
+/// Removes an account's sign-in here: the account itself, or the default account's credentials.
+fn sign_out(id: &str) {
+    if id != accounts::default_id(accounts::provider_of(id)) {
+        let _ = accounts::accounts_remove(id.to_string());
+        return;
+    }
+    let Some(dir) = accounts::dir(id) else { return };
+    for file in [".credentials.json", "auth.json"] {
+        let _ = std::fs::remove_file(dir.join(file));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("security").args(["delete-generic-password", "-s", &claude_service(id, &dir)]).output();
     }
 }
 
@@ -236,7 +263,7 @@ pub fn on_push(peer: &str, msg: &Value) -> Value {
     let fp = fingerprint(&parts);
     with_links(|l| {
         l.retain(|x| !(x.peer == peer && x.remote == remote));
-        l.push(Link { peer: peer.into(), local: local.clone(), remote, provider: provider.into(), fp });
+        l.push(Link { peer: peer.into(), local: local.clone(), remote, provider: provider.into(), fp, received: true });
     });
     json!({"t": "ack", "ok": true, "accountId": local, "label": accounts::label(&local)})
 }
@@ -252,7 +279,7 @@ pub fn push_message(id: &str) -> Result<(Value, String), String> {
 pub fn pushed(peer: &str, local: &str, remote: &str, fp: &str) {
     with_links(|l| {
         l.retain(|x| !(x.peer == peer && x.local == local));
-        l.push(Link { peer: peer.into(), local: local.into(), remote: remote.into(), provider: accounts::provider_of(local).into(), fp: fp.into() });
+        l.push(Link { peer: peer.into(), local: local.into(), remote: remote.into(), provider: accounts::provider_of(local).into(), fp: fp.into(), received: false });
     });
 }
 

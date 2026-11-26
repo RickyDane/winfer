@@ -203,6 +203,31 @@ pub fn model_tier(spec: &str, detail: &str) -> ModelTier {
     ModelTier::Balanced
 }
 
+
+/// Reasoning efforts, lowest first.
+pub const EFFORTS: [&str; 6] = ["minimal", "low", "medium", "high", "xhigh", "max"];
+
+/// Matches a model spec in `models`, also falling back to stripping any legacy trailing effort
+/// suffix (`agy/gemini-4-neon-xhigh` → `agy/gemini-4-neon`).
+pub fn match_model<'a>(models: &'a [crate::code::protocol::ModelInfo], spec: &str) -> Option<&'a crate::code::protocol::ModelInfo> {
+    let target = base_spec(spec);
+    models.iter().find(|i| base_spec(&i.spec) == target).or_else(|| {
+        let stripped = ["-minimal", "-low", "-medium", "-high", "-xhigh", "-extra-high", "-max"]
+            .iter()
+            .find_map(|s| target.strip_suffix(s))?;
+        models.iter().find(|i| base_spec(&i.spec) == stripped)
+    })
+}
+
+/// The levels a model offers, "default" first.
+pub fn effort_levels(offered: Option<Vec<String>>) -> Vec<String> {
+    match offered {
+        Some(l) if !l.is_empty() => std::iter::once("default".to_string()).chain(l).collect(),
+        Some(_) => vec!["default".to_string()],
+        None => std::iter::once("default").chain(EFFORTS).map(String::from).collect(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -141,6 +141,11 @@ async fn call(host: &'static Host, client: &str, msg: &Value) -> Result<Value, S
         "attach" => {
             let viewport = serde_json::from_value(msg["viewport"].clone()).map_err(|e| e.to_string())?;
             let attach = s(msg, "attachId");
+            // Over the relay (not the LAN), lighter frames.
+            let relay = winfer_core::connect::get().is_some_and(|c| c.status().peers.iter().any(|p| p.peer_id == client && p.link.via == Some("relay")));
+            if relay {
+                browser::set_screencast_quality(&attach, 55);
+            }
             ATTACHED.lock().get_or_insert_with(HashMap::new).insert(attach.clone(), (client.to_string(), ws.clone()));
             let (to, id) = (client.to_string(), attach.clone());
             let channel = Channel::new(move |body| {

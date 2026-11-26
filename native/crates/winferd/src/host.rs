@@ -253,6 +253,7 @@ impl Host {
             "workspaceId": pane.workspace_id, "archived": pane.archived,
             "provider": if pane.provider == "shell" { None } else { Some(pane.provider.clone()) },
             "status": status_text, "message": message, "request": request, "reply": reply,
+            "config": crate::chats::config(&pane.id).map(|(c, _)| c),
         })
     }
 
@@ -264,7 +265,7 @@ impl Host {
         let server = json!({
             "version": crate::update::VERSION, "latest": crate::update::latest_known(), "update": crate::update::available(),
             "docker": crate::update::in_docker(), "os": std::env::consts::OS, "arch": std::env::consts::ARCH,
-            "stats": crate::machine::stats(),
+            "stats": crate::machine::stats(), "phones": crate::phone::paired(),
         });
         json!({ "panes": panes, "workspaces": workspaces, "providers": providers, "defaultProvider": s.default_provider_id(), "server": server })
     }
@@ -272,7 +273,8 @@ impl Host {
     fn shape_of(s: &AppState) -> String {
         let ws: Vec<String> = s.workspaces.iter().map(|w| format!("{}={}:{}", w.id, w.name, ordered(w).iter().map(|p| p.id.as_str()).collect::<Vec<_>>().join(","))).collect();
         let agents: Vec<&str> = s.providers.iter().filter(|p| p.installed).map(|p| p.id.as_str()).collect();
-        format!("{}|{}|{:?}", ws.join(";"), agents.join(","), crate::update::available())
+        let phones: Vec<String> = crate::phone::paired().iter().map(|p| format!("{}{}", p["deviceId"], p["push"])).collect();
+        format!("{}|{}|{:?}|{}", ws.join(";"), agents.join(","), crate::update::available(), phones.join(","))
     }
 
     /// Sends what changed since the last push: the whole mirror when panes came, went or moved,
@@ -362,6 +364,13 @@ impl Host {
                 let id = self.add_workspace(&path, msg["name"].as_str());
                 reply(json!({"t": "ack", "ok": true, "workspaceId": id}));
             }
+            "server.key" if !peer.starts_with("phone:") => {
+                let name = connect::get().map(|c| c.status().name).unwrap_or_default();
+                match crate::machine::deploy_key(&name) {
+                    Ok(key) => reply(json!({"t": "server.key", "key": key})),
+                    Err(e) => reply(no(&format!("Couldn't make a deploy key: {e}"))),
+                }
+            }
             "git.clone" => {
                 // A clone takes a while: answered from its own thread.
                 let (peer, msg) = (peer.to_string(), msg.clone());
@@ -420,6 +429,15 @@ impl Host {
                 answer["t"] = json!("mobile.pairing");
                 reply(answer);
             }
+            "mobile.revoke" if !peer.starts_with("phone:") => {
+                let answer = crate::phone::revoke(msg["deviceId"].as_str().unwrap_or_default());
+                if answer["ok"] == true {
+                    // The mirror's next push lists the phones without it.
+                    reply(ok());
+                } else {
+                    reply(no(answer["error"].as_str().unwrap_or("Couldn't unpair it.")));
+                }
+            }
             "connect.presence" => {}
             "thread.get" => {
                 let Some(pane) = msg["paneId"].as_str().and_then(|id| self.state.lock().pane(id).cloned()) else {
@@ -433,14 +451,53 @@ impl Host {
                 if let Some(messages) = crate::chats::thread(&pane.id, msg["limit"].as_u64().unwrap_or(200).clamp(1, 500) as usize) {
                     return reply(json!({"t": "thread", "paneId": pane.id, "messages": messages, "source": "winfer"}));
                 }
-                // What the agent's terminal shows (its transcript isn't read here yet).
-                let screen = SESSIONS.get(&pane.id).map(|s| s.read_text(120)).unwrap_or_default();
-                let screen = screen.trim_end();
-                let messages = if screen.is_empty() { json!([]) } else { json!([{"id": "screen", "role": "assistant", "text": format!("```\n{screen}\n```"), "ts": winfer_core::usage::now_ms()}]) };
-                reply(json!({"t": "thread", "paneId": pane.id, "messages": messages, "source": "screen"}));
+                // A terminal agent's transcript, read off the thread that waits on nothing.
+                if pane.provider != "shell" {
+                    let (client, id, limit) = (peer.to_string(), msg["id"].clone(), msg["limit"].as_u64().unwrap_or(200).clamp(1, 500) as usize);
+                    std::thread::spawn(move || {
+                        let found = crate::limits::transcript(&pane).and_then(|(provider, source)| {
+                            let list = tauri::async_runtime::block_on(winfer_backend::mobile::mobile_thread(provider.clone(), source, Some(limit)))?;
+                            (!list.is_empty()).then(|| (provider, serde_json::to_value(list).unwrap_or_default()))
+                        });
+                        let mut answer = match found {
+                            Some((provider, messages)) => json!({"t": "thread", "paneId": pane.id, "messages": messages, "source": provider}),
+                            None => screen_thread(&pane.id),
+                        };
+                        answer["id"] = id;
+                        send_to(&client, answer);
+                    });
+                    return;
+                }
+                reply(screen_thread(&pane.id));
             }
-            "config.get" => reply(json!({"t": "config", "paneId": msg["paneId"], "models": []})),
-            "models.get" | "pane.set" => reply(no("A winfer server can't do that yet.")),
+            "config.get" => {
+                let pane = msg["paneId"].as_str().unwrap_or_default();
+                match crate::chats::config(pane) {
+                    Some((_, models)) => reply(json!({"t": "config", "paneId": pane, "models": models})),
+                    None => reply(json!({"t": "config", "paneId": pane, "models": []})),
+                }
+            }
+            "models.get" => {
+                let provider = msg["provider"].as_str().filter(|p| !p.is_empty() && *p != "default").map_or_else(|| self.state.lock().default_provider_id(), str::to_string);
+                let (client, id) = (peer.to_string(), msg["id"].clone());
+                std::thread::spawn(move || {
+                    let mut answer = crate::chats::models(&provider);
+                    answer["id"] = id;
+                    send_to(&client, answer);
+                });
+            }
+            "pane.set" => {
+                let Some(pane) = msg["paneId"].as_str().and_then(|id| self.state.lock().pane(id).cloned()) else { return reply(no("That agent is gone.")) };
+                let (model, effort) = (msg["model"].as_str().filter(|m| !m.is_empty()), msg["effort"].as_str().filter(|e| !e.is_empty()));
+                match crate::chats::set(&pane.id, model, effort) {
+                    Ok(()) => {
+                        let what: Vec<String> = [model.map(|m| winfer_core::code::names::model_name(m, None)), effort.map(|e| format!("{e} effort"))].into_iter().flatten().collect();
+                        self.log(&pane, format!("Set {} from {}", what.join(" · "), client_name(peer)));
+                        reply(ok());
+                    }
+                    Err(e) => reply(no(&e)),
+                }
+            }
             "choose" => {
                 let Some(pane) = msg["paneId"].as_str().and_then(|id| self.state.lock().pane(id).cloned()) else { return reply(no("That agent is gone.")) };
                 if !crate::chats::asks_question(&pane.id) {
@@ -800,6 +857,14 @@ fn send_chat_text(pane_id: &str, text: &str) {
             let _ = pty::pty_write(backend::app().state(), id, line);
         });
     }
+}
+
+/// A thread of what the agent's terminal shows (no transcript to read).
+fn screen_thread(pane_id: &str) -> Value {
+    let screen = SESSIONS.get(pane_id).map(|s| s.read_text(120)).unwrap_or_default();
+    let screen = screen.trim_end();
+    let messages = if screen.is_empty() { json!([]) } else { json!([{"id": "screen", "role": "assistant", "text": format!("```\n{screen}\n```"), "ts": winfer_core::usage::now_ms()}]) };
+    json!({"t": "thread", "paneId": pane_id, "messages": messages, "source": "screen"})
 }
 
 pub(crate) fn write_chat(pane_id: &str, cmd: &Cmd) {

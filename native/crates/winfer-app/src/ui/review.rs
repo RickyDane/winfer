@@ -121,6 +121,8 @@ pub struct HistoryUi {
     input: Entity<InputState>,
     records: Option<Vec<Value>>,
     this_workspace: bool,
+    /// A paired server whose merges are shown instead of this machine's.
+    machine: Option<String>,
     expanded: Option<String>,
     search: Option<Task<()>>,
 }
@@ -861,7 +863,7 @@ impl Root {
         let blocked = conflict.as_ref().is_some_and(|(base, _)| *base);
         let info = conflict.map(|(_, text)| text);
         let screenshot = if let Load::Done(image) = &r.screenshot { Some(image.clone()) } else { None };
-        let (pane_id, changes_pane) = (r.pane_id.clone(), r.pane_id.clone());
+        let (pane_id, changes_pane, changes_review) = (r.pane_id.clone(), r.pane_id.clone(), r.id.clone());
         let (merge_id, discard_id, focus_id) = (r.id.clone(), r.id.clone(), r.id.clone());
         let remote = r.remote.is_some();
         let has_worktree = if remote { r.branch.is_some() } else { pane.as_ref().is_some_and(|p| p.worktree.is_some()) };
@@ -900,10 +902,16 @@ impl Root {
                             .when(blocked, |d| d.bg(c.hover).text_color(c.subtle).tooltip(crate::ui::code_view::tip("Resolve the conflict with its base first")))
                             .child(Icon::new(IconName::GitMerge).size(px(13.0))).child("Merge"))
                             .child(small_button(c, SharedString::from(format!("enqueue-{}", r.id)), "Queue").on_click(cx.listener(move |this, _, _, cx| this.enqueue(vec![queue_id.clone()], cx))))
-                            .when(!remote, |d| d.child(small_button(c, SharedString::from(format!("changes-{}", r.id)), "Changes").on_click(cx.listener(move |this, _, window, cx| {
+                            .child(small_button(c, SharedString::from(format!("changes-{}", r.id)), "Changes").on_click(cx.listener(move |this, _, window, cx| {
                                 this.update_state(cx, |s| s.overlay = Overlay::None);
-                                this.execute(Command::ShowChanges(PaneRef::Id(changes_pane.clone())), window, cx);
-                            }))))
+                                if remote {
+                                    // A server's review: its changes come from there.
+                                    let id = format!("review:{}", changes_review.clone());
+                                    this.update_state(cx, |s| s.diff_pane_id = Some(id));
+                                } else {
+                                    this.execute(Command::ShowChanges(PaneRef::Id(changes_pane.clone())), window, cx);
+                                }
+                            })))
                             .child(small_button(c, SharedString::from(format!("discard-{}", r.id)), "Discard").on_click(cx.listener(move |this, _, window, cx| this.review_action(&discard_id, "discard", window, cx))))
                     })
                     .child(div().flex_1())
@@ -932,7 +940,7 @@ impl Root {
         })
         .detach();
         input.read(cx).focus_handle(cx).focus(window, cx);
-        self.history = Some(HistoryUi { input, records: None, this_workspace: false, expanded: None, search: None });
+        self.history = Some(HistoryUi { input, records: None, this_workspace: false, machine: None, expanded: None, search: None });
         self.search_history(cx);
     }
 
@@ -941,6 +949,11 @@ impl Root {
         let Some(ui) = self.history.as_mut() else { return };
         let query = ui.input.read(cx).value().to_string();
         let scope = ui.this_workspace.then_some(workspace);
+        if let Some(peer) = ui.machine.clone() {
+            ui.search = None;
+            self.connect_request(&peer, json!({"t": "review.history", "query": query}), Some("Couldn't load that server's history".into()));
+            return;
+        }
         ui.search = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(Duration::from_millis(150)).await;
             let found = backend::background(move || store::history_search(backend::app().state(), query, scope).map(|r| serde_json::to_value(r).unwrap_or_default())).await.ok().and_then(Result::ok);
@@ -953,12 +966,31 @@ impl Root {
         }));
     }
 
+    /// Development aid: History showing `peer`'s merges; false until History is open.
+    #[cfg(debug_assertions)]
+    pub(super) fn dev_show_history_of(&mut self, peer: &str, cx: &mut Context<Self>) -> bool {
+        let Some(ui) = self.history.as_mut() else { return false };
+        ui.machine = Some(peer.to_string());
+        ui.records = None;
+        self.search_history(cx);
+        true
+    }
+
+    /// A server's `review.history`, while History shows that server.
+    pub(super) fn on_remote_history(&mut self, peer: &str, msg: &Value, cx: &mut Context<Self>) {
+        if let Some(ui) = self.history.as_mut().filter(|u| u.machine.as_deref() == Some(peer)) {
+            ui.records = Some(msg["records"].as_array().cloned().unwrap_or_default());
+            cx.notify();
+        }
+    }
+
     pub(super) fn render_history(&mut self, c: &Colors, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         self.sync_history(window, cx);
         let ui = self.history.as_ref()?;
         let c = *c;
         let input = ui.input.clone();
-        let this_workspace = ui.this_workspace;
+        let machine = ui.machine.clone();
+        let this_workspace = ui.this_workspace && machine.is_none();
         let expanded = ui.expanded.clone();
         let records = ui.records.clone();
         let mono = crate::fonts::mono(cx);
@@ -990,11 +1022,11 @@ impl Root {
                             .when_some(r["task"].as_str().map(str::to_string), |d, t| d.child(div().child(format!("Task: {t}"))))
                             .when_some(r["tests"].as_str().map(str::to_string), |d, t| d.child(div().child(format!("Tests: {t}"))))
                             .child(div().font_family(mono.clone()).text_size(px(11.0)).child(r["files"].as_array().map_or(String::new(), |f| f.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("  "))))
-                            .child(small_button(c, SharedString::from(format!("history-del-{id}")), "Delete").on_click(cx.listener(move |this, _, _, cx| {
+                            .when(machine.is_none(), |d| d.child(small_button(c, SharedString::from(format!("history-del-{id}")), "Delete").on_click(cx.listener(move |this, _, _, cx| {
                                 let target = delete.clone();
                                 let _ = store::history_delete(backend::app().state(), target);
                                 this.search_history(cx);
-                            })))
+                            }))))
                     });
                     list = list.child(
                         div().id(SharedString::from(format!("history-{id}"))).flex().flex_col().rounded_lg().px_3().py_2p5().cursor_pointer()
@@ -1020,6 +1052,9 @@ impl Root {
                 }
             }
         }
+        let servers: Vec<(String, String)> = crate::connect::get()
+            .map(|c| c.status().peers.into_iter().filter(|p| p.kind == winfer_connect::pairing::Kind::Server && p.link.via.is_some()).map(|p| (p.peer_id, p.name)).collect())
+            .unwrap_or_default();
         let stat = |label: &'static str, value: String, color: Hsla| {
             div().flex_1().flex().flex_col().gap_0p5().p_2p5().rounded_lg().border_1().border_color(c.edge).bg(c.panel)
                 .child(div().text_size(px(17.0)).font_weight(FontWeight::SEMIBOLD).text_color(color).child(value))
@@ -1031,6 +1066,8 @@ impl Root {
                 .on_click(cx.listener(move |this_root, _, _, cx| {
                     if let Some(ui) = this_root.history.as_mut() {
                         ui.this_workspace = this;
+                        ui.machine = None;
+                        ui.records = None;
                     }
                     this_root.search_history(cx);
                 }))
@@ -1048,7 +1085,22 @@ impl Root {
                                 .child(div().flex_1().text_size(px(15.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child("History"))
                                 .child(div().flex().gap_0p5().p(px(2.0)).rounded(px(8.0)).border_1().border_color(c.edge).bg(c.app)
                                     .child(scope("history-this", "This workspace", this_workspace, true, cx))
-                                    .child(scope("history-all", "All workspaces", !this_workspace, false, cx))))
+                                    .child(scope("history-all", "All workspaces", !this_workspace && machine.is_none(), false, cx))
+                                    // Paired servers' merges (their merge queues run there).
+                                    .children(servers.into_iter().map(|(peer, name)| {
+                                        let on = machine.as_deref() == Some(peer.as_str());
+                                        div().id(SharedString::from(format!("history-server-{peer}"))).h(px(24.0)).px_2p5().flex().items_center().gap_1().rounded(px(6.0)).text_size(px(12.0)).cursor_pointer()
+                                            .text_color(if on { c.fg } else { c.muted }).when(on, |d| d.bg(c.active)).hover(move |d| d.text_color(c.fg))
+                                            .on_click(cx.listener(move |this_root, _, _, cx| {
+                                                if let Some(ui) = this_root.history.as_mut() {
+                                                    ui.machine = Some(peer.clone());
+                                                    ui.records = None;
+                                                }
+                                                this_root.search_history(cx);
+                                            }))
+                                            .child(Icon::new(IconName::Server).size(px(11.0)))
+                                            .child(name)
+                                    }))))
                             .child(div().flex().gap_2()
                                 .child(stat("merged", totals.0.to_string(), c.fg))
                                 .child(stat("files changed", totals.1.to_string(), c.fg))

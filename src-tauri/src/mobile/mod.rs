@@ -123,6 +123,7 @@ fn now_ms() -> u64 {
 /// No one sits at this machine (a server): every finish or question goes to the phones.
 static HEADLESS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+#[allow(dead_code)] // used by winferd, not the Tauri app
 pub fn set_headless() {
     HEADLESS.store(true, std::sync::atomic::Ordering::Relaxed);
 }
@@ -131,6 +132,7 @@ pub fn set_headless() {
 static NAME: OnceLock<String> = OnceLock::new();
 
 /// Names this machine for phones (a server: its winfer name) instead of the computer name.
+#[allow(dead_code)] // used by winferd, not the Tauri app
 pub fn set_name(name: &str) {
     let _ = NAME.set(name.to_string());
 }

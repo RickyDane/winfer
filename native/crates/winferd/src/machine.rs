@@ -91,7 +91,7 @@ pub fn clone(url: &str, branch: Option<&str>, parent: &str) -> Result<PathBuf, S
         cmd.args(["--branch", b.trim()]);
     }
     // Never stop to ask for a password: there's no one at this terminal.
-    let out = cmd.arg("--").arg(url.trim()).arg(&dest).env("GIT_TERMINAL_PROMPT", "0").env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new").output().map_err(|e| format!("git: {e}"))?;
+    let out = cmd.arg("--").arg(url.trim()).arg(&dest).env("GIT_TERMINAL_PROMPT", "0").env("GIT_SSH_COMMAND", ssh_command()).output().map_err(|e| format!("git: {e}"))?;
     if out.status.success() {
         Ok(dest)
     } else {
@@ -151,4 +151,36 @@ mod tests {
         assert!(v["dirs"].is_array());
         assert!(stats()["cpus"].as_u64().unwrap() >= 1);
     }
+}
+
+/// This server's deploy key (made on first use), which git over ssh offers besides the user's own.
+fn key_path() -> PathBuf {
+    winfer_core::backend::data_dir().join("ssh").join("id_ed25519")
+}
+
+/// git's ssh: never asks (no one is at this terminal), and offers the deploy key when there is one.
+pub fn ssh_command() -> String {
+    let key = key_path();
+    let identity = if key.exists() { format!(" -i '{}'", key.display()) } else { String::new() };
+    format!("ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new{identity}")
+}
+
+/// The deploy key's public half, to add to a private repository (read access) so this server
+/// can clone it; made on first use.
+pub fn deploy_key(name: &str) -> Result<String, String> {
+    let key = key_path();
+    if !key.exists() {
+        let dir = key.parent().unwrap();
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+        }
+        let out = Command::new("ssh-keygen").args(["-q", "-t", "ed25519", "-N", "", "-C", &format!("winferd@{name}"), "-f"]).arg(&key).output().map_err(|e| format!("ssh-keygen: {e} (is openssh-client installed?)"))?;
+        if !out.status.success() {
+            return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+        }
+    }
+    std::fs::read_to_string(key.with_extension("pub")).map(|k| k.trim().to_string()).map_err(|e| e.to_string())
 }

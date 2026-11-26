@@ -368,6 +368,18 @@ An `Engine` that owns workspaces, panes, sessions and their status, and exposes 
   that isn't running (after a daemon restart) starts it first instead of being dropped. Tested against a Linux
   container with a stand-in local model (OpenAI Responses API): desktop first message and Approve, phone thread, Allow
   and Deny, history after a restart.
+- **Follow-ups closed** (tested against a Linux container unless noted): chat sessions save atomically (a kill
+  mid-write kept a 0-byte file and lost the history); server chats answer `config.get`/`models.get`/`pane.set`;
+  phones get Claude Code's transcript from a server (status line `transcript_path`; Codex's session log), not its
+  screen; Settings → Mobile → Your servers lists each server's phones with Unpair (`mobile.revoke`); Review →
+  Changes works for server reviews (`review.diff`) and History has a scope per server (`review.history`); the server
+  row's menu has "Show its browser" (starts it if needed); servers stream over the relay at JPEG quality 55;
+  the address bar clears when a server's tabs go; empty server workspaces show "New session" in the sidebar (built,
+  not seen on screen); `winferd deploy-key` / "Copy deploy key" in the clone dialog for private repos over ssh (the
+  key is offered by its clones); a server signs out of sign-ins a machine pushed to it when that machine is unpaired
+  (not tested live). The relay `BadProof` trace is a harmless race (a stale `hs3` after a reconnect restarted the
+  handshake). Not done: "Move" an account (it would delete this Mac's own sign-in), a first release run, the relay's
+  `/install.sh` deploy and a live systemd/launchd test, which need a push, the relay host or a real server.
 
 ## Headless risks / notes
 

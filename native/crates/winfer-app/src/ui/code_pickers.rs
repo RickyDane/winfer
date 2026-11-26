@@ -17,7 +17,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 /// Levels offered when the model doesn't list its own.
-pub const EFFORTS: [&str; 6] = ["minimal", "low", "medium", "high", "xhigh", "max"];
+pub use winfer_core::code::names::{effort_levels, match_model};
 
 const FAVORITES: &str = "★";
 const SHOWN: usize = 8;
@@ -71,27 +71,6 @@ pub fn effort_glyph(tint: Hsla, level: &str, size: f32) -> AnyElement {
         _ => div().w(px(size)).h(px(size)).flex().items_end().justify_center().gap(px(size * 0.1)).children((1..=5).map(|b| {
             div().w(px(size * 0.14)).h(px(size * (0.22 + 0.15 * b as f32))).rounded_sm().bg(if b <= filled { tint } else { alpha(tint, 0.25) })
         })).into_any_element(),
-    }
-}
-
-/// Matches a model spec in `models`, also falling back to stripping any legacy trailing effort
-/// suffix (`agy/gemini-4-neon-xhigh` → `agy/gemini-4-neon`).
-pub(super) fn match_model<'a>(models: &'a [ModelInfo], spec: &str) -> Option<&'a ModelInfo> {
-    let target = base_spec(spec);
-    models.iter().find(|i| base_spec(&i.spec) == target).or_else(|| {
-        let stripped = ["-minimal", "-low", "-medium", "-high", "-xhigh", "-extra-high", "-max"]
-            .iter()
-            .find_map(|s| target.strip_suffix(s))?;
-        models.iter().find(|i| base_spec(&i.spec) == stripped)
-    })
-}
-
-/// The levels a model offers, "default" first.
-pub fn effort_levels(offered: Option<Vec<String>>) -> Vec<String> {
-    match offered {
-        Some(l) if !l.is_empty() => std::iter::once("default".to_string()).chain(l).collect(),
-        Some(_) => vec!["default".to_string()],
-        None => std::iter::once("default").chain(EFFORTS).map(String::from).collect(),
     }
 }
 

@@ -5,6 +5,8 @@
 use crate::host::Host;
 use parking_lot::Mutex;
 use serde_json::{Value, json};
+use std::collections::HashMap;
+use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 use winfer_backend::usage_history;
 use winfer_core::backend;
@@ -57,7 +59,31 @@ pub fn poll(manual: bool) {
 }
 
 /// A `usage://report` from an agent's status line here.
+/// Each agent pane's context as its last report gave it (`source`: its transcript), for
+/// phones reading its thread.
+static CONTEXTS: LazyLock<Mutex<HashMap<String, Value>>> = LazyLock::new(Default::default);
+
+/// The transcript of `pane` (provider, source), from its reports or, for Codex, its session.
+pub fn transcript(pane: &winfer_core::model::Pane) -> Option<(String, String)> {
+    if let Some(c) = CONTEXTS.lock().get(&pane.id)
+        && let Some(source) = c["source"].as_str()
+    {
+        return Some((c["provider"].as_str().unwrap_or(&pane.provider).to_string(), source.to_string()));
+    }
+    if pane.provider != "codex" {
+        return None;
+    }
+    let found = tauri::async_runtime::block_on(winfer_backend::usage::usage_codex_context(pane.session_id.clone(), pane.cwd.clone()))?;
+    let c = serde_json::to_value(found).ok()?;
+    Some(("codex".to_string(), c["source"].as_str()?.to_string()))
+}
+
 pub fn report(host: &Host, payload: &Value) {
+    if let Some(pane) = payload["paneId"].as_str()
+        && payload["report"]["context"].is_object()
+    {
+        CONTEXTS.lock().insert(pane.to_string(), payload["report"]["context"].clone());
+    }
     let provider = payload["provider"].as_str().unwrap_or_default().to_string();
     let account = payload["paneId"].as_str().and_then(|id| host.with_state(|s| s.pane(id).and_then(|p| p.account_id.clone()))).filter(|a| a.split(':').next() == Some(provider.as_str()));
     let windows: Vec<UsageWindow> = serde_json::from_value(payload["report"]["windows"].clone()).unwrap_or_default();
