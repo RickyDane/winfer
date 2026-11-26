@@ -164,6 +164,8 @@ pub(super) struct ConnectClient {
     dev_asked: Option<(String, Instant)>,
     /// Agents' calls waiting on another machine: our request id → their MCP call id.
     tool_calls: HashMap<String, String>,
+    /// Agents' calls waiting on a request's reply (ack, usage): request id → (MCP call, what, machine).
+    tool_waits: HashMap<String, (String, &'static str, String)>,
     /// Sign-ins pushed and not yet answered: request id → (account here, its fingerprint, machine name).
     pushes: HashMap<String, (String, String, String)>,
     /// The "New workspace on ‹machine›" dialog.
@@ -178,19 +180,53 @@ pub(super) enum ToolOutcome {
 
 /// The agent tools Connect adds (listed with the plugins' tools, see `agent_api`).
 pub(super) fn agent_tools() -> Vec<Value> {
-    if crate::connect::get().is_none_or(|c| c.peers().is_empty()) {
+    if crate::connect::get().is_none_or(|c| !c.status().enabled) {
         return Vec::new();
     }
+    let machine = json!({"type": "string", "description": "Machine name from list_machines"});
+    let pane = json!({"type": "string", "description": "\"<machine>:<number>\" from list_remote_panes"});
     vec![
-        json!({"name": "list_machines", "description": "List the other winfer machines paired with this one (Winfer Connect): name, desktop or server, and whether it's online. Their panes are reachable with list_remote_panes, read_pane, send_to_pane and spawn_remote_agent.", "inputSchema": {"type": "object", "properties": {}}}),
-        json!({"name": "list_remote_panes", "description": "List the panes on a paired machine: number, agent, status, workspace. Address them as \"<machine>:<number>\" in read_pane and send_to_pane.", "inputSchema": {"type": "object", "properties": {"machine": {"type": "string", "description": "Machine name from list_machines"}}, "required": ["machine"]}}),
-        json!({"name": "spawn_remote_agent", "description": "Start an agent pane on a paired machine, optionally with a first prompt and its own git worktree. Returns its \"<machine>:<number>\" address.", "inputSchema": {"type": "object", "properties": {
-            "machine": {"type": "string", "description": "Machine name from list_machines"},
+        json!({"name": "list_machines", "description": "List the other winfer machines paired with this one (Winfer Connect): name, desktop or server, online or not, their workspaces and agents; also machines nearby that could be paired, and a pairing in progress. Their panes are reachable with list_remote_panes, read_pane, send_to_pane, spawn_remote_agent and remote_pane_action.", "inputSchema": {"type": "object", "properties": {}}}),
+        json!({"name": "list_remote_panes", "description": "List a paired machine's workspaces and panes: number, agent, status, workspace. Address panes as \"<machine>:<number>\" in read_pane, send_to_pane and remote_pane_action.", "inputSchema": {"type": "object", "properties": {"machine": machine}, "required": ["machine"]}}),
+        json!({"name": "spawn_remote_agent", "description": "Start an agent pane on a paired machine, optionally with a first prompt, in a workspace there and its own git worktree. Returns its \"<machine>:<number>\" address.", "inputSchema": {"type": "object", "properties": {
+            "machine": machine,
             "provider": {"type": "string", "description": "Agent id, e.g. claude, codex, winfer, or shell"},
             "prompt": {"type": "string"},
             "worktree": {"type": "boolean"},
-            "workspace": {"type": "string", "description": "Workspace name on that machine (default: its first)"}
+            "workspace": {"type": "string", "description": "Workspace name on that machine (default: its first); new_remote_workspace makes one"}
         }, "required": ["machine", "provider"]}}),
+        json!({"name": "remote_pane_action", "description": "Act on an agent pane on a paired machine: approve or decline what it asks, interrupt it, or close the pane.", "inputSchema": {"type": "object", "properties": {
+            "pane": pane, "action": {"type": "string", "enum": ["approve", "decline", "interrupt", "close"]}
+        }, "required": ["pane", "action"]}}),
+        json!({"name": "new_remote_workspace", "description": "Open a workspace on a paired server: an existing folder there (path), or a git repository it clones first (git_url; private ones need the server's deploy key). Returns the workspace's name for spawn_remote_agent.", "inputSchema": {"type": "object", "properties": {
+            "machine": machine,
+            "path": {"type": "string", "description": "Folder on that machine, e.g. ~/code/app"},
+            "git_url": {"type": "string", "description": "Repository to clone (into ~ unless parent is given)"},
+            "branch": {"type": "string"},
+            "parent": {"type": "string", "description": "Folder to clone into (default ~)"},
+            "name": {"type": "string", "description": "Workspace name (default: the folder's)"}
+        }, "required": ["machine"]}}),
+        json!({"name": "list_reviews", "description": "List the finished work waiting for review on paired servers (and their merge queues): review id, agent, branch, changes, tests, summary.", "inputSchema": {"type": "object", "properties": {"machine": {"type": "string", "description": "Only this machine's"}}}}),
+        json!({"name": "review_action", "description": "Act on a review from list_reviews, on the server it's on: merge it (through its merge queue; tests: run the tests first), run its tests, send it back to its agent with text, discard the work, or dismiss the review.", "inputSchema": {"type": "object", "properties": {
+            "review": {"type": "string", "description": "Review id from list_reviews"},
+            "action": {"type": "string", "enum": ["merge", "tests", "send", "discard", "dismiss"]},
+            "tests": {"type": "boolean"},
+            "text": {"type": "string", "description": "For send: what to tell the agent"}
+        }, "required": ["review", "action"]}}),
+        json!({"name": "machine_usage", "description": "A paired machine's agent usage limits: per agent and account, how much is left of each window and when it resets.", "inputSchema": {"type": "object", "properties": {"machine": machine}, "required": ["machine"]}}),
+        json!({"name": "update_server", "description": "Update a paired winfer server (winferd) to the newest release; it restarts. list_machines shows which have an update.", "inputSchema": {"type": "object", "properties": {"machine": machine}, "required": ["machine"]}}),
+        json!({"name": "pair_machine", "description": "Pair another machine with this one. mode \"link\": make a one-time pair link (10 minutes) and the commands that install and pair a server with it (run one on the server; the pairing then completes by itself). \"join\": join a pair link another winfer made. \"nearby\": ask a machine on this network (list_machines shows them) to pair; \"address\": the same by host:port. Nearby and address pairings show a code on both screens that the user confirms.", "inputSchema": {"type": "object", "properties": {
+            "mode": {"type": "string", "enum": ["link", "join", "nearby", "address"]},
+            "link": {"type": "string", "description": "For join: the winfer-connect: link"},
+            "machine": {"type": "string", "description": "For nearby: its name"},
+            "address": {"type": "string", "description": "For address: host:port"},
+            "name": {"type": "string", "description": "For link: the server's name (default: its host name)"}
+        }, "required": ["mode"]}}),
+        json!({"name": "list_sign_ins", "description": "List this machine's agent sign-ins (Claude Code, Codex accounts): id, label, signed in or not, and the machines each is pushed to.", "inputSchema": {"type": "object", "properties": {}}}),
+        json!({"name": "push_sign_in", "description": "Sign a paired machine in with one of this machine's agent accounts (from list_sign_ins). The two copies stay in step when either refreshes.", "inputSchema": {"type": "object", "properties": {
+            "account": {"type": "string", "description": "Account id from list_sign_ins, e.g. claude:default"},
+            "machine": machine
+        }, "required": ["account", "machine"]}}),
     ]
 }
 
@@ -375,8 +411,11 @@ impl Root {
         let peer = payload["peer"].as_str().unwrap_or_default().to_string();
         let msg = &payload["msg"];
         let kind = msg["t"].as_str().unwrap_or_default();
+        if matches!(kind, "ack" | "error" | "usage") {
+            self.tool_reply(msg);
+        }
         if TOOL_REQUESTS.contains(&kind) {
-            return self.on_tool_call(&peer, msg, cx);
+            return self.on_tool_call(&peer, msg, window, cx);
         }
         if TERM_REQUESTS.contains(&kind) {
             return self.on_term_request(&peer, msg, cx);
@@ -640,19 +679,13 @@ impl Root {
         out
     }
 
-    /// `machine:N` → (peer, its pane id); None when `reference` isn't one.
+    /// `machine:N` → (peer, N, machine name); None when `reference` isn't one. The machine
+    /// resolves N itself (its order, as its list_panes_all shows), so it's never stale here.
     fn remote_ref(&self, reference: &Value) -> Option<Result<(String, String, String), String>> {
         let text = reference.as_str()?;
         let (machine, n) = text.rsplit_once(':')?;
         let n: usize = n.trim().parse().ok()?;
-        Some(self.machine(machine).and_then(|(peer, name, up)| {
-            if !up {
-                return Err(format!("{name} is offline."));
-            }
-            let panes = self.remote_order(&peer);
-            let pane = panes.get(n.wrapping_sub(1)).ok_or_else(|| format!("No pane {n} on {name}. Use list_remote_panes."))?;
-            Ok((peer, pane.id.clone(), name))
-        }))
+        Some(self.machine(machine).and_then(|(peer, name, up)| if up { Ok((peer, n.to_string(), name)) } else { Err(format!("{name} is offline.")) }))
     }
 
     /// Runs `tool` on a peer; answers the MCP call when the result comes back (or times out).
@@ -680,25 +713,45 @@ impl Root {
         match tool {
             "list_machines" => {
                 let connect = crate::connect::get()?;
-                let rows: Vec<String> = connect.status().peers.iter().map(|p| {
+                let status = connect.status();
+                let mut rows: Vec<String> = status.peers.iter().map(|p| {
                     let kind = if p.kind == Kind::Server { "server" } else { "desktop" };
                     let state = match p.link.via { Some(v) => format!("online ({v})"), None => "offline".into() };
-                    let agents = self.connect.mirrors.get(&p.peer_id).map_or(0, |m| m.panes.iter().filter(|x| !x.archived).count());
-                    format!("{} · {kind} · {state} · {agents} pane{}", p.name, if agents == 1 { "" } else { "s" })
+                    let m = self.connect.mirrors.get(&p.peer_id);
+                    let agents = m.map_or(0, |m| m.panes.iter().filter(|x| !x.archived).count());
+                    let workspaces = m.map(|m| m.workspaces.iter().map(|w| w.1.clone()).collect::<Vec<_>>().join(", ")).filter(|w| !w.is_empty()).map_or(String::new(), |w| format!(" · workspaces: {w}"));
+                    let server = m.and_then(|m| m.server.as_ref()).map_or(String::new(), |s| match &s.update {
+                        Some(u) => format!(" · winferd {} (update to {u} available)", s.version),
+                        None => format!(" · winferd {}", s.version),
+                    });
+                    format!("{} · {kind} · {state} · {agents} pane{}{workspaces}{server}", p.name, if agents == 1 { "" } else { "s" })
                 }).collect();
-                Some(ToolOutcome::Done(Ok(if rows.is_empty() { "No paired machines.".into() } else { rows.join("\n") })))
+                if rows.is_empty() {
+                    rows.push("No paired machines (pair_machine pairs one).".into());
+                }
+                if !status.nearby.is_empty() {
+                    rows.push(format!("Nearby, not paired: {}", status.nearby.iter().map(|n| n.name.clone()).collect::<Vec<_>>().join(", ")));
+                }
+                if let Some(p) = &status.pairing {
+                    rows.push(format!("Pairing: {}", pairing_text(p)));
+                }
+                Some(ToolOutcome::Done(Ok(rows.join("\n"))))
             }
             "list_remote_panes" => {
                 let (peer, name, up) = match self.machine(a["machine"].as_str().unwrap_or_default()) {
                     Ok(m) => m,
                     Err(e) => return Some(ToolOutcome::Done(Err(e))),
                 };
+                if up {
+                    return Some(self.remote_tool(call, &peer, &name, "list_panes_all", json!({}), &caller, cx));
+                }
                 let m = self.connect.mirrors.get(&peer).cloned().unwrap_or_default();
                 let rows: Vec<String> = self.remote_order(&peer).iter().enumerate().map(|(i, p)| {
                     let ws = m.workspaces.iter().find(|w| w.0 == p.workspace_id).map_or("", |w| w.1.as_str());
                     format!("{name}:{} · {} · {} · workspace {ws} · {}", i + 1, p.provider, super::agent_api::status_name(p.status), p.title)
                 }).collect();
-                let head = if up { format!("{name} (online):") } else { format!("{name} (offline, last known):") };
+                let spaces = m.workspaces.iter().map(|w| w.1.clone()).collect::<Vec<_>>().join(", ");
+                let head = format!("{name} ({}) · workspaces: {}:", if up { "online" } else { "offline, last known" }, if spaces.is_empty() { "none" } else { &spaces });
                 Some(ToolOutcome::Done(Ok(if rows.is_empty() { format!("{head}\n(no panes)") } else { format!("{head}\n{}", rows.join("\n")) })))
             }
             "spawn_remote_agent" => {
@@ -709,7 +762,7 @@ impl Root {
                 if !up {
                     return Some(ToolOutcome::Done(Err(format!("{name} is offline."))));
                 }
-                let mut args = json!({"provider": a["provider"], "prompt": a["prompt"], "worktree": a["worktree"]});
+                let mut args = json!({"provider": a["provider"], "prompt": a["prompt"], "worktree": a["worktree"], "model": a["model"], "effort": a["effort"]});
                 if let Some(ws) = a["workspace"].as_str() {
                     args["workspace"] = json!(ws);
                 }
@@ -724,16 +777,298 @@ impl Root {
                 args["pane"] = json!(pane);
                 Some(self.remote_tool(call, &peer, &name, tool, args, &caller, cx))
             }
+            "remote_pane_action" => {
+                let r = self.remote_ref(&a["pane"]).unwrap_or_else(|| Err("Give the pane as \"<machine>:<number>\" (list_remote_panes).".into()));
+                let (peer, pane, name) = match r {
+                    Ok(r) => r,
+                    Err(e) => return Some(ToolOutcome::Done(Err(e))),
+                };
+                if !matches!(a["action"].as_str(), Some("approve" | "decline" | "interrupt" | "close")) {
+                    return Some(ToolOutcome::Done(Err("action is approve, decline, interrupt or close.".into())));
+                }
+                Some(self.remote_tool(call, &peer, &name, "pane_action", json!({"pane": pane, "action": a["action"]}), &caller, cx))
+            }
+            "new_remote_workspace" => {
+                let (peer, name) = match self.online_server(a) {
+                    Ok(m) => m,
+                    Err(e) => return Some(ToolOutcome::Done(Err(e))),
+                };
+                let msg = match (a["git_url"].as_str().filter(|u| !u.trim().is_empty()), a["path"].as_str().filter(|p| !p.trim().is_empty())) {
+                    (Some(url), _) => json!({"t": "git.clone", "url": url.trim(), "branch": a["branch"], "parent": a["parent"].as_str().unwrap_or("~")}),
+                    (None, Some(path)) => json!({"t": "workspace.new", "path": path.trim(), "name": a["name"]}),
+                    (None, None) => return Some(ToolOutcome::Done(Err("Give a path on that machine or a git_url to clone.".into()))),
+                };
+                Some(self.await_reply(call, &peer, &name, msg, "workspace", cx))
+            }
+            "list_reviews" => {
+                let only = match a["machine"].as_str().filter(|m| !m.is_empty()) {
+                    Some(m) => match self.machine(m) {
+                        Ok((peer, _, _)) => Some(peer),
+                        Err(e) => return Some(ToolOutcome::Done(Err(e))),
+                    },
+                    None => None,
+                };
+                Some(ToolOutcome::Done(Ok(self.reviews_text(only.as_deref()))))
+            }
+            "review_action" => {
+                let wanted = a["review"].as_str().unwrap_or_default().trim();
+                let found = self.review.reviews.iter().find(|r| r.remote.as_ref().is_some_and(|(_, rid)| rid == wanted) || r.id == wanted).and_then(|r| r.remote.clone());
+                let Some((peer, rid)) = found else {
+                    return Some(ToolOutcome::Done(Err(format!("No review “{wanted}” on a paired server. list_reviews shows them."))));
+                };
+                let action = a["action"].as_str().unwrap_or_default();
+                let msg = match action {
+                    "merge" => json!({"t": "review.merge", "tests": a["tests"] == true}),
+                    "tests" => json!({"t": "review.tests"}),
+                    "send" => json!({"t": "review.send", "text": a["text"].as_str().unwrap_or_default()}),
+                    "discard" => json!({"t": "review.discard"}),
+                    "dismiss" => json!({"t": "review.dismiss"}),
+                    other => return Some(ToolOutcome::Done(Err(format!("Unknown action “{other}”: merge, tests, send, discard or dismiss.")))),
+                };
+                let mut msg = msg;
+                msg["reviewId"] = json!(rid);
+                let name = crate::connect::peer_name(&peer).unwrap_or_else(|| "the server".into());
+                let what = match action {
+                    "merge" => "review-merge",
+                    "tests" => "review-tests",
+                    _ => "review",
+                };
+                Some(self.await_reply(call, &peer, &name, msg, what, cx))
+            }
+            "machine_usage" => {
+                let (peer, name, up) = match self.machine(a["machine"].as_str().unwrap_or_default()) {
+                    Ok(m) => m,
+                    Err(e) => return Some(ToolOutcome::Done(Err(e))),
+                };
+                if !up {
+                    return Some(ToolOutcome::Done(Err(format!("{name} is offline."))));
+                }
+                Some(self.await_reply(call, &peer, &name, json!({"t": "usage.get"}), "usage", cx))
+            }
+            "update_server" => {
+                let (peer, name) = match self.online_server(a) {
+                    Ok(m) => m,
+                    Err(e) => return Some(ToolOutcome::Done(Err(e))),
+                };
+                Some(self.await_reply(call, &peer, &name, json!({"t": "server.update"}), "update", cx))
+            }
+            "pair_machine" => Some(ToolOutcome::Done(self.pair_tool(a))),
+            "list_sign_ins" => {
+                let call = call.to_string();
+                let names: HashMap<String, String> = crate::connect::get().map(|c| c.peers().into_iter().map(|p| (p.peer_id, p.name)).collect()).unwrap_or_default();
+                crate::backend::background(move || {
+                    let links = winfer_core::accounts_sync::links();
+                    let rows: Vec<String> = serde_json::to_value(winfer_backend::accounts::accounts_list()).unwrap_or_default().as_array().cloned().unwrap_or_default().iter().map(|e| {
+                        let field = |k: &str| e[k].as_str().or_else(|| e["account"][k].as_str()).unwrap_or_default().to_string();
+                        let id = field("id");
+                        let pushed: Vec<String> = links.iter().filter(|l| l.local == id && !l.received).filter_map(|l| names.get(&l.peer).map(|n| if l.out_there { format!("{n} (signed out there)") } else { n.clone() })).collect();
+                        let state = if e["signedIn"] == true { "signed in" } else { "signed out" };
+                        let on = if pushed.is_empty() { String::new() } else { format!(" · pushed to {}", pushed.join(", ")) };
+                        format!("{id} · “{}” · {state}{on}", field("label"))
+                    }).collect();
+                    super::agent_api::respond(&call, true, if rows.is_empty() { "No agent accounts.".into() } else { rows.join("\n") });
+                });
+                Some(ToolOutcome::Later)
+            }
+            "push_sign_in" => {
+                let (peer, name, up) = match self.machine(a["machine"].as_str().unwrap_or_default()) {
+                    Ok(m) => m,
+                    Err(e) => return Some(ToolOutcome::Done(Err(e))),
+                };
+                if !up {
+                    return Some(ToolOutcome::Done(Err(format!("{name} is offline."))));
+                }
+                let account = a["account"].as_str().unwrap_or_default().to_string();
+                match winfer_core::accounts_sync::push_message(&account) {
+                    Ok((msg, fp)) => {
+                        let id = self.connect_request(&peer, msg, None);
+                        self.connect.pushes.insert(id.clone(), (account, fp, name.clone()));
+                        Some(self.wait_for(call, id, &name, "push", cx))
+                    }
+                    Err(e) => Some(ToolOutcome::Done(Err(e))),
+                }
+            }
             _ => None,
         }
     }
 
+    /// A paired server named in `a["machine"]`, online.
+    fn online_server(&self, a: &Value) -> Result<(String, String), String> {
+        let (peer, name, up) = self.machine(a["machine"].as_str().unwrap_or_default())?;
+        if !up {
+            return Err(format!("{name} is offline."));
+        }
+        let server = crate::connect::get().and_then(|c| c.peers().into_iter().find(|p| p.peer_id == peer)).is_some_and(|p| p.kind == Kind::Server);
+        if !server {
+            return Err(format!("{name} is a desktop; this works on winfer servers."));
+        }
+        Ok((peer, name))
+    }
+
+    /// Sends `msg` to `peer` and answers the MCP call with its reply (or a timeout).
+    fn await_reply(&mut self, call: &str, peer: &str, name: &str, msg: Value, what: &'static str, cx: &mut Context<Self>) -> ToolOutcome {
+        let id = self.connect_request(peer, msg, None);
+        self.wait_for(call, id, name, what, cx)
+    }
+
+    fn wait_for(&mut self, call: &str, id: String, name: &str, what: &'static str, cx: &mut Context<Self>) -> ToolOutcome {
+        self.connect.tool_waits.insert(id.clone(), (call.to_string(), what, name.to_string()));
+        // Clones and updates download: they get longer.
+        let wait = if matches!(what, "workspace" | "update") { Duration::from_secs(600) } else { TOOL_TIMEOUT };
+        let machine = name.to_string();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(wait).await;
+            let _ = this.update(cx, |this, _| {
+                if let Some((call, _, _)) = this.connect.tool_waits.remove(&id) {
+                    super::agent_api::respond(&call, false, format!("{machine} didn't answer in time."));
+                }
+            });
+        })
+        .detach();
+        ToolOutcome::Later
+    }
+
+    /// A reply to a request an agent's tool call waits on.
+    fn tool_reply(&mut self, msg: &Value) {
+        let Some(id) = msg["id"].as_str() else { return };
+        let Some((call, what, machine)) = self.connect.tool_waits.remove(id) else { return };
+        let ok = msg["ok"] != false && msg["t"] != "error";
+        let text = if !ok {
+            msg["error"].as_str().unwrap_or("That didn't work.").to_string()
+        } else {
+            match what {
+                "usage" => usage_text(&machine, msg),
+                "workspace" => {
+                    let ws = msg["workspaceId"].as_str().unwrap_or_default();
+                    let name = msg["name"].as_str().map(str::to_string).or_else(|| self.connect.mirrors.values().flat_map(|m| m.workspaces.iter()).find(|w| w.0 == ws).map(|w| w.1.clone()));
+                    match (name, msg["path"].as_str()) {
+                        (Some(n), _) => format!("Workspace “{n}” is open on {machine}."),
+                        (None, Some(p)) => format!("Cloned into {p} on {machine}; it's a workspace there now (list_remote_panes names it)."),
+                        (None, None) => format!("The workspace is open on {machine} (list_remote_panes names it)."),
+                    }
+                }
+                "update" => format!("{machine} is updating to {} and restarts; it's back in a few seconds.", msg["version"].as_str().unwrap_or("the newest release")),
+                "review-merge" => format!("Queued for merging on {machine}; list_reviews shows the merge queue."),
+                "review-tests" => format!("Running its tests on {machine}; list_reviews shows the result."),
+                "push" => format!("Signed in on {machine} as “{}”. The two stay in step when either refreshes.", msg["label"].as_str().unwrap_or("the account")),
+                _ => "Done.".to_string(),
+            }
+        };
+        super::agent_api::respond(&call, ok, text);
+    }
+
+    /// Open reviews on paired machines (and their merge queues), for agents.
+    fn reviews_text(&self, only: Option<&str>) -> String {
+        use super::review::Load;
+        let mut rows = Vec::new();
+        for r in &self.review.reviews {
+            let Some((peer, rid)) = &r.remote else { continue };
+            if only.is_some_and(|o| o != peer) {
+                continue;
+            }
+            let machine = crate::connect::peer_name(peer).unwrap_or_default();
+            let changes = r.stats.as_ref().map_or(String::new(), |s| format!(" · {} file{} +{} −{}", s.files.len(), if s.files.len() == 1 { "" } else { "s" }, s.adds, s.dels));
+            let tests = match &r.tests {
+                Load::Done(Some(t)) => format!(" · tests {} ({})", if t.ok { "passed" } else { "failed" }, t.command),
+                Load::Loading => " · tests running".into(),
+                Load::Error(e) => format!(" · tests error: {e}"),
+                _ => String::new(),
+            };
+            let summary = match &r.summary { Load::Done(t) => format!("\n  {}", t.replace('\n', " ")), _ => String::new() };
+            let conflict = if r.conflict.is_some() { " · conflicts with its base" } else { "" };
+            rows.push(format!("review {rid} · {machine} · {} · {}{changes}{tests}{conflict}{summary}", r.provider, r.branch.clone().unwrap_or_else(|| "no worktree".into())));
+        }
+        let queue: Vec<String> = self.review.queue.iter().filter(|q| q.peer.as_deref().is_some_and(|p| only.is_none_or(|o| o == p))).map(|q| {
+            let machine = q.peer.as_deref().and_then(crate::connect::peer_name).unwrap_or_default();
+            format!("{} → {} on {machine}: {:?}{}", q.branch, q.base, q.state, q.detail.as_ref().map_or(String::new(), |d| format!(" ({d})")))
+        }).collect();
+        if rows.is_empty() {
+            rows.push("No open reviews on paired servers.".into());
+        }
+        if !queue.is_empty() {
+            rows.push(format!("Merge queue:\n{}", queue.join("\n")));
+        }
+        rows.join("\n")
+    }
+
+    /// `pair_machine`.
+    fn pair_tool(&mut self, a: &Value) -> Result<String, String> {
+        let connect = crate::connect::get().ok_or("Winfer Connect isn't running.")?;
+        if !connect.status().enabled {
+            return Err("Winfer Connect is off (Settings → Connect).".into());
+        }
+        match a["mode"].as_str().unwrap_or_default() {
+            "link" => {
+                // The agent hands the link on itself: its key proves the other side, so no code to compare.
+                let link = connect.pair_create_link_with(true);
+                let named = |cmd: String| match a["name"].as_str().filter(|n| !n.trim().is_empty()) {
+                    Some(n) => cmd.replace("--pair", &format!("--name '{}' --pair", n.replace('\'', ""))).replace("WINFERD_NAME=\"$(hostname)\"", &format!("WINFERD_NAME='{}'", n.replace('\'', ""))),
+                    None => cmd,
+                };
+                Ok(format!(
+                    "Pair link (one-time, 10 minutes):\n{link}\n\nTo add a server, run on it either\n  {}\nor with Docker\n  {}\nAnother winfer desktop joins with pair_machine mode \"join\" or Settings → Connect. list_machines shows it once paired.",
+                    named(super::settings_connect::server_command(&link, false)),
+                    named(super::settings_connect::server_command(&link, true)),
+                ))
+            }
+            "join" => {
+                let link = a["link"].as_str().unwrap_or_default();
+                connect.pair_join_link(link, true)?;
+                Ok("Joining; list_machines shows the machine once paired (a few seconds).".into())
+            }
+            "nearby" => {
+                let wanted = a["machine"].as_str().unwrap_or_default();
+                let nearby = connect.status().nearby;
+                let n = nearby.iter().find(|n| n.name.eq_ignore_ascii_case(wanted.trim()) || n.id == wanted).ok_or_else(|| format!("No unpaired machine called “{wanted}” on this network. Nearby: {}.", if nearby.is_empty() { "none".into() } else { nearby.iter().map(|n| n.name.clone()).collect::<Vec<_>>().join(", ") }))?;
+                connect.pair_nearby(&n.id)?;
+                Ok(format!("Asked {} to pair. Both screens now show a code: the user compares and confirms them in Settings → Connect (agents can't confirm a nearby pairing).", n.name))
+            }
+            "address" => {
+                connect.pair_address(a["address"].as_str().unwrap_or_default())?;
+                Ok("Asked it to pair. Both screens show a code that the user compares and confirms in Settings → Connect.".into())
+            }
+            other => Err(format!("Unknown mode “{other}”: link, join, nearby or address.")),
+        }
+    }
+
     /// A paired machine's agent calls a tool here (full trust: as if it were one of ours).
-    fn on_tool_call(&mut self, peer: &str, msg: &Value, cx: &mut Context<Self>) {
+    fn on_tool_call(&mut self, peer: &str, msg: &Value, window: &mut Window, cx: &mut Context<Self>) {
         let id = msg["id"].clone();
         let tool = msg["name"].as_str().unwrap_or_default().to_string();
-        let a = msg["args"].clone();
+        let mut a = msg["args"].clone();
         let caller = msg["caller"].as_str().unwrap_or("An agent on another machine").to_string();
+        let answer = |ok: bool, text: String| crate::connect::send(peer, json!({"t": "tool.result", "id": id, "ok": ok, "text": text}));
+        // A pane by number: this machine's order (all workspaces), as list_panes_all shows it.
+        let n = a["pane"].as_u64().or_else(|| a["pane"].as_str().and_then(|t| t.trim().parse().ok()));
+        if let Some(n) = n {
+            let s = self.state.read(cx);
+            let found = s.workspaces.iter().flat_map(super::mobile::ordered).filter(|p| !p.archived).nth((n as usize).wrapping_sub(1)).map(|p| p.id.clone());
+            match found {
+                Some(pane) => a["pane"] = json!(pane),
+                None => return answer(false, format!("No pane {n} here. list_remote_panes shows them.")),
+            }
+        }
+        if tool == "list_panes_all" {
+            let s = self.state.read(cx);
+            let me = crate::connect::get().map(|c| c.status().name).unwrap_or_default();
+            let spaces = s.workspaces.iter().map(|w| w.name.clone()).collect::<Vec<_>>().join(", ");
+            let rows: Vec<String> = s.workspaces.iter().flat_map(|w| super::mobile::ordered(w).into_iter().filter(|p| !p.archived).map(move |p| (w, p))).enumerate()
+                .map(|(i, (w, p))| format!("{me}:{} · {} · {} · workspace {} · {}", i + 1, p.provider, super::agent_api::status_name(p.status), w.name, s.pane_label(p)))
+                .collect();
+            return answer(true, format!("{me} (online) · workspaces: {spaces}:\n{}", if rows.is_empty() { "(no panes)".into() } else { rows.join("\n") }));
+        }
+        if tool == "pane_action" {
+            let kind = match a["action"].as_str().unwrap_or_default() {
+                "approve" => "approve",
+                "decline" => "decline",
+                "interrupt" => "interrupt",
+                "close" => "pane.close",
+                other => return answer(false, format!("Unknown action “{other}”.")),
+            };
+            let request = json!({"device": crate::connect::device(peer), "msg": {"t": kind, "paneId": a["pane"], "id": format!("tool-{}", id.as_str().unwrap_or_default())}});
+            self.on_mobile_request(&request, window, cx);
+            return answer(true, "Done.".into());
+        }
         let s = self.state.read(cx);
         // The workspace: the target pane's, the one named, or the first.
         let ws = match (&tool[..], a["pane"].as_str(), a["workspace"].as_str()) {
@@ -747,11 +1082,17 @@ impl Root {
             Some(_) if !matches!(&tool[..], "read_pane" | "send_to_pane" | "spawn_agent") => Err(format!("{tool} can't be called from another machine.")),
             Some(ws) => {
                 let me = crate::model::Pane { id: format!("remote:{peer}"), provider: "winfer".into(), cwd: ws.root_dir.clone(), workspace_id: ws.id.clone(), ..Default::default() };
+                let all = |s: &crate::model::AppState| s.workspaces.iter().flat_map(super::mobile::ordered).filter(|p| !p.archived).map(|p| p.id.clone()).collect::<Vec<_>>();
+                let before = all(self.state.read(cx));
                 let result = self.run_remote_sync_tool(&tool, &ws, &me, &a, &caller, cx);
-                // Numbers mean this machine's order; the caller addresses panes as machine:N.
-                if tool == "spawn_agent" && let Ok(text) = &result {
+                // Its address in this machine's order, as the caller writes it (machine:N).
+                if tool == "spawn_agent" && result.is_ok() {
                     let me_name = crate::connect::get().map(|c| c.status().name).unwrap_or_default();
-                    Ok(format!("{text} (on {me_name}; see list_remote_panes for its address)"))
+                    let after = all(self.state.read(cx));
+                    match after.iter().position(|id| !before.contains(id)) {
+                        Some(i) => Ok(format!("Started {} as {me_name}:{}", a["provider"].as_str().unwrap_or("the agent"), i + 1)),
+                        None => Ok(format!("Started it (on {me_name}; see list_remote_panes for its address)")),
+                    }
                 } else {
                     result
                 }
@@ -1202,4 +1543,43 @@ mod tests {
         assert!(RemotePane::parse(&serde_json::from_str(r#"{"title": "no id"}"#).unwrap()).is_none());
         assert_eq!(parse_status("bogus"), AgentStatus::Idle);
     }
+}
+
+/// A pairing in progress, for agents.
+fn pairing_text(p: &winfer_connect::PairStatus) -> String {
+    use winfer_connect::PairStatus;
+    match p {
+        PairStatus::Waiting { side: "host", .. } => "waiting for the other machine to use the pair link".into(),
+        PairStatus::Waiting { .. } => "joining".into(),
+        PairStatus::Code { code, peer_name, confirmed, .. } => format!("with {peer_name}, code {code}{}", if *confirmed { " (confirmed here, waiting for the other side)" } else { ": waiting for the user to confirm in Settings → Connect" }),
+        PairStatus::Done { peer_name } => format!("paired with {peer_name}"),
+        PairStatus::Failed { error } => format!("failed: {error}"),
+    }
+}
+
+/// A machine's `usage` reply, for agents: each agent and account, what's left of each window.
+fn usage_text(machine: &str, msg: &Value) -> String {
+    let now = msg["now"].as_f64().unwrap_or(0.0);
+    let window = |w: &Value| {
+        let left = w["left"].as_f64().map_or("?".to_string(), |l| format!("{l:.0}% left"));
+        let reset = w["resetsAt"].as_f64().filter(|r| *r > now).map_or(String::new(), |r| {
+            let mins = ((r - now) / 60_000.0).round() as i64;
+            if mins >= 120 { format!(", resets in {} h", mins / 60) } else { format!(", resets in {mins} min") }
+        });
+        format!("{} {left}{reset}", w["label"].as_str().unwrap_or("window"))
+    };
+    let mut rows = vec![format!("Usage on {machine}:")];
+    for p in msg["providers"].as_array().into_iter().flatten() {
+        let name = p["name"].as_str().unwrap_or_default();
+        for acc in p["accounts"].as_array().into_iter().flatten() {
+            let windows: Vec<String> = acc["windows"].as_array().into_iter().flatten().map(window).collect();
+            if !windows.is_empty() {
+                rows.push(format!("{name} · {}: {}", acc["label"].as_str().unwrap_or("account"), windows.join("; ")));
+            }
+        }
+    }
+    if rows.len() == 1 {
+        rows.push("No usage reported yet.".into());
+    }
+    rows.join("\n")
 }

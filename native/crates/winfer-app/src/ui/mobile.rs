@@ -62,7 +62,7 @@ fn send(device: Option<String>, msg: Value) {
 
 /// A workspace's panes as the desktop shows them: tiles in layout order, then the rest.
 /// Other machines' panes shown here (Winfer Connect tiles) aren't this desktop's to offer.
-fn ordered(ws: &Workspace) -> Vec<&Pane> {
+pub(super) fn ordered(ws: &Workspace) -> Vec<&Pane> {
     let tiled = ws.layout.as_ref().map(leaves).unwrap_or_default();
     let mut panes: Vec<&Pane> = tiled.iter().filter_map(|id| ws.panes.iter().find(|p| p.id == *id)).collect();
     panes.extend(ws.panes.iter().filter(|p| !tiled.contains(&p.id)));

@@ -60,8 +60,10 @@ Done:
   or on the LAN (mDNS + 6-digit code), end-to-end encrypted over the relay with a direct LAN path when possible;
   Settings → Connect; the sidebar's Connected section with each machine's sessions, approve/decline/interrupt/close and
   new sessions there; remote panes as live tiles (terminals and winfer code chats) where opening one takes over its
-  size; native notifications for remote sessions; `list_machines`, `list_remote_panes`, `spawn_remote_agent` and
-  `machine:N` panes in `read_pane`/`send_to_pane` for agents
+  size; native notifications for remote sessions; agent tools for all of it (`list_machines`, `list_remote_panes`,
+  `spawn_remote_agent`, `remote_pane_action`, `machine:N` panes in `read_pane`/`send_to_pane`, `new_remote_workspace`,
+  `list_reviews`/`review_action`, `machine_usage`, `update_server`, `pair_machine`, `list_sign_ins`/`push_sign_in`;
+  a server's own agents reach paired machines the same way)
 - [x] Android mirror: live H.264 (openh264) with screenshot fallback, tap, swipe, scroll, keys, emulator start
 - [x] Limit handoff ("Continue in …") and Codex reset credits
 - [x] Settings → Voice (with native microphone test), AI, winfer code, Mobile, Plugins, Skills

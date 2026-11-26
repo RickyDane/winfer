@@ -417,12 +417,18 @@ impl Connect {
 
     /// Starts a link pairing as the host; returns the link to hand to the other instance.
     pub fn pair_create_link(&self) -> String {
+        self.pair_create_link_with(false)
+    }
+
+    /// Like [`Self::pair_create_link`]; `auto_confirm`: confirm the code by itself (the link's key
+    /// already proves the other side, so this is for an agent that handed the link on itself).
+    pub fn pair_create_link_with(&self, auto_confirm: bool) -> String {
         let me = self.me();
         let relay_url = self.0.config.lock().unwrap().relay_url();
         let (link, key) = PairLink::new(&me, &relay_url, now_ms());
         let url = link.to_url();
         let status = PairStatus::Waiting { side: "host", link: Some(url.clone()), expires_at: Some(link.x) };
-        self.start_link_pairing(Side::Host, me, key, &relay_url, status, false, link.x);
+        self.start_link_pairing(Side::Host, me, key, &relay_url, status, auto_confirm, link.x);
         url
     }
 

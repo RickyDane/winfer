@@ -118,9 +118,18 @@ chat model on the replayed and live bytes and writes its commands as `term.in`.
 
 ### Agent tools
 
-`tool.call {id, name, args, caller}` → `tool.result {id, ok, text}`. Hosts run `read_pane`, `send_to_pane` (`args.pane`
-= the host's pane id) and `spawn_agent` (`args.workspace` = a workspace name, default the active one) exactly as for
-their own agents. Clients time out after 30 s.
+`tool.call {id, name, args, caller}` → `tool.result {id, ok, text}`. Hosts (desktops and servers alike) run
+`read_pane`, `send_to_pane`, `spawn_agent` (`args.workspace` = a workspace name, an error if there's none by that name;
+default the first; `model`, `effort`; answers with the new pane's `machine:N`), `list_panes_all` (workspaces and panes
+numbered across all workspaces) and `pane_action {pane, action: approve|decline|interrupt|close}`. `args.pane` is the
+host's pane id or a number in the host's own `list_panes_all` order: callers pass the N of `machine:N` through, so
+addresses never depend on a stale mirror. Clients time out after 30 s.
+
+Agents see these as tools (both kinds of machine): `list_machines`, `list_remote_panes`, `spawn_remote_agent`,
+`remote_pane_action`, `read_pane`/`send_to_pane` on `"<machine>:<n>"`, `list_reviews`, `review_action`. Desktops also
+have `new_remote_workspace` (`workspace.new` / `git.clone` on a server), `machine_usage` (`usage.get`), `update_server`
+(`server.update`), `pair_machine` (a link the desktop confirms by itself, joining a link, or nearby/address pairing that
+the user confirms) and `list_sign_ins`/`push_sign_in` (`account.push`). Not for agents: unpairing machines or phones.
 
 ### Servers and shared sign-ins
 
