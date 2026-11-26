@@ -4,6 +4,7 @@ import type { DesktopClient } from "../client";
 import { ago, go, haptic, useClient, useTick, vtName } from "../hooks";
 import { isFreeText, sortPanes, type AgentStatus, type Pane, type RequestOption } from "../protocol";
 import { Avatar, ConnNotice, Icon, STATUS_LABEL, linkState, providerInfo } from "./common";
+import { activeIsServer } from "../pairing";
 import { Segmented, SwipeCard, useFlip, usePullToRefresh } from "./widgets";
 
 type Filter = "all" | "needs" | "working" | "done";
@@ -176,7 +177,7 @@ export function Inbox({ client }: { client: DesktopClient }) {
         <span className="live-dot" data-state={link} aria-hidden />
         <div className="bar-title">
           <b>{desktop}</b>
-          <span>{link === "online" ? "Connected" : link === "away" ? "Desktop offline" : link === "offline" ? "Offline" : "Connecting…"}</span>
+          <span>{link === "online" ? "Connected" : link === "away" ? (state.welcome?.server ?? activeIsServer() ? "Server offline" : "Desktop offline") : link === "offline" ? "Offline" : "Connecting…"}</span>
         </div>
         {state.panes.length > 0 && <span className="bar-chip num">{state.panes.length} active</span>}
       </header>

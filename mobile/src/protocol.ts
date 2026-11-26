@@ -201,7 +201,7 @@ export type PhoneMsg =
   | { t: "push.unsubscribe" };
 
 export type DesktopMsg =
-  | { t: "welcome"; id?: string; desktop: string; version: string; vapidPublicKey: string }
+  | { t: "welcome"; id?: string; desktop: string; version: string; vapidPublicKey: string; server?: boolean }
   | { t: "panes"; id?: string; panes: Pane[]; workspaces?: Workspace[]; providers?: Provider[]; defaultProvider?: string; theme?: Theme; compactTools?: boolean; showBgNotes?: boolean }
   | { t: "status"; pane: Pane; silent?: boolean }
   | { t: "thread"; id?: string; paneId: string; messages: Message[]; source: ThreadSource }

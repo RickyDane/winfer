@@ -8,6 +8,7 @@ import type { ClientState } from "../client";
 // Official marks, shared with the desktop's ProviderIcon.
 import { PROVIDER_LOGOS } from "../../../src/features/providers/logos";
 import { vtName } from "../hooks";
+import { activeIsServer } from "../pairing";
 import type { AgentStatus, Pane } from "../protocol";
 
 export const STATUS_LABEL: Record<AgentStatus, string> = {
@@ -133,7 +134,11 @@ export function ConnNotice({ state, onRetry }: { state: ClientState; onRetry: ()
     return (
       <div className="notice" data-tone="warn" role="status">
         <Icon name="laptop" />
-        <p>Your desktop is offline. Open winfer on your computer and this reconnects by itself.</p>
+        <p>
+          {state.welcome?.server ?? activeIsServer()
+            ? `${state.welcome?.desktop ?? "The server"} isn't answering. Check that winferd runs there (winferd status); this reconnects by itself.`
+            : "Your desktop is offline. Open winfer on your computer and this reconnects by itself."}
+        </p>
       </div>
     );
   if (link === "offline")

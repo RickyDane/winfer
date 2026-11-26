@@ -1,3 +1,4 @@
+import { markActiveServer } from "./pairing";
 import { applyTheme } from "./theme";
 import type { DesktopMsg, Message, Pane, PhoneMsg, Provider, ThreadSource, Workspace } from "./protocol";
 
@@ -11,7 +12,7 @@ export interface ClientState {
   socket: "connecting" | "open" | "closed";
   /** null until the relay reports presence. */
   desktopOnline: boolean | null;
-  welcome: { desktop: string; version: string; vapidPublicKey: string } | null;
+  welcome: { desktop: string; version: string; vapidPublicKey: string; server?: boolean } | null;
   panes: Pane[];
   /** The desktop's workspaces (empty from desktops that don't send them). */
   workspaces: Workspace[];
@@ -98,7 +99,8 @@ export abstract class BaseClient implements DesktopClient {
   protected apply(msg: DesktopMsg) {
     switch (msg.t) {
       case "welcome":
-        this.set({ welcome: { desktop: msg.desktop, version: msg.version, vapidPublicKey: msg.vapidPublicKey }, error: null });
+        this.set({ welcome: { desktop: msg.desktop, version: msg.version, vapidPublicKey: msg.vapidPublicKey, server: msg.server }, error: null });
+        if (msg.server !== undefined) markActiveServer(msg.server);
         break;
       case "panes":
         if (msg.theme) applyTheme(msg.theme);

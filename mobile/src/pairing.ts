@@ -7,6 +7,8 @@ export interface Pairing {
   name: string;
   origin: string;
   createdAt: number;
+  /** Paired with a server (winferd), not a desktop: said by its welcome. */
+  server?: boolean;
 }
 
 const LIST = "winfer.pairings";
@@ -42,6 +44,19 @@ export function activePairing(): Pairing | null {
 export function addPairing(p: Pairing) {
   save([...loadPairings().filter((x) => x.deviceId !== p.deviceId && x.roomId !== p.roomId), p]);
   setActive(p.deviceId);
+}
+
+/** Remembers whether the active pairing is a server, for when it can't be asked (offline). */
+export function markActiveServer(server: boolean) {
+  const id = activeId();
+  const list = loadPairings();
+  if (!list.some((p) => p.deviceId === id && !!p.server !== server)) return;
+  save(list.map((p) => (p.deviceId === id ? { ...p, server } : p)));
+}
+
+/** Whether this phone's active pairing is a server. */
+export function activeIsServer(): boolean {
+  return !!activePairing()?.server;
 }
 
 export function removePairing(deviceId: string) {

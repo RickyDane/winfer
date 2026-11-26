@@ -253,6 +253,8 @@ impl Mobile {
                     "desktop": desktop_name(),
                     "version": env!("CARGO_PKG_VERSION"),
                     "vapidPublicKey": crypto::b64(&self.vapid().public),
+                    // A server (winferd): the phone says so when it's offline.
+                    "server": HEADLESS.load(std::sync::atomic::Ordering::Relaxed),
                 });
                 self.send_to(device_id, &welcome);
                 // The webview answers with the panes.
