@@ -611,11 +611,13 @@ impl Root {
     fn machine(&self, name: &str) -> Result<(String, String, bool), String> {
         let connect = crate::connect::get().ok_or("Winfer Connect isn't running.")?;
         let peers = connect.peers();
-        let lower = name.trim().to_lowercase();
+        // Any case and any whitespace: macOS names often have a no-break space ("Mac\u{a0}Studio").
+        let norm = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
+        let lower = norm(name);
         let found = peers.iter().find(|p| p.name == name || p.peer_id == name)
-            .or_else(|| peers.iter().find(|p| p.name.to_lowercase() == lower))
+            .or_else(|| peers.iter().find(|p| norm(&p.name) == lower))
             .or_else(|| {
-                let mut hits = peers.iter().filter(|p| p.name.to_lowercase().starts_with(&lower));
+                let mut hits = peers.iter().filter(|p| norm(&p.name).starts_with(&lower));
                 let first = hits.next();
                 if hits.next().is_some() { None } else { first }
             });

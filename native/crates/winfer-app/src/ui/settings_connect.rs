@@ -30,7 +30,8 @@ const IMAGE: &str = "ghcr.io/rickydane/winferd";
 /// The command that installs winferd and pairs it with this link.
 pub(super) fn server_command(link: &str, docker: bool) -> String {
     if docker {
-        format!("docker run -d --name winferd --restart unless-stopped -v winferd:/data -e WINFERD_PAIR='{link}' {IMAGE}")
+        // Named after the host (the container's own name is its id).
+        format!("docker run -d --name winferd --restart unless-stopped -v winferd:/data -e WINFERD_NAME=\"$(hostname)\" -e WINFERD_PAIR='{link}' {IMAGE}")
     } else {
         format!("curl -fsSL {INSTALL_URL} | sh -s -- --pair '{link}'")
     }

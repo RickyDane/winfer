@@ -1,7 +1,7 @@
 # winferd, winfer for servers, as a container. Build from the repository root:
 #   docker build -f native/crates/winferd/Dockerfile -t winferd .
 # Run (pair with a link from winfer: Settings → Connect):
-#   docker run -d --name winferd --restart unless-stopped -v winferd:/data -e WINFERD_PAIR='<link>' winferd
+#   docker run -d --name winferd --restart unless-stopped -v winferd:/data -e WINFERD_NAME="$(hostname)" -e WINFERD_PAIR='<link>' winferd
 # Everything it keeps (pairings, sessions, agents' sign-ins under $HOME) is in /data.
 # --build-arg BIN=release --build-arg VERSION=v0.1.102 takes the release's binary instead of
 # compiling (release.yml, for both architectures).

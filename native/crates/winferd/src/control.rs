@@ -85,7 +85,14 @@ fn log_pairing(p: &Value) {
 }
 
 fn find_peer(connect: &Connect, name: &str) -> Option<(String, String)> {
-    connect.peers().into_iter().find(|p| p.name.eq_ignore_ascii_case(name) || p.peer_id == name).map(|p| (p.peer_id, p.name))
+    connect.peers().into_iter().find(|p| same_name(&p.name, name) || p.peer_id == name).map(|p| (p.peer_id, p.name))
+}
+
+/// Names as typed match names as given: any case, any whitespace (macOS names often have a
+/// no-break space, "Mac\u{a0}Studio").
+fn same_name(a: &str, b: &str) -> bool {
+    let norm = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
+    norm(a) == norm(b)
 }
 
 fn now_secs() -> u64 {
@@ -278,5 +285,14 @@ pub fn update(check_only: bool, tag: Option<String>) -> i32 {
                 1
             }
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn names_match_across_case_and_spaces() {
+        assert!(super::same_name("Mac\u{a0}Studio von Ricky", "mac studio  von ricky"));
+        assert!(!super::same_name("Mac Studio", "Mac Mini"));
     }
 }
