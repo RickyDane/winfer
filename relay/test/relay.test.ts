@@ -1,5 +1,6 @@
 import { exports } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
+import { pickRelease, pinVersion } from "../src/index";
 
 const b64 = (n: number, fill: number) =>
   btoa(String.fromCharCode(...new Uint8Array(n).fill(fill)))
@@ -54,10 +55,17 @@ const isData = (f: string) => !f.startsWith("{");
 const isPresence = (f: string) => f.startsWith("{");
 
 describe("relay", () => {
-  it("sends /install.sh to the latest release's installer", async () => {
-    const res = await exports.default.fetch("http://relay/install.sh", { redirect: "manual" });
-    expect(res.status).toBe(302);
-    expect(res.headers.get("location")).toBe("https://github.com/RickyDane/winfer/releases/latest/download/install.sh");
+  it("installs from the newest stable release with winferd, else the newest Nebula", () => {
+    const r = (tag_name: string, prerelease: boolean, sh: boolean) => ({
+      tag_name, prerelease, draft: false, assets: sh ? [{ name: "install.sh" }] : [],
+    });
+    expect(pickRelease([r("v2-5", true, true), r("v1", false, false)])).toBe("v2-5");
+    expect(pickRelease([r("v3-1", true, true), r("v2", false, true)])).toBe("v2");
+    expect(pickRelease([r("v1", false, false)])).toBeUndefined();
+  });
+
+  it("pins the installer to its release", () => {
+    expect(pinVersion('VERSION="${WINFERD_VERSION:-}"\n', "v0.1.110-182")).toBe('VERSION="${WINFERD_VERSION:-v0.1.110-182}"\n');
   });
 
   it("rejects malformed room/auth", async () => {

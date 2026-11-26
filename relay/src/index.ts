@@ -14,8 +14,47 @@ const MAX_PHONES = 8;
 const MAX_PEERS = 2;
 const MAX_FRAME = 1 << 20;
 const IDLE_MS = 30 * 24 * 60 * 60 * 1000;
-// winferd's installer (native/crates/winferd/install.sh), uploaded with every stable release.
-const INSTALL_SH = "https://github.com/RickyDane/winfer/releases/latest/download/install.sh";
+// winferd's installer (native/crates/winferd/install.sh) is uploaded with every release.
+const RELEASES = "https://api.github.com/repos/RickyDane/winfer/releases?per_page=30";
+const INSTALL_TTL = 300;
+
+export interface Release {
+  tag_name: string;
+  prerelease: boolean;
+  draft: boolean;
+  assets: { name: string }[];
+}
+
+/** The release to install from: the newest stable one that ships winferd, else the newest
+ * pre-release (Nebula) that does. Old stable releases predate winferd. */
+export function pickRelease(releases: Release[]): string | undefined {
+  const ships = (r: Release) => !r.draft && r.assets.some((a) => a.name === "install.sh");
+  return (releases.find((r) => ships(r) && !r.prerelease) ?? releases.find(ships))?.tag_name;
+}
+
+/** Pins the script to `tag`, so it downloads winferd from the same release. */
+export function pinVersion(script: string, tag: string): string {
+  return script.replace('VERSION="${WINFERD_VERSION:-}"', `VERSION="\${WINFERD_VERSION:-${tag}}"`);
+}
+
+async function installScript(): Promise<Response> {
+  const cache = caches.default;
+  const key = new Request("https://relay.cache/install.sh");
+  const hit = await cache.match(key);
+  if (hit) return hit;
+  const gh = { headers: { "user-agent": "winfer-relay", accept: "application/vnd.github+json" } };
+  const list = await fetch(RELEASES, gh);
+  if (!list.ok) return text(`echo "winfer: couldn't list releases (${list.status})" >&2; exit 1\n`, 502);
+  const tag = pickRelease(await list.json());
+  if (!tag) return text('echo "winfer: no release ships winferd yet" >&2; exit 1\n', 404);
+  const sh = await fetch(`https://github.com/RickyDane/winfer/releases/download/${tag}/install.sh`);
+  if (!sh.ok) return text(`echo "winfer: couldn't fetch the installer (${sh.status})" >&2; exit 1\n`, 502);
+  const res = new Response(pinVersion(await sh.text(), tag), {
+    headers: { "content-type": "text/plain; charset=utf-8", "cache-control": `public, max-age=${INSTALL_TTL}` },
+  });
+  await cache.put(key, res.clone());
+  return res;
+}
 
 const text = (body: string, status: number) =>
   new Response(body, { status, headers: { "content-type": "text/plain; charset=utf-8" } });
@@ -23,7 +62,7 @@ const text = (body: string, status: number) =>
 export default {
   async fetch(request, env): Promise<Response> {
     const url = new URL(request.url);
-    if (url.pathname === "/install.sh") return Response.redirect(INSTALL_SH, 302);
+    if (url.pathname === "/install.sh") return installScript();
     const match = url.pathname.match(/^\/r\/([^/]+)\/?$/);
     if (!match) return env.ASSETS.fetch(request);
 
