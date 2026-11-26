@@ -1472,6 +1472,24 @@ pub fn set_screencast_quality(attach_id: &str, quality: u8) {
     SCREENCAST_QUALITY.lock().unwrap().insert(attach_id.to_string(), quality.clamp(20, 95));
 }
 
+/// Restarts the running screencast `attach_id` at another JPEG quality (a server adapting to how
+/// fast the desktop takes frames). Frames Chrome had in flight are dropped with the old stream.
+#[allow(dead_code)] // used by winferd, not the Tauri app
+pub async fn set_live_quality(manager: &BrowserManager, workspace_id: &str, attach_id: &str, quality: u8) -> Res<()> {
+    let instance = manager.instances.lock().unwrap().get(workspace_id).cloned();
+    let Some(instance) = instance else { return Ok(()) };
+    let Some(cdp) = instance.live_cdp() else { return Ok(()) };
+    let session = {
+        let mut screencast = instance.screencast.lock().unwrap();
+        let Some(sc) = screencast.as_mut().filter(|sc| sc.attach_id == attach_id) else { return Ok(()) };
+        sc.acked = sc.frames;
+        sc.session_id.clone()
+    };
+    let _ = cdp.call("Page.stopScreencast", json!({}), Some(&session)).await;
+    cdp.call("Page.startScreencast", json!({ "format": "jpeg", "quality": quality.clamp(20, 95), "everyNthFrame": 1 }), Some(&session)).await?;
+    Ok(())
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Viewport {

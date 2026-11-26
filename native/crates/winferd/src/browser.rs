@@ -5,7 +5,7 @@
 //! Requests are `browser.call {op, workspaceId, ...}`, answered with an ack (`value` holding what
 //! the op returns). Frames go to the desktop that attached as `browser.frame {attachId, data}`
 //! (JPEG, base64), each acknowledged with `frameDone` before the next is sent, so the frame rate
-//! follows what the link carries. The backend's `browser://…` events go to every paired desktop
+//! follows what the link carries; so does the JPEG quality (`Adapt`). The backend's `browser://…` events go to every paired desktop
 //! as `browser.event {event, payload}`.
 
 use crate::host::{Host, send_to};
@@ -59,11 +59,77 @@ pub fn drop_client(client: &str) {
         let ids: Vec<String> = a.iter().filter(|(_, (c, _))| c == client).map(|(id, _)| id.clone()).collect();
         ids.into_iter().filter_map(|id| a.remove(&id).map(|(_, ws)| (id, ws))).collect()
     };
+    if let Some(a) = ADAPT.lock().as_mut() {
+        for (id, _) in &gone {
+            a.remove(id);
+        }
+    }
     for (id, ws) in gone {
         tauri::async_runtime::spawn(async move {
             let _ = browser::browser_detach(backend::app().state::<BrowserManager>(), ws, id).await;
         });
     }
+}
+
+/// Picture quality per screencast, following the link: frames that take long from here to the
+/// desktop's `frameDone` (a slow relay, a busy desktop) get lighter; quick ones heavier.
+struct Adapt {
+    quality: u8,
+    max: u8,
+    sent: std::collections::VecDeque<std::time::Instant>,
+    /// Smoothed send → frameDone time, ms.
+    ms: f64,
+    since_change: u32,
+}
+
+static ADAPT: Mutex<Option<HashMap<String, Adapt>>> = Mutex::new(None);
+
+/// Where a screencast starts: full quality on the LAN; on the relay by its round trip.
+fn start_quality(relay_rtt: Option<Option<u32>>) -> (u8, u8) {
+    match relay_rtt {
+        None => (80, 80),
+        Some(Some(rtt)) if rtt < 80 => (65, 75),
+        Some(Some(rtt)) if rtt < 200 => (55, 75),
+        Some(Some(_)) => (40, 75),
+        // Not measured yet: the middle, and the frame times take it from there.
+        Some(None) => (55, 75),
+    }
+}
+
+/// The next quality, if it should change: down after a few slow frames, up after many quick ones.
+fn next_quality(quality: u8, max: u8, ms: f64, since_change: u32) -> Option<u8> {
+    if since_change >= 8 && ms > 400.0 && quality > 30 {
+        Some(quality.saturating_sub(15).max(30))
+    } else if since_change >= 40 && ms < 120.0 && quality < max {
+        Some((quality + 10).min(max))
+    } else {
+        None
+    }
+}
+
+/// A frame of `attach` went out.
+fn frame_sent(attach: &str) {
+    if let Some(a) = ADAPT.lock().as_mut().and_then(|m| m.get_mut(attach)) {
+        a.sent.push_back(std::time::Instant::now());
+    }
+}
+
+/// The desktop drew a frame of `attach`: the quality to restart at, if it should change.
+fn frame_done(attach: &str) -> Option<u8> {
+    let mut adapt = ADAPT.lock();
+    let a = adapt.as_mut()?.get_mut(attach)?;
+    let at = a.sent.pop_front()?;
+    let ms = at.elapsed().as_secs_f64() * 1000.0;
+    a.ms = if a.since_change == 0 { ms } else { a.ms * 0.8 + ms * 0.2 };
+    a.since_change += 1;
+    let next = next_quality(a.quality, a.max, a.ms, a.since_change)?;
+    if std::env::var_os("WINFER_CONNECT_TRACE").is_some() {
+        eprintln!("[browser] {attach}: frames take {:.0} ms, quality {} → {next}", a.ms, a.quality);
+    }
+    a.quality = next;
+    a.sent.clear();
+    a.since_change = 0;
+    Some(next)
 }
 
 fn s(msg: &Value, key: &str) -> String {
@@ -141,15 +207,18 @@ async fn call(host: &'static Host, client: &str, msg: &Value) -> Result<Value, S
         "attach" => {
             let viewport = serde_json::from_value(msg["viewport"].clone()).map_err(|e| e.to_string())?;
             let attach = s(msg, "attachId");
-            // Over the relay (not the LAN), lighter frames.
-            let relay = winfer_core::connect::get().is_some_and(|c| c.status().peers.iter().any(|p| p.peer_id == client && p.link.via == Some("relay")));
-            if relay {
-                browser::set_screencast_quality(&attach, 55);
+            // Over the relay (not the LAN), lighter frames, then whatever the link carries.
+            let relay_rtt = winfer_core::connect::get().and_then(|c| c.status().peers.into_iter().find(|p| p.peer_id == client && p.link.via == Some("relay")).map(|p| p.link.rtt_ms));
+            let (quality, max) = start_quality(relay_rtt);
+            if quality != 80 {
+                browser::set_screencast_quality(&attach, quality);
             }
+            ADAPT.lock().get_or_insert_with(HashMap::new).insert(attach.clone(), Adapt { quality, max, sent: Default::default(), ms: 0.0, since_change: 0 });
             ATTACHED.lock().get_or_insert_with(HashMap::new).insert(attach.clone(), (client.to_string(), ws.clone()));
             let (to, id) = (client.to_string(), attach.clone());
             let channel = Channel::new(move |body| {
                 if let InvokeResponseBody::Raw(bytes) = body {
+                    frame_sent(&id);
                     let data = base64::engine::general_purpose::STANDARD.encode(bytes);
                     send_to(&to, json!({"t": "browser.frame", "attachId": id, "data": data}));
                 }
@@ -157,10 +226,19 @@ async fn call(host: &'static Host, client: &str, msg: &Value) -> Result<Value, S
             });
             done(browser::browser_attach(app.clone(), manager(), ws, tab, viewport, attach, channel).await.map_err(|e| e.to_string()))
         }
-        "frameDone" => done(browser::browser_frame_done(manager(), ws, s(msg, "attachId")).await.map_err(|e| e.to_string())),
+        "frameDone" => {
+            let attach = s(msg, "attachId");
+            if let Some(quality) = frame_done(&attach) {
+                let _ = browser::set_live_quality(&manager(), &ws, &attach, quality).await;
+            }
+            done(browser::browser_frame_done(manager(), ws, attach).await.map_err(|e| e.to_string()))
+        }
         "detach" => {
             let attach = s(msg, "attachId");
             if let Some(a) = ATTACHED.lock().as_mut() {
+                a.remove(&attach);
+            }
+            if let Some(a) = ADAPT.lock().as_mut() {
                 a.remove(&attach);
             }
             done(browser::browser_detach(manager(), ws, attach).await.map_err(|e| e.to_string()))
@@ -176,5 +254,30 @@ async fn call(host: &'static Host, client: &str, msg: &Value) -> Result<Value, S
         "pickHover" => browser::inspect::browser_pick_hover(app.clone(), manager(), ws, tab, f("x"), f("y")).await.map(|v| json!(v)).map_err(|e| e.to_string()),
         "pasteImage" => done(browser::browser_paste_image(app.clone(), manager(), ws, tab, s(msg, "data"), s(msg, "mime")).await.map_err(|e| e.to_string())),
         _ => Err(format!("A winfer server's browser can't {op} yet.")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quality_starts_by_link_and_follows_frame_times() {
+        assert_eq!(start_quality(None), (80, 80));
+        assert_eq!(start_quality(Some(Some(40))), (65, 75));
+        assert_eq!(start_quality(Some(Some(150))), (55, 75));
+        assert_eq!(start_quality(Some(Some(400))), (40, 75));
+        assert_eq!(start_quality(Some(None)), (55, 75));
+        // Slow frames: down by 15, not below 30, and only after a few.
+        assert_eq!(next_quality(55, 75, 600.0, 3), None);
+        assert_eq!(next_quality(55, 75, 600.0, 8), Some(40));
+        assert_eq!(next_quality(40, 75, 600.0, 8), Some(30));
+        assert_eq!(next_quality(30, 75, 900.0, 50), None);
+        // Quick frames: up by 10 after many, up to the link's cap.
+        assert_eq!(next_quality(55, 75, 80.0, 20), None);
+        assert_eq!(next_quality(55, 75, 80.0, 40), Some(65));
+        assert_eq!(next_quality(70, 75, 80.0, 40), Some(75));
+        assert_eq!(next_quality(75, 75, 80.0, 40), None);
+        assert_eq!(next_quality(55, 75, 250.0, 100), None);
     }
 }
