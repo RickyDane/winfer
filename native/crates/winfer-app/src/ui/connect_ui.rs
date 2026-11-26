@@ -1277,6 +1277,10 @@ impl Root {
             if let Some((peer, pane)) = first {
                 self.connect.dev_opened = true;
                 self.open_remote_pane(&peer, &pane, window, cx);
+                // …shown in the overview (`WINFER_NATIVE_CONNECT_OVERVIEW`)
+                if std::env::var_os("WINFER_NATIVE_CONNECT_OVERVIEW").is_some() {
+                    self.update_state(cx, |s| s.view = Some(crate::model::View::Overview));
+                }
                 // …and type into it (`WINFER_NATIVE_CONNECT_TYPE`, `\n` for Enter).
                 if let Ok(text) = std::env::var("WINFER_NATIVE_CONNECT_TYPE") {
                     cx.spawn(async move |_, cx| {
@@ -1448,10 +1452,9 @@ impl Root {
         let asking = pane.status == AgentStatus::NeedsInput && pane.request_kind.as_deref() == Some("approval");
         let (approve_peer, approve_pane) = (peer.to_string(), pane.id.clone());
         let tip = format!("{} · {}{}", pane.title, pane.workspace, detail.as_ref().map_or(String::new(), |d| format!("\n{d}")));
-        // Its tile is the one in front here.
+        // Its tile is the focused one, in its workspace or the overview (like a local pane's row).
         let s = self.state.read(cx);
-        let selected = s.view() == crate::model::View::Workspace
-            && s.all_panes().any(|t| t.remote.as_ref().is_some_and(|r| r.peer == peer && r.pane == pane.id) && t.workspace_id == s.active_workspace_id && s.focused_pane_id.as_deref() == Some(t.id.as_str()));
+        let selected = s.focused_pane_id.as_deref().and_then(|id| s.pane(id)).is_some_and(|t| t.remote.as_ref().is_some_and(|r| r.peer == peer && r.pane == pane.id));
         div().id(SharedString::from(format!("rrow-{peer}-{}", pane.id))).flex().items_center().gap(px(9.0)).rounded(px(7.0)).px_1p5().py(px(5.0))
             .text_size(px(12.5)).text_color(c.muted).when(!up, |d| d.opacity(0.6))
             .hover(move |d| d.bg(c.hover).text_color(c.fg))
