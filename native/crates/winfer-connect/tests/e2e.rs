@@ -220,6 +220,21 @@ fn a_stranger_cant_open_a_link_over_the_lan() {
 }
 
 #[test]
+fn turning_connect_off_closes_the_lan_port() {
+    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+    let relay = fake_relay(&rt);
+    let b = node("lan-off", Kind::Desktop, &relay);
+    b.connect.start();
+    let first = port(&b);
+    b.connect.set_enabled(false);
+    b.connect.set_enabled(true);
+    let second = port(&b);
+    assert_ne!(first, second);
+    wait("old port closed", || std::net::TcpStream::connect(("127.0.0.1", first)).is_err().then_some(()));
+    assert!(std::net::TcpStream::connect(("127.0.0.1", second)).is_ok());
+}
+
+#[test]
 fn wrong_or_expired_links_are_refused() {
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
     let relay = fake_relay(&rt);
