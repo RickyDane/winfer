@@ -311,12 +311,12 @@ pub struct AppState {
 }
 
 /// `ui` fields the typed state above owns; everything else round-trips through `rest`.
-const OWNED_UI: [&str; 25] = [
+const OWNED_UI: [&str; 26] = [
     "viewer",
     "activeWorkspaceId", "sidebarOpen", "expandedWorkspaces", "browserOpen", "agentModels", "autoApprove",
     "systemPrompt", "enabledTools", "defaultProvider", "editor", "shortcuts", "browserWidth", "sidebarWidth", "sidePanel",
     "theme", "view", "terminalFontSize", "overviewLayout", "showPaneCost", "pageTabIconsOnly",
-    "recentSessions", "paneTasks", "sessionTitles", "activeView",
+    "recentSessions", "paneTasks", "sessionTitles", "activeView", "remoteTiles",
 ];
 
 #[derive(Clone, Debug)]
@@ -486,6 +486,14 @@ impl AppState {
             .unwrap_or_default();
         self.pane_tasks = ui.get("paneTasks").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
         self.session_titles = map_of("sessionTitles");
+        // Tiles of another machine's panes: the panes table has no column for that, and without
+        // it a tile would come back as an agent of this machine's own.
+        let remote: HashMap<String, RemoteRef> = ui.get("remoteTiles").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
+        for p in workspaces.iter_mut().flat_map(|w| w.panes.iter_mut()) {
+            if let Some(r) = remote.get(&p.id) {
+                p.remote = Some(r.clone());
+            }
+        }
         self.rest = ui.into_iter().filter(|(k, _)| !OWNED_UI.contains(&k.as_str())).collect();
         self.workspaces = workspaces;
         self.sync_overview();
@@ -517,6 +525,7 @@ impl AppState {
             "showPaneCost": self.show_pane_cost,
             "pageTabIconsOnly": self.page_tab_icons_only, "recentSessions": recent, "paneTasks": tasks,
             "sessionTitles": self.session_titles,
+            "remoteTiles": self.all_panes().filter_map(|p| Some((p.id.clone(), p.remote.clone()?))).collect::<HashMap<_, _>>(),
         });
         ui.extend(owned.as_object().unwrap().clone());
         serde_json::json!({ "workspaces": self.workspaces, "ui": ui })
@@ -918,6 +927,22 @@ mod tests {
         assert_eq!(out["workspaces"][0]["rootDir"], "/r");
         assert_eq!(out["workspaces"][0]["panes"][0]["sessionId"], "abc");
         assert!(out["workspaces"][0]["panes"][0].get("status").is_none());
+    }
+
+    #[test]
+    fn remote_tiles_survive_the_store() {
+        let mut s = AppState::new();
+        s.hydrate(serde_json::json!({ "workspaces": [], "ui": null }));
+        let id = s.add_pane("claude", AddPane { cwd: Some(String::new()), ..Default::default() });
+        s.pane_mut(&id).unwrap().remote = Some(RemoteRef { peer: "srv".into(), pane: "p-1".into(), machine: "box".into() });
+        let mut out = s.snapshot();
+        // The store's panes table keeps no `remote`.
+        for p in out["workspaces"][0]["panes"].as_array_mut().unwrap() {
+            p.as_object_mut().unwrap().remove("remote");
+        }
+        let mut back = AppState::new();
+        back.hydrate(out);
+        assert_eq!(back.pane(&id).unwrap().remote.as_ref().map(|r| r.pane.as_str()), Some("p-1"));
     }
 
     #[test]
