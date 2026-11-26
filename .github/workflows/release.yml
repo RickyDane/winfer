@@ -15,11 +15,20 @@ on:
       tag:
         type: string
         required: true
+      winferd_only:
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
       tag:
         description: Existing tag to (re)build, e.g. v0.1.102 or v0.1.102-57
         required: true
+      # A test of the server builds: winferd's tarballs and its image under the version only; no
+      # desktop bundles, no update feed, no :latest/:nebula image (installed apps don't see it).
+      winferd_only:
+        description: Only winferd (no desktop bundles, update feeds or channel image tags)
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -143,7 +152,11 @@ jobs:
         run: |
           image=ghcr.io/$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')/winferd
           channel=$([[ $TAG == *-* ]] && echo nebula || echo latest)
-          echo "tags=$image:${TAG#v},$image:$channel" >> "$GITHUB_OUTPUT"
+          if [ "${{ inputs.winferd_only }}" = "true" ]; then
+            echo "tags=$image:${TAG#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tags=$image:${TAG#v},$image:$channel" >> "$GITHUB_OUTPUT"
+          fi
       - uses: docker/build-push-action@v6
         with:
           context: .
@@ -158,6 +171,7 @@ jobs:
   # The native GPUI build (native/) of this version, into the release.
   native-bundle:
     needs: release
+    if: ${{ !inputs.winferd_only }}
     strategy:
       fail-fast: false
       matrix:
@@ -320,6 +334,7 @@ jobs:
   # nebula-channel release's, which Nebula apps read.
   native-updater-json:
     needs: [release, native-bundle]
+    if: ${{ !inputs.winferd_only }}
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
