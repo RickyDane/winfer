@@ -129,6 +129,8 @@ pub(super) struct ConnectClient {
     pub mirrors: HashMap<String, Mirror>,
     /// Collapsed machines in the sidebar (expanded by default).
     pub collapsed: HashSet<String>,
+    /// Workspace removals asked of another machine: request id → what to say once it's done.
+    pub removing: HashMap<String, String>,
     seq: u64,
     /// Requests waiting for an answer: id → what to say if it fails.
     pending: HashMap<String, String>,
@@ -581,6 +583,11 @@ impl Root {
                 {
                     winfer_core::accounts_sync::pushed(&peer, &local, msg["accountId"].as_str().unwrap_or_default(), &fp);
                     self.toast(format!("Signed in on {name} as “{}”. The two stay in step when either refreshes.", msg["label"].as_str().unwrap_or("the account")), cx);
+                }
+                if let Some(done) = self.connect.removing.remove(id)
+                    && msg["ok"] == true
+                {
+                    self.toast(done, cx);
                 }
                 if let Some(failure) = self.connect.pending.remove(id)
                     && msg["ok"] != true
@@ -1438,7 +1445,7 @@ impl Root {
                 if let Some((peer, ws)) = found {
                     self.connect.dev_menu = true;
                     if remove {
-                        self.connect_request(&peer, json!({"t": "workspace.remove", "workspaceId": ws}), Some("Dev remove".into()));
+                        self.do_remove_remote_workspace(&peer, &ws, cx);
                     } else {
                         let items = self.remote_workspace_menu(&peer, &ws);
                         self.open_menu(point(px(150.0), px(380.0)), Some(want.into()), items, cx);
@@ -1589,16 +1596,32 @@ impl Root {
                 let many_workspaces = mirror.workspaces.len() > 1;
                 for (ws_id, ws_name) in &mirror.workspaces {
                     let panes: Vec<&&RemotePane> = live.iter().filter(|p| &p.workspace_id == ws_id).collect();
+                    // Each workspace folds on its own (click its name).
+                    let fold_key = format!("{}/{ws_id}", peer.peer_id);
+                    let folded = many_workspaces && self.connect.collapsed.contains(&fold_key);
                     if many_workspaces {
                         let (menu_peer, menu_ws, title) = (peer.peer_id.clone(), ws_id.clone(), ws_name.clone());
-                        rows = rows.child(div().id(SharedString::from(format!("peer-ws-{}-{ws_id}", peer.peer_id))).px_2().pt_1().rounded_md().text_size(px(10.5)).font_weight(FontWeight::SEMIBOLD).text_color(c.subtle)
-                            .when(up, |d| d.hover(move |d| d.text_color(c.fg))
-                                .tooltip(|window, cx| Tooltip::new("Right-click for a new session, its browser or removing it").build(window, cx))
-                                .on_mouse_down(MouseButton::Right, cx.listener(move |this, e: &MouseDownEvent, _, cx| {
-                                    let items = this.remote_workspace_menu(&menu_peer, &menu_ws);
-                                    this.open_menu(e.position, Some(title.clone().into()), items, cx);
-                                })))
-                            .child(ws_name.clone()));
+                        let tip = if up { "Click to show or hide its sessions, right-click for a new session, its browser or removing it" } else { "Click to show or hide its sessions" };
+                        rows = rows.child(div().id(SharedString::from(format!("peer-ws-{}-{ws_id}", peer.peer_id))).flex().items_center().gap_1().px_2().pt_1().pb_0p5().rounded_md().cursor_pointer()
+                            .text_size(px(10.5)).font_weight(FontWeight::SEMIBOLD).text_color(c.subtle)
+                            .hover(move |d| d.text_color(c.fg))
+                            .tooltip(move |window, cx| Tooltip::new(tip).build(window, cx))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if !this.connect.collapsed.remove(&fold_key) {
+                                    this.connect.collapsed.insert(fold_key.clone());
+                                }
+                                cx.notify();
+                            }))
+                            .when(up, |d| d.on_mouse_down(MouseButton::Right, cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                                let items = this.remote_workspace_menu(&menu_peer, &menu_ws);
+                                this.open_menu(e.position, Some(title.clone().into()), items, cx);
+                            })))
+                            .child(Icon::new(if folded { IconName::ChevronRight } else { IconName::ChevronDown }).size(px(10.0)))
+                            .child(div().flex_1().min_w_0().truncate().child(ws_name.clone()))
+                            .when(folded && !panes.is_empty(), |d| d.child(div().font_weight(FontWeight::NORMAL).child(panes.len().to_string()))));
+                    }
+                    if folded {
+                        continue;
                     }
                     // A workspace with no sessions yet (just opened or cloned): start one there.
                     if panes.is_empty() && many_workspaces && up {
@@ -1731,15 +1754,37 @@ impl Root {
         };
         let detail = format!("Remove workspace “{name}” from {machine}?{panes} Files and worktrees stay on disk.");
         let (peer, ws) = (peer.to_string(), ws.to_string());
-        self.confirm("Remove workspace", detail, "Remove", window, cx, move |this, cx| {
-            this.connect_request(&peer, json!({"t": "workspace.remove", "workspaceId": ws}), Some(format!("Couldn't remove “{name}” from {machine}")));
+        self.confirm("Remove workspace", detail, "Remove", window, cx, move |this, cx| this.do_remove_remote_workspace(&peer, &ws, cx));
+    }
+
+    fn do_remove_remote_workspace(&mut self, peer: &str, ws: &str, cx: &mut Context<Self>) {
+        let Some(mirror) = self.connect.mirrors.get(peer) else { return };
+        let name = mirror.workspaces.iter().find(|w| w.0 == ws).map_or_else(String::new, |w| w.1.clone());
+        let machine = crate::connect::peer_name(peer).unwrap_or_else(|| "that machine".into());
+        let (peer, ws) = (peer.to_string(), ws.to_string());
+        {
+            let this = self;
+            let id = this.connect_request(&peer, json!({"t": "workspace.remove", "workspaceId": ws}), Some(format!("Couldn't remove “{name}” from {machine}")));
+            this.connect.removing.insert(id.clone(), format!("Removed “{name}” from {machine}"));
+            // An older winfer there doesn't know the request and never answers.
+            let (failed, id) = (format!("{machine} didn't answer: it may need a winfer update to remove workspaces."), id);
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(Duration::from_secs(15)).await;
+                let _ = this.update(cx, |this, cx| {
+                    if this.connect.removing.remove(&id).is_some() {
+                        this.connect.pending.remove(&id);
+                        this.toast(failed, cx);
+                    }
+                });
+            })
+            .detach();
             // Its tiles here go with it.
             let local = this.state.read(cx).workspaces.iter().find(|w| w.remote.as_ref().is_some_and(|r| r.peer == peer && r.workspace == ws)).map(|w| w.id.clone());
             if let Some(local) = local {
                 this.close_all_of(&local, cx);
                 this.update_state(cx, |s| s.remove_workspace(&local));
             }
-        });
+        }
     }
 
     fn remote_pane_menu(&self, peer: &str, pane: &str, status: AgentStatus) -> Vec<MenuItem> {
