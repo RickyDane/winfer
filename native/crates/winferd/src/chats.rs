@@ -87,7 +87,7 @@ pub fn tap(pane: &str, bytes: &[u8]) {
 
 /// A message sent to the chat as a command (the chat doesn't echo those).
 pub fn note_user(pane: &str, text: &str) {
-    CHATS.lock().entry(pane.to_string()).or_default().state.apply(winfer_core::code::protocol::Ev::User { text: text.to_string() });
+    CHATS.lock().entry(pane.to_string()).or_default().state.apply(winfer_core::code::protocol::Ev::User { text: text.to_string(), images: Vec::new() });
     push_soon(pane);
 }
 

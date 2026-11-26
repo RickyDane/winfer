@@ -43,6 +43,11 @@ pub fn unb64(text: &str) -> Vec<u8> {
 
 /// A local pane's output (called for every chunk the process writes).
 pub fn tap(pane: &str, bytes: &[u8], chat: bool) {
+    tap_except(pane, bytes, chat, None);
+}
+
+/// `tap`, but not live to `except` (a peer that already shows these bytes).
+pub fn tap_except(pane: &str, bytes: &[u8], chat: bool, except: Option<&str>) {
     if is_remote(pane) {
         return;
     }
@@ -64,9 +69,34 @@ pub fn tap(pane: &str, bytes: &[u8], chat: bool) {
         return;
     }
     let msg = json!({"t": "term.out", "paneId": pane, "data": b64(bytes)});
-    for peer in &t.watchers {
+    for peer in t.watchers.iter().filter(|p| Some(p.as_str()) != except) {
         crate::connect::send(peer, msg.clone());
     }
+}
+
+/// The messages in chat commands (`send`/`steer` JSON lines) as the chat's `user` lines. A chat
+/// process doesn't echo what it's sent, so the host feeds these to everyone showing the chat but
+/// the one that sent them (it shows them already).
+pub fn user_echo(data: &str) -> String {
+    let mut out = String::new();
+    for line in data.lines().map(str::trim).filter(|l| l.starts_with('{')) {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+        if !matches!(v["type"].as_str(), Some("send" | "steer")) {
+            continue;
+        }
+        let text = v["text"].as_str().unwrap_or_default().trim();
+        let files = v["files"].as_array().into_iter().flatten().filter_map(|f| f["name"].as_str());
+        let shown = crate::code::state::shown_text(text, v["skill"].as_str(), files);
+        let images: Vec<String> = v["images"].as_array().into_iter().flatten()
+            .filter_map(|i| Some(format!("data:{};base64,{}", i["mime"].as_str()?, i["data"].as_str()?)))
+            .collect();
+        if shown.is_empty() && images.is_empty() {
+            continue;
+        }
+        out.push_str(&json!({"type": "user", "text": shown, "images": images}).to_string());
+        out.push('\n');
+    }
+    out
 }
 
 /// A peer attaches: `term.snapshot` with what it missed, then the live output. Sent under the
@@ -207,6 +237,22 @@ mod tests {
         let snap = ring(chat);
         assert!(snap.len() <= CHAT_RING);
         assert!(snap.starts_with(b"{\"t\""));
+    }
+
+    #[test]
+    fn chat_commands_echo_as_user_lines() {
+        let data = concat!(
+            r#"{"type":"send","text":"fix it","skill":"review","files":[{"name":"a.txt","data":"eA=="}],"images":[{"mime":"image/png","data":"aQ=="}]}"#, "\n",
+            r#"{"type":"interrupt"}"#, "\n",
+            r#"{"type":"steer","text":"also tests"}"#, "\n",
+        );
+        let echo = user_echo(data);
+        let lines: Vec<serde_json::Value> = echo.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0], json!({"type": "user", "text": "/review fix it\n[File: a.txt]", "images": ["data:image/png;base64,aQ=="]}));
+        assert_eq!(lines[1]["text"], "also tests");
+        assert!(matches!(crate::code::protocol::parse_line(echo.lines().next().unwrap()), Some(crate::code::protocol::Ev::User { images, .. }) if images.len() == 1));
+        assert_eq!(user_echo("ls\r"), "");
     }
 
     #[test]

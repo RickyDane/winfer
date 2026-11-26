@@ -273,7 +273,8 @@ pub enum Ev {
     Models { models: Vec<ModelInfo> },
     Files { files: Vec<String> },
     Restore { transcript: Vec<Restored> },
-    User { text: String },
+    /// A message the user sent; `images` are data URLs.
+    User { text: String, #[serde(default)] images: Vec<String> },
     Cleared,
     Answered { id: String },
     Handoff {

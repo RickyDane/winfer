@@ -114,7 +114,10 @@ machine (sent at most every 20 s while active), so it holds back its notificatio
 | `term.exit` | host | `paneId`, `code`, `gone?` |
 
 A winfer code chat pane is a `winfer code --serve` process: its output is JSON lines, so the client runs the same
-chat model on the replayed and live bytes and writes its commands as `term.in`.
+chat model on the replayed and live bytes and writes its commands as `term.in`. The process doesn't echo the
+messages it's sent, so the host adds a `{"type":"user","text","images"}` line for each `send`/`steer`: from a
+client's `term.in` to its own view, the replay and the other clients (not the sender), and from its own composer
+to the replay and the clients.
 
 ### Agent tools
 

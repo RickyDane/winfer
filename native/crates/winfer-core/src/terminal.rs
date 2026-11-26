@@ -363,10 +363,15 @@ impl Session {
         self.code.lock().is_some()
     }
 
-    /// Writes protocol bytes to the process, bypassing the chat's input hook.
+    /// Writes protocol bytes to the process, bypassing the chat's input hook. Messages sent go to
+    /// the machines showing this chat (the process doesn't echo them).
     pub fn write_process(&self, data: &str) -> bool {
         if self.ready.load(Ordering::Acquire) && !self.exited.load(Ordering::Relaxed) {
             let _ = self.input.send(data.to_string());
+            let echo = crate::connect_term::user_echo(data);
+            if !echo.is_empty() {
+                crate::connect_term::tap(&self.pane_id, echo.as_bytes(), true);
+            }
             true
         } else {
             false
@@ -374,9 +379,16 @@ impl Session {
     }
 
     /// Writes to the process through its one writer thread, so keys from another machine stay in
-    /// order with each other and with what's typed here (no chat input hook).
-    pub fn write_remote(&self, data: &str) {
+    /// order with each other and with what's typed here (no chat input hook). A chat's messages
+    /// from `peer` show here and on the other machines showing it.
+    pub fn write_remote(&self, data: &str, peer: &str) {
         let _ = self.input.send(data.to_string());
+        let Some(code) = self.code.lock().clone() else { return };
+        let echo = crate::connect_term::user_echo(data);
+        if !echo.is_empty() {
+            crate::connect_term::tap_except(&self.pane_id, echo.as_bytes(), true, Some(peer));
+            (code.tap)(echo.as_bytes());
+        }
     }
 
     /// Replaces what the screen shows (the chat's transcript as text, for read_pane and summaries).

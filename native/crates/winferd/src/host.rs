@@ -750,7 +750,7 @@ impl Host {
             "term.in" => {
                 let data = String::from_utf8_lossy(&connect_term::unb64(msg["data"].as_str().unwrap_or_default())).to_string();
                 if !data.is_empty() && let Some(session) = SESSIONS.get(&pane_id) {
-                    session.write_remote(&data);
+                    session.write_remote(&data, peer);
                 }
             }
             "term.resize" => {

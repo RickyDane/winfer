@@ -220,6 +220,18 @@ fn find_last(items: &[Item], f: impl Fn(&Item) -> bool) -> Option<usize> {
     items.iter().rposition(f)
 }
 
+/// How a sent message shows in the transcript: the skill as `/name`, then attached files' names.
+pub fn shown_text<'a>(text: &str, skill: Option<&str>, files: impl Iterator<Item = &'a str>) -> String {
+    let mut shown = match skill {
+        Some(s) => format!("/{s}{}", if text.is_empty() { String::new() } else { format!(" {text}") }),
+        None => text.to_string(),
+    };
+    for name in files {
+        shown.push_str(&format!("\n[File: {name}]"));
+    }
+    shown
+}
+
 impl CodeState {
     pub fn notice(&mut self, text: impl Into<String>) {
         self.items.push(Item::Notice { key: key(), text: text.into(), error: false });
@@ -334,13 +346,7 @@ impl CodeState {
         let is_image = |a: &&Attachment| a.path.is_none() && a.mime.starts_with("image/");
         let images: Vec<ImageData> = attachments.iter().filter(is_image).map(|a| ImageData { mime: a.mime.clone(), data: a.data.clone() }).collect();
         let files: Vec<FileData> = attachments.iter().filter(|a| !is_image(a)).map(|a| FileData { name: a.name.clone(), data: a.path.is_none().then(|| a.data.clone()), path: a.path.clone() }).collect();
-        let mut shown = match skill {
-            Some(s) => format!("/{s}{}", if t.is_empty() { String::new() } else { format!(" {t}") }),
-            None => t.to_string(),
-        };
-        for f in &files {
-            shown.push_str(&format!("\n[File: {}]", f.name));
-        }
+        let shown = shown_text(t, skill, files.iter().map(|f| f.name.as_str()));
         let urls: Vec<String> = images.iter().map(|i| format!("data:{};base64,{}", i.mime, i.data)).collect();
         self.items.push(Item::User { key: key(), text: shown, at: now_ms(), images: urls });
         let steer = self.busy;
@@ -599,7 +605,7 @@ impl CodeState {
             }
             Ev::Models { models } => self.models = models,
             Ev::Files { files } => self.files = Some(files),
-            Ev::User { text } => self.items.push(Item::User { key: key(), text, at: now_ms(), images: Vec::new() }),
+            Ev::User { text, images } => self.items.push(Item::User { key: key(), text, at: now_ms(), images }),
             Ev::Answered { id } => self.approvals.retain(|a| a.id != id),
             Ev::Cleared => {
                 self.items.clear();
