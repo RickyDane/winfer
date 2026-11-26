@@ -57,18 +57,39 @@ pub(crate) mod values {
     fn read(path: &std::path::Path) -> std::collections::HashMap<String, String> {
         std::fs::read_to_string(path).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
     }
+    /// Replaces the file whole (a reader never sees it half-written), readable by this user only
+    /// (pairing keys and tokens).
     fn write(path: &std::path::Path, map: &std::collections::HashMap<String, String>) -> Result<(), String> {
+        use std::io::Write;
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        std::fs::write(path, serde_json::to_string(map).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
-        // Pairing keys and tokens: readable by this user only.
+        let tmp = path.with_extension(format!("{}-{:?}.tmp", std::process::id(), std::thread::current().id()).replace(['(', ')'], ""));
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
         }
-        Ok(())
+        let mut file = options.open(&tmp).map_err(|e| e.to_string())?;
+        file.write_all(serde_json::to_string(map).map_err(|e| e.to_string())?.as_bytes()).map_err(|e| e.to_string())?;
+        drop(file);
+        std::fs::rename(&tmp, path).map_err(|e| e.to_string())
+    }
+    /// Changes the file under `<file>.lock`, which Connect's store takes too: two read-modify-
+    /// writes at once dropped each other's values.
+    fn change(path: &std::path::Path, f: impl FnOnce(&mut std::collections::HashMap<String, String>)) -> Result<(), String> {
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let lock = std::fs::OpenOptions::new().create(true).write(true).truncate(false).open(path.with_extension("lock"));
+        if let Ok(lock) = &lock {
+            let _ = lock.lock();
+        }
+        let mut map = read(path);
+        f(&mut map);
+        write(path, &map)
     }
     fn entry(service: &str, key: &str) -> Result<keyring::Entry, String> {
         keyring::Entry::new(service, key).map_err(|e| e.to_string())
@@ -81,17 +102,17 @@ pub(crate) mod values {
     }
     pub fn set(service: &str, key: &str, value: &str) -> Result<(), String> {
         if let Some(path) = file() {
-            let mut map = read(&path);
-            map.insert(format!("{service}/{key}"), value.to_string());
-            return write(&path, &map);
+            return change(&path, |map| {
+                map.insert(format!("{service}/{key}"), value.to_string());
+            });
         }
         entry(service, key)?.set_password(value).map_err(|e| e.to_string())
     }
     pub fn delete(service: &str, key: &str) -> Result<(), String> {
         if let Some(path) = file() {
-            let mut map = read(&path);
-            map.remove(&format!("{service}/{key}"));
-            return write(&path, &map);
+            return change(&path, |map| {
+                map.remove(&format!("{service}/{key}"));
+            });
         }
         match entry(service, key)?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),

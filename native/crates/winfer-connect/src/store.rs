@@ -37,7 +37,7 @@ impl SecretStore {
             let _ = std::fs::create_dir_all(dir);
         }
         let json = serde_json::to_string(map).map_err(|e| e.to_string())?;
-        let tmp = path.with_extension("tmp");
+        let tmp = path.with_extension(format!("{}-{:?}.tmp", std::process::id(), std::thread::current().id()).replace(['(', ')'], ""));
         {
             use std::io::Write;
             let mut options = std::fs::OpenOptions::new();
@@ -53,6 +53,21 @@ impl SecretStore {
         std::fs::rename(&tmp, path).map_err(|e| e.to_string())
     }
 
+    /// Changes the file under `<file>.lock`, which winfer's vault takes too (both keep values in
+    /// it with `WINFER_VAULT_FILE`): two read-modify-writes at once dropped each other's values.
+    fn change(path: &Path, f: impl FnOnce(&mut HashMap<String, String>)) -> Result<(), String> {
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let lock = std::fs::OpenOptions::new().create(true).write(true).truncate(false).open(path.with_extension("lock"));
+        if let Ok(lock) = &lock {
+            let _ = lock.lock();
+        }
+        let mut map = Self::read(path);
+        f(&mut map);
+        Self::write(path, &map)
+    }
+
     pub fn get(&self, key: &str) -> Option<String> {
         match self {
             SecretStore::Keychain { service } => keyring::Entry::new(service, key).ok()?.get_password().ok(),
@@ -64,11 +79,9 @@ impl SecretStore {
     pub fn set(&self, key: &str, value: &str) -> Result<(), String> {
         match self {
             SecretStore::Keychain { service } => keyring::Entry::new(service, key).and_then(|e| e.set_password(value)).map_err(|e| e.to_string()),
-            SecretStore::File { path, service } => {
-                let mut map = Self::read(path);
+            SecretStore::File { path, service } => Self::change(path, |map| {
                 map.insert(format!("{service}/{key}"), value.into());
-                Self::write(path, &map)
-            }
+            }),
             SecretStore::Memory(map) => {
                 map.lock().unwrap().insert(key.into(), value.into());
                 Ok(())
@@ -82,11 +95,9 @@ impl SecretStore {
                 Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
                 Err(e) => Err(e.to_string()),
             },
-            SecretStore::File { path, service } => {
-                let mut map = Self::read(path);
+            SecretStore::File { path, service } => Self::change(path, |map| {
                 map.remove(&format!("{service}/{key}"));
-                Self::write(path, &map)
-            }
+            }),
             SecretStore::Memory(map) => {
                 map.lock().unwrap().remove(key);
                 Ok(())
@@ -113,6 +124,30 @@ mod tests {
         }
         store.delete("peers").unwrap();
         assert_eq!(store.get("peers"), None);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn writers_sharing_a_file_keep_each_others_values() {
+        // On a server, Connect and the rest of winfer keep their values in one vault file.
+        let dir = std::env::temp_dir().join(format!("wc-store-race-{}", std::process::id()));
+        let path = dir.join("vault.json");
+        let threads: Vec<_> = (0..4)
+            .map(|t| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    let store = SecretStore::file(&path, &format!("svc{t}"));
+                    for i in 0..25 {
+                        store.set(&format!("k{i}"), "v").unwrap();
+                    }
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().unwrap();
+        }
+        let map = SecretStore::read(&path);
+        assert_eq!(map.len(), 100, "values were lost");
         let _ = std::fs::remove_dir_all(dir);
     }
 }
