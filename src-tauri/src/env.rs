@@ -270,7 +270,41 @@ fn resolve() -> Option<HashMap<String, String>> {
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
 
+    let mut vars = vars;
+    if NON_INTERACTIVE.load(std::sync::atomic::Ordering::Relaxed)
+        && let (Some(path), Some(home)) = (vars.get("PATH").cloned(), dirs::home_dir())
+    {
+        vars.insert("PATH".into(), with_user_bins(&path, &home));
+    }
     vars.contains_key("PATH").then_some(vars)
+}
+
+/// Without the rc file, version managers set up there (nvm, fnm, volta, bun …) leave their CLIs
+/// off PATH (Ubuntu's `.bashrc` stops early in a non-interactive shell). Appends the usual user bin
+/// folders that exist and aren't on it yet; nvm's newest Node.
+#[cfg(unix)]
+fn with_user_bins(path: &str, home: &std::path::Path) -> String {
+    let mut dirs: Vec<PathBuf> = [".local/bin", ".volta/bin", ".bun/bin", ".npm-global/bin", ".cargo/bin", ".deno/bin", ".local/share/fnm/aliases/default/bin"]
+        .iter()
+        .map(|d| home.join(d))
+        .collect();
+    let version = |name: &str| name.trim_start_matches('v').split('.').map(|p| p.parse::<u32>().unwrap_or(0)).collect::<Vec<_>>();
+    if let Ok(entries) = std::fs::read_dir(home.join(".nvm/versions/node")) {
+        let mut nodes: Vec<String> = entries.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        nodes.sort_by_key(|n| version(n));
+        if let Some(newest) = nodes.last() {
+            dirs.push(home.join(".nvm/versions/node").join(newest).join("bin"));
+        }
+    }
+    let mut out = path.to_string();
+    for dir in dirs {
+        let s = dir.to_string_lossy();
+        if dir.is_dir() && !path.split(':').any(|p| p == s) {
+            out.push(':');
+            out.push_str(&s);
+        }
+    }
+    out
 }
 
 /// Windows apps inherit PATH from whoever started them, which isn't always the user: after an
@@ -362,6 +396,24 @@ fn merge_paths(primary: &str, extra: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{node_shim_script, shell_name};
+
+    #[cfg(unix)]
+    #[test]
+    fn server_path_gets_user_bins_and_newest_nvm_node() {
+        let home = std::env::temp_dir().join(format!("winfer-env-{}", std::process::id()));
+        for d in [".local/bin", ".volta/bin", ".nvm/versions/node/v9.11.2/bin", ".nvm/versions/node/v22.3.0/bin", ".nvm/versions/node/v20.10.0/bin"] {
+            std::fs::create_dir_all(home.join(d)).unwrap();
+        }
+        let local = home.join(".local/bin").to_string_lossy().into_owned();
+        let path = super::with_user_bins(&format!("/usr/bin:{local}"), &home);
+        let _ = std::fs::remove_dir_all(&home);
+        let parts: Vec<&str> = path.split(':').collect();
+        assert_eq!(parts[..2], ["/usr/bin", local.as_str()]);
+        assert_eq!(parts.iter().filter(|p| **p == local).count(), 1);
+        assert!(parts[2].ends_with(".volta/bin"));
+        assert!(parts[3].ends_with("v22.3.0/bin"), "{path}");
+        assert_eq!(parts.len(), 4);
+    }
 
     #[test]
     fn shell_names() {
