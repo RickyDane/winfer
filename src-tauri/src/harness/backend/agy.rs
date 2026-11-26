@@ -397,6 +397,10 @@ fn display_name(name: &str, input: &Value) -> String {
         "search_web" => "WebSearch",
         "read_url_content" => "WebFetch",
         "invoke_subagent" | "browser_subagent" => "Agent",
+        "swarm" => "Swarm",
+        "post_message" => "Swarm post",
+        "read_board" => "Swarm board",
+        "swarm_wait" => "Swarm wait",
         other => other,
     }
     .to_string()
@@ -429,16 +433,92 @@ fn title(name: &str, input: &Value) -> String {
         "find_by_name" => first(&["Pattern", "SearchDirectory"]),
         "search_web" => first(&["query", "Query"]),
         "read_url_content" => first(&["Url", "URL", "url"]),
+        "swarm" => {
+            let action = input["action"].as_str().unwrap_or("");
+            let name = input["name"].as_str().unwrap_or("");
+            let summary = match action {
+                "add" => {
+                    if let Some(tasks) = input["tasks"].as_array().filter(|t| !t.is_empty()) {
+                        format!("add {name} ({} tasks)", tasks.len())
+                    } else if let Some(n) = input["n"].as_u64().filter(|n| *n > 1) {
+                        format!("add {name} ×{n}")
+                    } else if !name.is_empty() {
+                        format!("add {name}")
+                    } else {
+                        "add worker".into()
+                    }
+                }
+                "title" => input["title"].as_str().filter(|t| !t.is_empty()).map(|t| format!("title: {t}")).unwrap_or_else(|| "title".into()),
+                "kill" if !name.is_empty() => format!("kill {name}"),
+                "model" => {
+                    let target = if name.is_empty() { "coordinator" } else { name };
+                    match input["model"].as_str().filter(|m| !m.is_empty()) {
+                        Some(m) => format!("model {target} → {m}"),
+                        None => format!("model {target}"),
+                    }
+                }
+                "channel" => {
+                    let op = input["op"].as_str().unwrap_or("");
+                    let ch = input["channel"].as_str().unwrap_or("");
+                    format!("channel {op} {ch}").trim().to_string()
+                }
+                other if !other.is_empty() => other.to_string(),
+                _ => String::new(),
+            };
+            (!summary.is_empty()).then_some(summary)
+        }
+        "post_message" => {
+            let text = input["text"].as_str().unwrap_or("");
+            let ch = input["channel"].as_str().filter(|c| !c.is_empty() && *c != "main");
+            let line = text.lines().next().unwrap_or("").trim();
+            match (ch, line.is_empty()) {
+                (Some(c), false) => Some(format!("#{c} {line}")),
+                (Some(c), true) => Some(format!("#{c}")),
+                (None, false) => Some(line.to_string()),
+                (None, true) => None,
+            }
+        }
+        "read_board" => {
+            let ch = input["channel"].as_str().filter(|c| !c.is_empty());
+            let since = input["since"].as_u64();
+            match (ch, since) {
+                (Some(c), Some(n)) => Some(format!("#{c} since #{n}")),
+                (Some(c), None) => Some(format!("#{c}")),
+                (None, Some(n)) => Some(format!("since #{n}")),
+                (None, None) => Some("read board".into()),
+            }
+        }
+        "swarm_wait" => match input["since"].as_u64() {
+            Some(n) => Some(format!("waiting after #{n}")),
+            None => Some("waiting for board".into()),
+        },
         _ => path_of(input).map(crate::harness::tools::short_path),
     };
     // Anything else: its first string parameter.
     t.map(|t| t.lines().next().unwrap_or("").to_string()).unwrap_or_else(|| super::claude::title(name, input))
 }
 
-fn user_message(msg: &UserMsg, system: Option<&str>) -> Value {
-    let mut text = match &msg.skill {
+/// Whether `text` already begins with an explicit `/swarm` slash command.
+fn strip_leading_swarm(text: &str) -> Option<&str> {
+    let rest = text.trim_start().strip_prefix("/swarm")?;
+    if rest.is_empty() {
+        Some("")
+    } else if rest.starts_with(char::is_whitespace) {
+        Some(rest.trim_start())
+    } else {
+        None
+    }
+}
+
+/// One-shot note sent when Ultracode is turned off after `/swarm` was invoked in this conversation.
+const SWARM_EXIT_NOTE: &str = "Ultracode is now off. Handle subsequent requests directly without starting a new swarm unless the user explicitly asks for one.";
+
+fn user_message(msg: &UserMsg, system: Option<&str>, invoke_swarm: bool) -> Value {
+    let explicit_swarm = msg.skill.as_deref() == Some("swarm") || (msg.skill.is_none() && strip_leading_swarm(&msg.text).is_some());
+    let mut text = match msg.skill.as_deref() {
+        Some("swarm") => msg.text.clone(),
         Some(skill) => format!("/{skill} {}", msg.text).trim_end().to_string(),
-        None => msg.text.clone(),
+        None => strip_leading_swarm(&msg.text).map(str::to_string).unwrap_or_else(|| msg.text.clone()),
     };
     // Images only go in as text: point the agent at the files, which it can view.
     for path in &msg.images {
@@ -446,6 +526,11 @@ fn user_message(msg: &UserMsg, system: Option<&str>) -> Value {
     }
     if let Some(system) = system {
         text = format!("<system>\n{system}\n</system>\n\n{text}");
+    }
+    // `/swarm` must sit at byte 0 of the message so `agy --print=` expands the built-in swarm skill
+    // even when `<system>...</system>` is prepended on the first turn.
+    if invoke_swarm || explicit_swarm {
+        text = if text.is_empty() { "/swarm".to_string() } else { format!("/swarm {text}") };
     }
     json!({ "event": "user", "message": { "role": "user", "content": [{ "type": "text", "text": text }] } })
 }
@@ -455,7 +540,7 @@ struct Call {
     before: Option<(String, String)>,
 }
 
-/// A spawned Antigravity subagent tracked via its `transcript.jsonl` on disk.
+/// A spawned Antigravity subagent (or `/swarm` worker) tracked via its `transcript.jsonl` on disk.
 struct Subagent {
     agent: String,
     log_path: Option<PathBuf>,
@@ -468,8 +553,36 @@ struct Subagent {
     sent_reply: bool,
     /// True when the latest observed step was an error.
     saw_error: bool,
-    /// True once a terminal `Ev::Task` status has been emitted.
+    /// True once a terminal `Ev::Task` status has been emitted (for one-shot subagents) or a
+    /// swarm worker was killed.
     done: bool,
+    /// True for multi-turn `/swarm` workers (lifecycle driven by `swarm/members.json`).
+    is_swarm: bool,
+    /// Last emitted status string, to avoid redundant `Ev::Task` events.
+    status: String,
+    /// Last emitted task summary (from `plan.json` or brief).
+    description: Option<String>,
+}
+
+/// Live on-disk state for an Antigravity `/swarm` session (`brain/<id>/.system_generated/swarm/`).
+#[derive(Default)]
+struct SwarmState {
+    active: bool,
+    title: String,
+    members_sig: Option<(u64, std::time::SystemTime)>,
+    plan_sig: Option<(u64, std::time::SystemTime)>,
+    plan_tasks: HashMap<String, String>,
+    briefs: HashMap<String, String>,
+    board_offset: u64,
+    board_posts: u64,
+    last_post: Option<String>,
+    /// Workers that posted `[done]` since their last `working` phase.
+    worker_done: HashSet<String>,
+    coordinator_done: bool,
+    board_emitted_status: Option<String>,
+    board_emitted_title: Option<String>,
+    board_emitted_posts: u64,
+    board_emitted_last: Option<String>,
 }
 
 fn percent_decode(s: &str) -> String {
@@ -508,8 +621,122 @@ fn file_uri_to_path(uri: &str) -> Option<PathBuf> {
     Some(PathBuf::from(decoded))
 }
 
-fn default_subagent_log(conv_id: &str) -> Option<PathBuf> {
-    Some(dirs::home_dir()?.join(".gemini/antigravity-cli/brain").join(conv_id).join(".system_generated/logs/transcript.jsonl"))
+fn default_brain_dir() -> Option<PathBuf> {
+    Some(dirs::home_dir()?.join(".gemini/antigravity-cli/brain"))
+}
+
+fn subagent_log_in(brain_dir: Option<&Path>, conv_id: &str) -> Option<PathBuf> {
+    Some(brain_dir?.join(conv_id).join(".system_generated/logs/transcript.jsonl"))
+}
+
+fn swarm_dir_in(brain_dir: Option<&Path>, session_id: &str) -> Option<PathBuf> {
+    Some(brain_dir?.join(session_id).join(".system_generated/swarm"))
+}
+
+fn file_sig(path: &Path) -> Option<(u64, std::time::SystemTime)> {
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.len(), meta.modified().ok()?))
+}
+
+/// Formats an Antigravity worker/subagent `transcript.jsonl` tail into human-readable log lines
+/// for winfer's Task Output viewer.
+pub(crate) fn format_transcript_log(raw: &str) -> String {
+    let mut out = Vec::new();
+    for line in raw.lines() {
+        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
+        let step_type = v["type"].as_str().unwrap_or("");
+        let status = v["status"].as_str().unwrap_or("");
+        match step_type {
+            "USER_INPUT" => {
+                if let Some(c) = v["content"].as_str().map(str::trim).filter(|s| !s.is_empty()) {
+                    let preview: String = c.lines().take(3).collect::<Vec<_>>().join("\n");
+                    out.push(format!("▶ {preview}"));
+                }
+            }
+            "PLANNER_RESPONSE" => {
+                for tc in v["tool_calls"].as_array().into_iter().flatten() {
+                    let name = tc["name"].as_str().unwrap_or("");
+                    if !name.is_empty() {
+                        let args = decode_transcript_args(&tc["args"]);
+                        out.push(format!("• {}", format_subagent_tool(name, &args)));
+                    }
+                }
+                if let Some(c) = v["content"].as_str().map(str::trim).filter(|s| !s.is_empty()) {
+                    out.push(c.to_string());
+                }
+            }
+            "GENERIC" if status == "ERROR" => {
+                if let Some(err) = v["error"].as_str().map(str::trim).filter(|s| !s.is_empty()) {
+                    out.push(format!("✖ {err}"));
+                }
+            }
+            _ => {}
+        }
+    }
+    if out.is_empty() {
+        raw.trim().to_string()
+    } else {
+        out.join("\n")
+    }
+}
+
+/// Formats an Antigravity `/swarm` `board.jsonl` tail into a readable chronological message feed
+/// for winfer's Task Output viewer.
+pub(crate) fn format_board_log(raw: &str) -> String {
+    let mut posts = Vec::new();
+    for line in raw.lines() {
+        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
+        let seq = v["seq"].as_u64();
+        let agent = v["agent"].as_str().unwrap_or("unknown");
+        let text = v["text"].as_str().unwrap_or("").trim();
+        if text.is_empty() {
+            continue;
+        }
+        let mut head = match seq {
+            Some(n) => format!("#{n} {agent}"),
+            None => agent.to_string(),
+        };
+        if let Some(ch) = v["channel"].as_str().filter(|c| !c.is_empty() && *c != "main") {
+            head.push_str(&format!(" · #{ch}"));
+        }
+        if let Some(kind) = v["kind"].as_str().filter(|k| !k.is_empty()) {
+            head.push_str(&format!(" [{kind}]"));
+        }
+        if let Some(t) = v["time"].as_str().filter(|t| !t.is_empty()) {
+            let short = t.split_whitespace().last().unwrap_or(t);
+            head.push_str(&format!(" · {short}"));
+        }
+        posts.push(format!("{head}\n{text}"));
+    }
+    if posts.is_empty() {
+        raw.trim().to_string()
+    } else {
+        posts.join("\n\n")
+    }
+}
+
+/// Whether a board post begins with `[done]` (optionally preceded by `@mentions`).
+fn is_done_post(text: &str) -> bool {
+    let mut rest = text.trim_start();
+    while rest.starts_with('@') {
+        match rest.split_once(char::is_whitespace) {
+            Some((_, after)) => rest = after.trim_start(),
+            None => return false,
+        }
+    }
+    rest.len() >= 6 && rest[..6].eq_ignore_ascii_case("[done]")
+}
+
+/// Extracts `(target_name, summary)` from a coordinator brief post (`@worker You own ...`).
+fn parse_brief_post(text: &str) -> Option<(String, String)> {
+    let rest = text.trim_start().strip_prefix('@')?;
+    let (name, body) = rest.split_once(char::is_whitespace)?;
+    let name = name.trim();
+    if name.is_empty() {
+        return None;
+    }
+    let summary = truncate_line(body, 120);
+    (!summary.is_empty()).then(|| (name.to_string(), summary))
 }
 
 /// Decodes `args` from an Antigravity `transcript.jsonl` tool call, where values are often
@@ -540,7 +767,7 @@ fn truncate_line(s: &str, max: usize) -> String {
     }
 }
 
-fn format_subagent_tool(name: &str, args: &Value) -> String {
+pub(crate) fn format_subagent_tool(name: &str, args: &Value) -> String {
     let shown = display_name(name, args);
     let t = title(name, args);
     let line = if t.is_empty() || t == shown { shown } else { format!("{shown} {t}") };
@@ -564,8 +791,12 @@ struct Bridge {
     /// Messages written while a turn ran: agy runs each as a turn of its own.
     queued: usize,
     calls: HashMap<String, Call>,
-    /// Spawned subagents keyed by their Antigravity `conversation_id`.
+    /// Spawned subagents (and `/swarm` workers) keyed by their Antigravity `conversation_id`.
     subagents: HashMap<String, Subagent>,
+    /// Antigravity's `brain/` directory (overrideable in tests).
+    brain_dir: Option<PathBuf>,
+    /// Live state synced from `brain/<session>/.system_generated/swarm/`.
+    swarm: SwarmState,
     /// A settings change waiting for the turn to end, to restart with it.
     restart: bool,
     usage: Usage,
@@ -575,6 +806,12 @@ struct Bridge {
     mode: Mode,
     bg_owner: String,
     asks: Arc<Asks>,
+    /// Ultracode multi-agent mode (Antigravity's `/swarm` coordinator skill).
+    ultracode: bool,
+    /// True once `/swarm` has been expanded on this conversation so follow-up turns don't re-inject it.
+    swarm_invoked: bool,
+    /// True after Ultracode is toggled off following a `/swarm` turn; sends a one-shot exit note.
+    swarm_exit_pending: bool,
 }
 
 impl Bridge {
@@ -583,7 +820,20 @@ impl Bridge {
     }
 
     fn send(&mut self, proc: &mut LineProcess, msg: &UserMsg) {
-        let line = user_message(msg, self.system.take().as_deref());
+        let explicit_swarm = msg.skill.as_deref() == Some("swarm") || (msg.skill.is_none() && strip_leading_swarm(&msg.text).is_some());
+        let invoke_swarm = self.ultracode && !self.swarm_invoked;
+        if invoke_swarm || explicit_swarm {
+            self.swarm_invoked = true;
+            self.swarm_exit_pending = false;
+        }
+        let mut system = self.system.take();
+        if !self.ultracode && !explicit_swarm && std::mem::take(&mut self.swarm_exit_pending) {
+            system = Some(match system {
+                Some(s) => format!("{s}\n\n{SWARM_EXIT_NOTE}"),
+                None => SWARM_EXIT_NOTE.to_string(),
+            });
+        }
+        let line = user_message(msg, system.as_deref(), invoke_swarm);
         if let Err(e) = proc.write(&line) {
             self.emit(Ev::Error(format!("couldn't reach Antigravity: {e}")));
         }
@@ -636,7 +886,17 @@ impl Bridge {
             Cmd::Compact => self.emit(Ev::Notice("Antigravity compacts its context on its own; /compact isn't available.".into())),
             Cmd::SetCompaction { .. } => {}
             // Its subagents (if any) run on the main model.
-            Cmd::SetSubagent { .. } | Cmd::SetUltracode(_) => {}
+            Cmd::SetSubagent { .. } => {}
+            Cmd::SetUltracode(on) => {
+                self.ultracode = on;
+                opts.ultracode = on;
+                if on {
+                    self.swarm_exit_pending = false;
+                } else if self.swarm_invoked {
+                    self.swarm_invoked = false;
+                    self.swarm_exit_pending = true;
+                }
+            }
             Cmd::Undo { .. } => self.emit(Ev::Undone(Err("Antigravity's CLI can't rewind a conversation.".into()))),
             Cmd::StopTask(id) => {
                 if !crate::harness::bg::stop(&id) {
@@ -672,7 +932,323 @@ impl Bridge {
     }
 
     fn has_running_subagents(&self) -> bool {
-        self.subagents.values().any(|s| !s.done)
+        self.subagents.values().any(|s| !s.done && (!s.is_swarm || s.status == "running"))
+    }
+
+    fn has_active_swarm(&self) -> bool {
+        self.swarm.active && self.subagents.values().any(|s| s.is_swarm && !s.done)
+    }
+
+    /// Registers one or more `/swarm` workers immediately from a `swarm{action:"add"}` tool result.
+    fn register_swarm_add(&mut self, tool_id: &str, input: &Value, output: &str) {
+        let Ok(v) = serde_json::from_str::<Value>(output) else { return };
+        if v["status"].as_str() != Some("added") {
+            return;
+        }
+        self.swarm.active = true;
+        let model = v["model"].as_str().filter(|m| !m.is_empty()).map(|m| split_effort(m).0.to_string()).or_else(|| (!self.model.is_empty()).then(|| self.model.clone()));
+        let brief = input["brief"].as_str().map(|b| truncate_line(b, 120)).filter(|s| !s.is_empty());
+        let mut pairs: Vec<(String, String)> = Vec::new();
+        if let (Some(name), Some(cid)) = (v["name"].as_str().filter(|s| !s.is_empty()), v["conversation_id"].as_str().filter(|s| !s.is_empty())) {
+            pairs.push((name.to_string(), cid.to_string()));
+        } else if let (Some(names), Some(cids)) = (v["names"].as_array(), v["conversation_ids"].as_array()) {
+            for (n, c) in names.iter().zip(cids.iter()) {
+                if let (Some(name), Some(cid)) = (n.as_str().filter(|s| !s.is_empty()), c.as_str().filter(|s| !s.is_empty())) {
+                    pairs.push((name.to_string(), cid.to_string()));
+                }
+            }
+        }
+        for (name, conv_id) in pairs {
+            if let Some(b) = &brief {
+                self.swarm.briefs.entry(name.clone()).or_insert_with(|| b.clone());
+            }
+            if self.subagents.contains_key(&conv_id) {
+                continue;
+            }
+            let log_path = subagent_log_in(self.brain_dir.as_deref(), &conv_id);
+            let output_file = log_path.as_ref().map(|p| p.to_string_lossy().into_owned());
+            let desc = self.swarm.plan_tasks.get(&name).cloned().or_else(|| brief.clone());
+            self.subagents.insert(
+                conv_id.clone(),
+                Subagent {
+                    agent: name.clone(),
+                    log_path,
+                    offset: 0,
+                    tools: 0,
+                    model: model.clone(),
+                    last: None,
+                    sent_reply: false,
+                    saw_error: false,
+                    done: false,
+                    is_swarm: true,
+                    status: "running".into(),
+                    description: desc.clone(),
+                },
+            );
+            self.emit(Ev::Task(TaskEv {
+                id: conv_id,
+                tool_id: Some(tool_id.to_string()),
+                title: Some(name.clone()),
+                description: desc,
+                agent: Some(name),
+                tools: Some(0),
+                last: None,
+                status: Some("running".into()),
+                output_file,
+                exit_code: None,
+                model: model.clone(),
+            }));
+        }
+    }
+
+    /// Syncs `/swarm` roster, task plan, and board posts from `brain/<session>/.system_generated/swarm/`.
+    fn poll_swarm(&mut self) {
+        let Some(session) = self.session.clone() else { return };
+        let Some(dir) = swarm_dir_in(self.brain_dir.as_deref(), &session) else { return };
+        let members_path = dir.join("members.json");
+        let plan_path = dir.join("plan.json");
+        let board_path = dir.join("board.jsonl");
+
+        // 1. Tail `board.jsonl` first so `[done]` posts and briefs are known before status mapping.
+        let mut worker_board_posts: Vec<(String, String)> = Vec::new();
+        if let Ok(mut file) = std::fs::File::open(&board_path) {
+            if let Ok(len) = file.metadata().map(|m| m.len()) {
+                if len > self.swarm.board_offset && file.seek(SeekFrom::Start(self.swarm.board_offset)).is_ok() {
+                    self.swarm.active = true;
+                    let mut reader = BufReader::new(file);
+                    let mut line = String::new();
+                    loop {
+                        line.clear();
+                        let Ok(n) = reader.read_line(&mut line) else { break };
+                        if n == 0 || !line.ends_with('\n') {
+                            break;
+                        }
+                        self.swarm.board_offset += n as u64;
+                        let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
+                        let seq = v["seq"].as_u64().unwrap_or(self.swarm.board_posts + 1);
+                        self.swarm.board_posts = self.swarm.board_posts.max(seq);
+                        let agent = v["agent"].as_str().unwrap_or("");
+                        let kind = v["kind"].as_str().unwrap_or("");
+                        let text = v["text"].as_str().unwrap_or("");
+                        if kind == "brief" {
+                            if let Some((target, summary)) = parse_brief_post(text) {
+                                self.swarm.briefs.entry(target).or_insert(summary);
+                            }
+                            if self.swarm.last_post.is_none() {
+                                let preview = truncate_line(text, 96);
+                                if !preview.is_empty() {
+                                    self.swarm.last_post = Some(format!("#{seq} {agent}: {preview}"));
+                                }
+                            }
+                            continue;
+                        }
+                        let preview = truncate_line(text, 96);
+                        if !preview.is_empty() {
+                            self.swarm.last_post = Some(format!("#{seq} {agent}: {preview}"));
+                        }
+                        if agent == "coordinator" {
+                            if is_done_post(text) {
+                                self.swarm.coordinator_done = true;
+                            }
+                        } else if !agent.is_empty() {
+                            self.swarm.coordinator_done = false;
+                            if is_done_post(text) {
+                                self.swarm.worker_done.insert(agent.to_string());
+                            }
+                            if !preview.is_empty() {
+                                worker_board_posts.push((agent.to_string(), format!("Posted #{seq}: {preview}")));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Read `plan.json` when modified for per-worker task summaries and goal title.
+        if let Some(sig) = file_sig(&plan_path) {
+            if self.swarm.plan_sig != Some(sig) {
+                self.swarm.plan_sig = Some(sig);
+                if let Ok(raw) = std::fs::read_to_string(&plan_path) {
+                    if let Ok(v) = serde_json::from_str::<Value>(&raw) {
+                        self.swarm.active = true;
+                        if self.swarm.title.is_empty() {
+                            if let Some(t) = v["goal"]["title"].as_str().filter(|s| !s.trim().is_empty()) {
+                                self.swarm.title = t.trim().to_string();
+                            }
+                        }
+                        if let Some(tasks) = v["tasks"].as_object() {
+                            for (name, desc) in tasks {
+                                if let Some(s) = desc.as_str().map(str::trim).filter(|s| !s.is_empty()) {
+                                    self.swarm.plan_tasks.insert(name.clone(), s.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. Read `members.json` when modified to discover workers (including nested helpers) and
+        //    update their live working/waiting/completed/stopped states and models.
+        let mut updates: Vec<TaskEv> = Vec::new();
+        if let Some(sig) = file_sig(&members_path) {
+            if self.swarm.members_sig != Some(sig) || !worker_board_posts.is_empty() {
+                self.swarm.members_sig = Some(sig);
+                if let Ok(raw) = std::fs::read_to_string(&members_path) {
+                    if let Ok(v) = serde_json::from_str::<Value>(&raw) {
+                        self.swarm.active = true;
+                        if let Some(t) = v["title"].as_str().map(str::trim).filter(|s| !s.is_empty()) {
+                            self.swarm.title = t.to_string();
+                        }
+                        if let Some(members) = v["members"].as_object() {
+                            let mut ordered: Vec<(&String, &Value)> = members.iter().collect();
+                            ordered.sort_by_key(|(k, _)| *k);
+                            for (name, info) in ordered {
+                                if name == "coordinator" || info["role"].as_str() == Some("coordinator") {
+                                    continue;
+                                }
+                                let Some(conv_id) = info["conversation_id"].as_str().filter(|s| !s.is_empty()) else { continue };
+                                let killed = info["killed"].as_bool().unwrap_or(false);
+                                let phase = info["phase"].as_str().unwrap_or("");
+                                let wake = info["wake_mode"].as_str().unwrap_or("");
+                                if wake == "working" {
+                                    self.swarm.worker_done.remove(name.as_str());
+                                }
+                                let status = if killed {
+                                    "stopped"
+                                } else if wake == "working" {
+                                    "running"
+                                } else if phase == "STOPPED" {
+                                    "stopped"
+                                } else if self.swarm.worker_done.contains(name.as_str()) {
+                                    "completed"
+                                } else {
+                                    "waiting"
+                                };
+                                let model = info["applied_model"]
+                                    .as_str()
+                                    .or_else(|| info["model"].as_str())
+                                    .filter(|m| !m.is_empty())
+                                    .map(|m| split_effort(m).0.to_string());
+                                let desc = self.swarm.plan_tasks.get(name).cloned().or_else(|| self.swarm.briefs.get(name).cloned());
+
+                                if let Some(sub) = self.subagents.get_mut(conv_id) {
+                                    sub.is_swarm = true;
+                                    let status_changed = sub.status != status;
+                                    let model_changed = model.is_some() && sub.model != model;
+                                    let desc_changed = desc.is_some() && sub.description != desc;
+                                    if status_changed {
+                                        sub.status = status.to_string();
+                                        sub.done = killed;
+                                    }
+                                    if model_changed {
+                                        sub.model = model.clone();
+                                    }
+                                    if desc_changed {
+                                        sub.description = desc.clone();
+                                    }
+                                    if status_changed || model_changed || desc_changed {
+                                        updates.push(TaskEv {
+                                            id: conv_id.to_string(),
+                                            agent: Some(sub.agent.clone()),
+                                            description: desc_changed.then(|| desc).flatten(),
+                                            tools: Some(sub.tools),
+                                            status: status_changed.then(|| status.to_string()),
+                                            model: model_changed.then(|| model).flatten(),
+                                            ..Default::default()
+                                        });
+                                    }
+                                } else {
+                                    let log_path = subagent_log_in(self.brain_dir.as_deref(), conv_id);
+                                    let output_file = log_path.as_ref().map(|p| p.to_string_lossy().into_owned());
+                                    self.subagents.insert(
+                                        conv_id.to_string(),
+                                        Subagent {
+                                            agent: name.clone(),
+                                            log_path,
+                                            offset: 0,
+                                            tools: 0,
+                                            model: model.clone(),
+                                            last: None,
+                                            sent_reply: false,
+                                            saw_error: false,
+                                            done: killed,
+                                            is_swarm: true,
+                                            status: status.to_string(),
+                                            description: desc.clone(),
+                                        },
+                                    );
+                                    updates.push(TaskEv {
+                                        id: conv_id.to_string(),
+                                        title: Some(name.clone()),
+                                        description: desc,
+                                        agent: Some(name.clone()),
+                                        tools: Some(0),
+                                        status: Some(status.to_string()),
+                                        output_file,
+                                        model,
+                                        ..Default::default()
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Apply latest board posts onto their author workers' `last` lines.
+        for (author, note) in worker_board_posts {
+            if let Some((cid, sub)) = self.subagents.iter_mut().find(|(_, s)| s.is_swarm && s.agent == author) {
+                sub.last = Some(note.clone());
+                updates.push(TaskEv {
+                    id: cid.clone(),
+                    agent: Some(sub.agent.clone()),
+                    tools: Some(sub.tools),
+                    last: Some(note),
+                    ..Default::default()
+                });
+            }
+        }
+
+        // 4. Emit/update the synthetic `swarm-board` task carrying the swarm title, post count,
+        //    latest board message, and `board.jsonl` path for the live Board output sheet.
+        if self.swarm.active {
+            let any_working = self.subagents.values().any(|s| s.is_swarm && s.status == "running");
+            let any_alive = self.subagents.values().any(|s| s.is_swarm && !s.done);
+            let board_status = if any_working {
+                "running"
+            } else if !any_alive || self.swarm.coordinator_done {
+                "completed"
+            } else {
+                "waiting"
+            };
+            let title = if self.swarm.title.is_empty() { "Swarm".to_string() } else { self.swarm.title.clone() };
+            let changed = self.swarm.board_emitted_status.as_deref() != Some(board_status)
+                || self.swarm.board_emitted_title.as_deref() != Some(title.as_str())
+                || self.swarm.board_emitted_posts != self.swarm.board_posts
+                || self.swarm.board_emitted_last != self.swarm.last_post;
+            if changed {
+                self.swarm.board_emitted_status = Some(board_status.to_string());
+                self.swarm.board_emitted_title = Some(title.clone());
+                self.swarm.board_emitted_posts = self.swarm.board_posts;
+                self.swarm.board_emitted_last = self.swarm.last_post.clone();
+                updates.push(TaskEv {
+                    id: format!("swarm-board:{session}"),
+                    title: Some(title),
+                    agent: Some("swarm-board".into()),
+                    tools: Some(self.swarm.board_posts),
+                    last: self.swarm.last_post.clone(),
+                    status: Some(board_status.into()),
+                    output_file: Some(board_path.to_string_lossy().into_owned()),
+                    ..Default::default()
+                });
+            }
+        }
+
+        for t in updates {
+            self.emit(Ev::Task(t));
+        }
     }
 
     /// Reads newly appended lines from each running subagent's `transcript.jsonl` and emits
@@ -737,8 +1313,15 @@ impl Bridge {
                                 }
                             }
                         } else if status == "DONE" {
-                            terminal = Some("completed");
-                            changed = true;
+                            if sub.is_swarm {
+                                if let Some(c) = v["content"].as_str().map(|c| truncate_line(c, 72)).filter(|s| !s.is_empty()) {
+                                    sub.last = Some(c);
+                                    changed = true;
+                                }
+                            } else {
+                                terminal = Some("completed");
+                                changed = true;
+                            }
                         }
                     }
                     "GENERIC" => {
@@ -747,7 +1330,12 @@ impl Bridge {
                             let err = v["error"].as_str().unwrap_or("");
                             if err.contains("permission check failed") || err.contains("user denied permission") {
                                 sub.last = Some("Permission denied".into());
-                                terminal = Some("failed");
+                                if !sub.is_swarm {
+                                    terminal = Some("failed");
+                                }
+                                changed = true;
+                            } else if sub.is_swarm && !err.is_empty() {
+                                sub.last = Some(truncate_line(err, 72));
                                 changed = true;
                             }
                         } else if status == "DONE" {
@@ -778,11 +1366,14 @@ impl Bridge {
     }
 
     /// Reconciles running subagents once a parent turn finishes with a `result` event.
+    /// Swarm workers intentionally keep running after the coordinator parks, so only one-shot
+    /// `invoke_subagent` workers settle here.
     fn settle_subagents_on_result(&mut self, ok: bool) {
+        self.poll_swarm();
         self.poll_subagents();
         let mut updates = Vec::new();
         for (id, sub) in &mut self.subagents {
-            if sub.done {
+            if sub.done || sub.is_swarm {
                 continue;
             }
             let status = if sub.saw_error || !ok {
@@ -809,7 +1400,7 @@ impl Bridge {
         }
     }
 
-    /// Marks every still-running subagent with `status` (e.g. `"stopped"` on interrupt or exit).
+    /// Marks every still-running subagent (and active swarm board) with `status` (e.g. `"stopped"` on interrupt or exit).
     fn finish_subagents(&mut self, status: &str) {
         let mut updates = Vec::new();
         for (id, sub) in &mut self.subagents {
@@ -817,6 +1408,7 @@ impl Bridge {
                 continue;
             }
             sub.done = true;
+            sub.status = status.to_string();
             updates.push(TaskEv {
                 id: id.clone(),
                 agent: Some(sub.agent.clone()),
@@ -825,6 +1417,19 @@ impl Bridge {
                 status: Some(status.into()),
                 ..Default::default()
             });
+        }
+        if self.swarm.active {
+            if let Some(session) = &self.session {
+                if self.swarm.board_emitted_status.as_deref() != Some(status) {
+                    self.swarm.board_emitted_status = Some(status.to_string());
+                    updates.push(TaskEv {
+                        id: format!("swarm-board:{session}"),
+                        agent: Some("swarm-board".into()),
+                        status: Some(status.into()),
+                        ..Default::default()
+                    });
+                }
+            }
         }
         for t in updates {
             self.emit(Ev::Task(t));
@@ -876,7 +1481,8 @@ impl Bridge {
                 if ok {
                     if let Some(conv_id) = conv_id {
                         if !self.subagents.contains_key(&conv_id) {
-                            let log_path = sub["log_uri"].as_str().and_then(file_uri_to_path).or_else(|| default_subagent_log(&conv_id));
+                            let log_path = sub["log_uri"].as_str().and_then(file_uri_to_path).or_else(|| subagent_log_in(self.brain_dir.as_deref(), &conv_id));
+                            let output_file = log_path.as_ref().map(|p| p.to_string_lossy().into_owned());
                             let model = (!self.model.is_empty()).then(|| self.model.clone());
                             self.subagents.insert(
                                 conv_id.clone(),
@@ -890,6 +1496,9 @@ impl Bridge {
                                     sent_reply: false,
                                     saw_error: false,
                                     done: false,
+                                    is_swarm: false,
+                                    status: "running".into(),
+                                    description: description.clone(),
                                 },
                             );
                             self.emit(Ev::Task(TaskEv {
@@ -901,7 +1510,7 @@ impl Bridge {
                                 tools: Some(0),
                                 last: None,
                                 status: Some("running".into()),
-                                output_file: None,
+                                output_file,
                                 exit_code: None,
                                 model,
                             }));
@@ -935,6 +1544,8 @@ impl Bridge {
                     self.usage.window = window(base);
                     self.emit(Ev::Model(base.to_string()));
                 }
+                self.poll_swarm();
+                self.poll_subagents();
             }
             "step_update" => self.on_step(&v["step_update"]),
             "result" => {
@@ -983,7 +1594,10 @@ impl Bridge {
                 }
             }
             "subagent" => self.on_subagent_step(s, index, state, running),
-            "system_message" => self.poll_subagents(),
+            "system_message" => {
+                self.poll_swarm();
+                self.poll_subagents();
+            }
             "tool" => {
                 let id = format!("s{index}");
                 let info = &s["tool_info"];
@@ -1004,6 +1618,13 @@ impl Bridge {
                         Value::Null => s["error"].as_str().unwrap_or("").to_string(),
                         other => other.to_string(),
                     };
+                    if ok && matches!(name.as_str(), "swarm" | "post_message" | "read_board" | "swarm_wait") {
+                        if name == "swarm" && input["action"].as_str() == Some("add") {
+                            self.register_swarm_add(&id, &input, &output);
+                        }
+                        self.poll_swarm();
+                        self.poll_subagents();
+                    }
                     let diff = call.and_then(|c| c.before).filter(|_| ok).and_then(|(path, old)| {
                         let new = std::fs::read_to_string(&path).ok()?;
                         (new != old).then(|| diff::unified(&crate::harness::tools::short_path(&path), &old, &new))
@@ -1237,6 +1858,8 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         queued: 0,
         calls: HashMap::new(),
         subagents: HashMap::new(),
+        brain_dir: default_brain_dir(),
+        swarm: SwarmState::default(),
         restart: false,
         usage: Usage { window: window(&opts.model), ..Default::default() },
         step_usage: false,
@@ -1244,6 +1867,9 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         mode: opts.mode,
         bg_owner: opts.bg_owner.clone(),
         asks,
+        ultracode: opts.ultracode,
+        swarm_invoked: false,
+        swarm_exit_pending: false,
     };
     crate::harness::bg::set_mode(&b.bg_owner, b.mode);
     if let Some(err) = mcp_err {
@@ -1258,18 +1884,22 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
     loop {
         let msg = match held.pop_front() {
             Some(cmd) => In::Cmd(cmd),
-            None if b.has_running_subagents() => match rx.recv_timeout(Duration::from_millis(250)) {
-                Ok(m) => m,
-                Err(RecvTimeoutError::Timeout) => {
-                    b.poll_subagents();
-                    continue;
+            None if b.has_running_subagents() || b.has_active_swarm() => {
+                let wait = if b.has_running_subagents() { Duration::from_millis(250) } else { Duration::from_millis(1000) };
+                match rx.recv_timeout(wait) {
+                    Ok(m) => m,
+                    Err(RecvTimeoutError::Timeout) => {
+                        b.poll_swarm();
+                        b.poll_subagents();
+                        continue;
+                    }
+                    Err(RecvTimeoutError::Disconnected) => {
+                        b.finish_subagents("stopped");
+                        kill_tree(&mut proc);
+                        return;
+                    }
                 }
-                Err(RecvTimeoutError::Disconnected) => {
-                    b.finish_subagents("stopped");
-                    kill_tree(&mut proc);
-                    return;
-                }
-            },
+            }
             None => match super::recv(&rx) {
                 Some(m) => m,
                 None => {
@@ -1373,9 +2003,215 @@ mod tests {
     fn test_bridge(tx: Sender<Ev>, model: &str) -> Bridge {
         Bridge {
             events: tx, session: None, model: model.into(), system: None, busy: true, queued: 0,
-            calls: HashMap::new(), subagents: HashMap::new(), restart: false, usage: Usage::default(), step_usage: false,
+            calls: HashMap::new(), subagents: HashMap::new(), brain_dir: None, swarm: SwarmState::default(),
+            restart: false, usage: Usage::default(), step_usage: false,
             turn: TurnTokens::default(), mode: Mode::Ask, bg_owner: String::new(), asks: Arc::default(),
+            ultracode: false, swarm_invoked: false, swarm_exit_pending: false,
         }
+    }
+
+    #[test]
+    fn swarm_tracks_workers_plan_board_and_transcripts_across_turns() {
+        let brain = std::env::temp_dir().join(format!("winfer-agy-swarm-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&brain);
+        let session = "coord-1";
+        let swarm_dir = brain.join(session).join(".system_generated/swarm");
+        let w1_log = brain.join("w1-conv").join(".system_generated/logs/transcript.jsonl");
+        let w2_log = brain.join("w2-conv").join(".system_generated/logs/transcript.jsonl");
+        std::fs::create_dir_all(&swarm_dir).unwrap();
+        std::fs::create_dir_all(w1_log.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(w2_log.parent().unwrap()).unwrap();
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut b = test_bridge(tx, "gemini-4-neon");
+        b.brain_dir = Some(brain.clone());
+        b.session = Some(session.into());
+
+        // Coordinator adds worker `shell-architect` via `swarm` tool.
+        let add_out = json!({
+            "status": "added",
+            "name": "shell-architect",
+            "model": "gemini-4-neon-high",
+            "conversation_id": "w1-conv",
+            "note": "ok"
+        }).to_string();
+        b.on_line(&json!({
+            "event": "step_update",
+            "step_update": {
+                "step_index": 8,
+                "state": "DONE",
+                "step_type": "tool",
+                "tool_name": "swarm",
+                "tool_info": {
+                    "name": "swarm",
+                    "parameters": { "action": "add", "name": "shell-architect", "brief": "Scaffold OS shell" },
+                    "output": add_out
+                }
+            }
+        }));
+        let evs: Vec<Ev> = rx.try_iter().collect();
+        assert!(evs.iter().any(|e| matches!(e, Ev::Task(t) if t.id == "w1-conv" && t.agent.as_deref() == Some("shell-architect") && t.status.as_deref() == Some("running") && t.output_file.is_some())), "{evs:?}");
+        assert!(b.has_running_subagents());
+        assert!(b.has_active_swarm());
+
+        // Coordinator parks (`result`), workers stay active.
+        b.on_line(&json!({ "event": "result", "result": { "status": "SUCCESS" } }));
+        let _ = rx.try_iter().count();
+        assert!(b.has_running_subagents(), "swarm workers keep running after coordinator parks");
+
+        // On-disk swarm state arrives: plan.json, members.json (including nested helper w2), board.jsonl, and worker transcript.
+        std::fs::write(
+            swarm_dir.join("plan.json"),
+            json!({
+                "goal": { "title": "Build Web OS" },
+                "tasks": {
+                    "shell-architect": "Scaffold shell and VFS",
+                    "verifier": "Run build and browser QA"
+                }
+            }).to_string(),
+        ).unwrap();
+        std::fs::write(
+            swarm_dir.join("members.json"),
+            json!({
+                "title": "Windows 10 Web OS",
+                "members": {
+                    "coordinator": { "conversation_id": session, "role": "coordinator", "phase": "RUNNING", "wake_mode": "mentions", "killed": false, "model": "gemini-4-neon-high" },
+                    "shell-architect": { "conversation_id": "w1-conv", "role": "worker", "phase": "RUNNING", "wake_mode": "working", "killed": false, "model": "gemini-4-neon-high" },
+                    "verifier": { "conversation_id": "w2-conv", "role": "worker", "phase": "RUNNING", "wake_mode": "mentions", "killed": false, "model": "gemini-4-argon-medium" }
+                }
+            }).to_string(),
+        ).unwrap();
+        std::fs::write(
+            swarm_dir.join("board.jsonl"),
+            concat!(
+                r#"{"seq":1,"agent":"coordinator","kind":"brief","text":"@shell-architect Scaffold OS shell","time":"2026-11-26 11:46:38"}"#, "\n",
+                r#"{"seq":2,"agent":"shell-architect","text":"@verifier [contracts-ready] VFS ready","time":"2026-11-26 11:47:10"}"#, "\n",
+            ),
+        ).unwrap();
+        std::fs::write(
+            &w1_log,
+            concat!(
+                r#"{"step_index":1,"type":"PLANNER_RESPONSE","status":"DONE","model":"gemini-4-neon-high","tool_calls":[{"name":"write_file","args":{"Path":"\"/repo/src/os.ts\""}}]}"#, "\n",
+            ),
+        ).unwrap();
+
+        b.poll_swarm();
+        b.poll_subagents();
+        let evs: Vec<Ev> = rx.try_iter().collect();
+        // Plan summary applied to w1, nested worker w2 discovered as `waiting`, board task emitted, w1 transcript tailed.
+        assert!(evs.iter().any(|e| matches!(e, Ev::Task(t) if t.id == "w1-conv" && t.description.as_deref() == Some("Scaffold shell and VFS"))), "{evs:?}");
+        assert!(evs.iter().any(|e| matches!(e, Ev::Task(t) if t.id == "w2-conv" && t.agent.as_deref() == Some("verifier") && t.status.as_deref() == Some("waiting") && t.model.as_deref() == Some("gemini-4-argon"))), "{evs:?}");
+        assert!(evs.iter().any(|e| matches!(e, Ev::Task(t) if t.agent.as_deref() == Some("swarm-board") && t.title.as_deref() == Some("Windows 10 Web OS") && t.tools == Some(2) && t.status.as_deref() == Some("running"))), "{evs:?}");
+        assert!(evs.iter().any(|e| matches!(e, Ev::Task(t) if t.id == "w1-conv" && t.tools == Some(1) && t.last.as_deref() == Some("Write /repo/src/os.ts"))), "{evs:?}");
+
+        // Worker posts `[done]` and transitions to `mentions` -> marked `completed`.
+        use std::io::Write;
+        let mut bf = std::fs::OpenOptions::new().append(true).open(swarm_dir.join("board.jsonl")).unwrap();
+        writeln!(bf, r#"{{"seq":3,"agent":"shell-architect","text":"@coordinator [done] Shell complete","time":"2026-11-26 11:48:00"}}"#).unwrap();
+        drop(bf);
+        std::fs::write(
+            swarm_dir.join("members.json"),
+            json!({
+                "title": "Windows 10 Web OS",
+                "members": {
+                    "coordinator": { "conversation_id": session, "role": "coordinator", "phase": "RUNNING", "wake_mode": "mentions", "killed": false, "model": "gemini-4-neon-high" },
+                    "shell-architect": { "conversation_id": "w1-conv", "role": "worker", "phase": "RUNNING", "wake_mode": "mentions", "killed": false, "model": "gemini-4-neon-high" },
+                    "verifier": { "conversation_id": "w2-conv", "role": "worker", "phase": "RUNNING", "wake_mode": "mentions", "killed": true, "model": "gemini-4-argon-medium" }
+                }
+            }).to_string(),
+        ).unwrap();
+        b.poll_swarm();
+        let evs: Vec<Ev> = rx.try_iter().collect();
+        assert!(evs.iter().any(|e| matches!(e, Ev::Task(t) if t.id == "w1-conv" && t.status.as_deref() == Some("completed"))), "{evs:?}");
+        assert!(evs.iter().any(|e| matches!(e, Ev::Task(t) if t.id == "w2-conv" && t.status.as_deref() == Some("stopped"))), "{evs:?}");
+
+        // Formatted board and transcript logs are human-readable.
+        let board_text = format_board_log(&std::fs::read_to_string(swarm_dir.join("board.jsonl")).unwrap());
+        assert!(board_text.contains("#1 coordinator [brief] · 11:46:38") && board_text.contains("#3 shell-architect · 11:48:00"), "{board_text}");
+        let tr_text = format_transcript_log(&std::fs::read_to_string(&w1_log).unwrap());
+        assert!(tr_text.contains("• Write /repo/src/os.ts"), "{tr_text}");
+
+        let _ = std::fs::remove_dir_all(&brain);
+    }
+
+    #[test]
+    fn ultracode_invokes_swarm_once_and_notifies_on_exit() {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let mut b = test_bridge(tx, "gemini-4-neon");
+        b.busy = false;
+        b.system = Some("sys note".into());
+        let (me, lines) = std::sync::mpsc::channel();
+        let mut proc = LineProcess::spawn("cat", &[], &[], &std::env::temp_dir(), me).unwrap();
+        let mut opts = Opts {
+            cwd: std::env::temp_dir(),
+            model: "gemini-4-neon".into(),
+            effort: None,
+            ultracode: false,
+            mode: Mode::Ask,
+            resume: None,
+            system: None,
+            mcp: Default::default(),
+            allowed_commands: Vec::new(),
+            trim_at: 60,
+            compact_at: 85,
+            lean: false,
+            skills: crate::harness::claude_skills::LeanSkills::All,
+            bg_owner: String::new(),
+            sub_model: None,
+            sub_effort: None,
+            account: None,
+        };
+        let msg = |text: &str| UserMsg { text: text.into(), images: Vec::new(), skill: None };
+
+        // Turn Ultracode on: first turn starts with `/swarm ` before `<system>...</system>`.
+        assert!(matches!(b.on_cmd(Cmd::SetUltracode(true), &mut proc, &mut opts), Next::Go));
+        assert!(b.ultracode && opts.ultracode);
+        assert!(matches!(b.on_cmd(Cmd::Send(msg("refactor parser")), &mut proc, &mut opts), Next::Go));
+        // Second turn while Ultracode stays on does not re-expand `/swarm`.
+        b.busy = false;
+        assert!(matches!(b.on_cmd(Cmd::Send(msg("check tests too")), &mut proc, &mut opts), Next::Go));
+        // Turning Ultracode off sends a one-shot exit note on the next turn.
+        b.busy = false;
+        assert!(matches!(b.on_cmd(Cmd::SetUltracode(false), &mut proc, &mut opts), Next::Go));
+        assert!(matches!(b.on_cmd(Cmd::Send(msg("quick question")), &mut proc, &mut opts), Next::Go));
+        // Subsequent turn with Ultracode still off is plain text.
+        b.busy = false;
+        assert!(matches!(b.on_cmd(Cmd::Send(msg("another question")), &mut proc, &mut opts), Next::Go));
+        // Re-enabling Ultracode invokes `/swarm` again without double-prefixing if user typed it.
+        b.busy = false;
+        assert!(matches!(b.on_cmd(Cmd::SetUltracode(true), &mut proc, &mut opts), Next::Go));
+        assert!(matches!(b.on_cmd(Cmd::Send(msg("/swarm ship it")), &mut proc, &mut opts), Next::Go));
+
+        let mut sent = Vec::new();
+        while sent.len() < 5 {
+            match lines.recv_timeout(Duration::from_secs(2)) {
+                Ok(In::Line(l)) => if let Ok(v) = serde_json::from_str::<Value>(&l) { sent.push(v); }
+                _ => break,
+            }
+        }
+        drop(proc);
+        let text = |i: usize| sent[i]["message"]["content"][0]["text"].as_str().unwrap().to_string();
+        assert_eq!(sent.len(), 5);
+        assert!(text(0).starts_with("/swarm <system>\nsys note\n</system>\n\nrefactor parser"), "{}", text(0));
+        assert_eq!(text(1), "check tests too");
+        assert!(text(2).contains(SWARM_EXIT_NOTE) && text(2).ends_with("quick question"), "{}", text(2));
+        assert_eq!(text(3), "another question");
+        assert_eq!(text(4), "/swarm ship it");
+    }
+
+    #[test]
+    fn swarm_tool_cards_format_cleanly() {
+        assert_eq!(display_name("swarm", &json!({})), "Swarm");
+        assert_eq!(title("swarm", &json!({ "action": "add", "name": "parser", "brief": "own parser" })), "add parser");
+        assert_eq!(title("swarm", &json!({ "action": "add", "name": "worker", "tasks": ["a", "b"] })), "add worker (2 tasks)");
+        assert_eq!(title("swarm", &json!({ "action": "title", "title": "Parser rewrite" })), "title: Parser rewrite");
+        assert_eq!(title("swarm", &json!({ "action": "status" })), "status");
+        assert_eq!(display_name("post_message", &json!({})), "Swarm post");
+        assert_eq!(title("post_message", &json!({ "channel": "ui", "text": "@worker check diff\nline2" })), "#ui @worker check diff");
+        assert_eq!(display_name("read_board", &json!({})), "Swarm board");
+        assert_eq!(title("read_board", &json!({ "since": 4 })), "since #4");
+        assert_eq!(display_name("swarm_wait", &json!({})), "Swarm wait");
+        assert_eq!(title("swarm_wait", &json!({ "since": 7 })), "waiting after #7");
     }
 
     #[test]

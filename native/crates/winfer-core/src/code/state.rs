@@ -45,6 +45,18 @@ impl CodeTask {
         self.ev.status.as_deref().is_none_or(|s| s == "running")
     }
 
+    pub fn waiting(&self) -> bool {
+        self.ev.status.as_deref() == Some("waiting")
+    }
+
+    pub fn active(&self) -> bool {
+        self.running() || self.waiting()
+    }
+
+    pub fn is_swarm_board(&self) -> bool {
+        self.ev.agent.as_deref() == Some("swarm-board")
+    }
+
     /// How long it ran, or has been running so far.
     pub fn elapsed_ms(&self, now: u64) -> u64 {
         self.ended_at.unwrap_or(now).saturating_sub(self.started_at)
@@ -220,13 +232,28 @@ impl CodeState {
         self.sheet = sheet;
     }
 
-    /// The subagents the live tree above the composer shows, in the order they started: the running
-    /// ones, and while a turn runs also those it started that already finished. Shells aren't in it.
-    /// Once none runs any more, the tree lingers `TREE_LINGER_MS` after the last one finished, then hides.
+    /// The synthetic task carrying Antigravity's live `/swarm` board metadata and log path.
+    pub fn swarm_board(&self) -> Option<&CodeTask> {
+        self.tasks.iter().rev().find(|t| t.is_swarm_board())
+    }
+
+    /// The subagents (and `/swarm` workers) the live tree above the composer shows, in the order
+    /// they started: running/waiting ones, those started in the current turn, and the full roster
+    /// while a swarm is active. Shells and the synthetic `swarm-board` entry aren't listed as rows.
+    /// Once none is active, the tree lingers `TREE_LINGER_MS` after the last one finished, then hides.
     pub fn tree_agents(&self, now: u64) -> Vec<&CodeTask> {
         let turn = self.busy.then_some(self.turn_started).flatten();
-        let mut out: Vec<&CodeTask> = self.tasks.iter().filter(|t| t.ev.agent.is_some() && (t.running() || turn.is_some_and(|at| t.started_at >= at))).collect();
-        if !out.iter().any(|t| t.running()) {
+        let board_active = self.swarm_board().is_some_and(CodeTask::active);
+        let mut out: Vec<&CodeTask> = self
+            .tasks
+            .iter()
+            .filter(|t| {
+                t.ev.agent.is_some()
+                    && !t.is_swarm_board()
+                    && (t.active() || board_active || turn.is_some_and(|at| t.started_at >= at))
+            })
+            .collect();
+        if !board_active && !out.iter().any(|t| t.active()) {
             let last_end = out.iter().filter_map(|t| t.ended_at).max().unwrap_or(0);
             if now.saturating_sub(last_end) >= TREE_LINGER_MS {
                 out.clear();
@@ -236,10 +263,10 @@ impl CodeState {
         out
     }
 
-    /// The task whose output sheet is open, while it still runs (its log is polled then).
+    /// The task whose output sheet is open, while it still runs or waits (its log is polled then).
     pub fn live_log_task(&self) -> Option<&CodeTask> {
         let id = self.log_task.as_deref().filter(|_| self.sheet == Some(Sheet::TaskLog))?;
-        self.tasks.iter().find(|t| t.ev.id == id && t.running())
+        self.tasks.iter().find(|t| t.ev.id == id && t.active())
     }
 
     /// What a task's output sheet shows: its log file's tail, or, for subagents (which have no log
@@ -1081,5 +1108,33 @@ mod tests {
             ]
         })));
         assert!(matches!(&s.items[1], Item::Handoff { from_model, to_model, .. } if from_model == "claude/fable" && to_model == "agy/gemini-4-neon"));
+    }
+
+    #[test]
+    fn swarm_tree_keeps_workers_visible_and_polls_board_log() {
+        let mut s = CodeState::default();
+        s.apply(ev(json!({ "type": "task", "id": "swarm-board:s1", "agent": "swarm-board", "title": "Web OS", "tools": 4, "last": "#4 dev: ready", "status": "running", "output_file": "/tmp/board.jsonl" })));
+        s.apply(ev(json!({ "type": "task", "id": "w1", "agent": "shell", "title": "shell", "status": "running" })));
+        s.apply(ev(json!({ "type": "task", "id": "w2", "agent": "verifier", "title": "verifier", "status": "waiting" })));
+        s.apply(ev(json!({ "type": "task", "id": "w3", "agent": "docs", "title": "docs", "status": "completed" })));
+
+        // Coordinator is idle (`busy == false`), yet all swarm workers stay visible and `swarm-board` is separate.
+        let now = now_ms() + TREE_LINGER_MS + 1000;
+        let ids: Vec<&str> = s.tree_agents(now).iter().map(|t| t.ev.id.as_str()).collect();
+        assert_eq!(ids, vec!["w1", "w2", "w3"]);
+        assert_eq!(s.swarm_board().and_then(|b| b.ev.title.as_deref()), Some("Web OS"));
+
+        // Opening the board or a waiting worker keeps live log polling active.
+        s.open_task_log("swarm-board:s1");
+        assert_eq!(s.live_log_task().map(|t| t.ev.id.as_str()), Some("swarm-board:s1"));
+        s.open_task_log("w2");
+        assert_eq!(s.live_log_task().map(|t| t.ev.id.as_str()), Some("w2"));
+
+        // Once the board and all workers complete, the tree lingers then hides.
+        s.apply(ev(json!({ "type": "task", "id": "w1", "status": "completed" })));
+        s.apply(ev(json!({ "type": "task", "id": "w2", "status": "completed" })));
+        s.apply(ev(json!({ "type": "task", "id": "swarm-board:s1", "status": "completed" })));
+        let later = now_ms() + TREE_LINGER_MS + 1000;
+        assert!(s.tree_agents(later).is_empty());
     }
 }

@@ -462,20 +462,34 @@ impl CodeView {
         let mut out = div().flex().flex_col().gap_1p5();
         for t in tasks.into_iter().rev() {
             let running = t.ev.status.as_deref().is_none_or(|s| s == "running");
+            let is_board = t.is_swarm_board();
             let (icon, color) = match t.ev.status.as_deref() {
-                Some("done") => (IconName::CircleCheck, c.success),
+                Some("done" | "completed") => (IconName::CircleCheck, c.success),
+                Some("waiting") => (IconName::Clock, c.subtle),
                 Some("failed") => (IconName::CircleX, c.danger),
                 Some("stopped") => (IconName::CircleSlash, c.subtle),
                 _ => (IconName::LoaderCircle, c.accent),
             };
-            let title = t.ev.title.clone().or(t.ev.description.clone()).unwrap_or_else(|| t.ev.id.clone());
+            let title = if is_board {
+                match t.ev.title.as_deref().filter(|s| !s.is_empty() && *s != "Swarm") {
+                    Some(name) => format!("Swarm board · {name}"),
+                    None => "Swarm board".to_string(),
+                }
+            } else {
+                t.ev.title.clone().or(t.ev.description.clone()).unwrap_or_else(|| t.ev.id.clone())
+            };
             let id = t.ev.id.clone();
             let (id_stop, id_log) = (id.clone(), id.clone());
             let has_log = t.ev.output_file.is_some() || !t.recent_lines.is_empty();
-            let mut meta = vec![if t.ev.agent.is_some() { "subagent".to_string() } else { "shell".to_string() }];
-            if let Some(a) = &t.ev.agent { meta.push(a.clone()); }
+            let mut meta = vec![if is_board { "swarm board".to_string() } else if t.ev.agent.is_some() { "subagent".to_string() } else { "shell".to_string() }];
+            if !is_board {
+                if let Some(a) = &t.ev.agent { meta.push(a.clone()); }
+            }
             if let Some(m) = &t.ev.model { meta.push(model_name(m, None)); }
-            if let Some(n) = t.ev.tools { meta.push(format!("{n} tools")); }
+            if let Some(n) = t.ev.tools {
+                meta.push(if is_board { format!("{n} post{}", if n == 1 { "" } else { "s" }) } else { format!("{n} tools") });
+            }
+            if t.waiting() { meta.push("waiting".into()); }
             meta.push(elapsed(now.saturating_sub(t.started_at)));
             out = out.child(div().flex().flex_col().gap_0p5().rounded_md().border_1().border_color(c.edge).px_2().py_1p5()
                 .child(div().flex().items_center().gap_1p5().child(Icon::new(icon).size(px(13.0)).text_color(color)).child(div().flex_1().min_w_0().truncate().text_size(px(12.5)).text_color(c.fg).child(title))
@@ -500,24 +514,38 @@ impl CodeView {
         let asked = st.task_log.as_ref().is_some_and(|(i, ..)| *i == id);
         let mut out = div().flex().flex_col().gap_2();
         if let Some(t) = task {
+            let is_board = t.is_swarm_board();
             let (icon, color, label) = match t.ev.status.as_deref() {
-                Some("done") => (IconName::CircleCheck, c.success, "done"),
+                Some("done" | "completed") => (IconName::CircleCheck, c.success, "done"),
+                Some("waiting") => (IconName::Clock, c.subtle, "waiting"),
                 Some("failed") => (IconName::CircleX, c.danger, "failed"),
                 Some("stopped") => (IconName::CircleSlash, c.subtle, "stopped"),
                 _ => (IconName::LoaderCircle, c.accent, "running"),
             };
-            let title = t.ev.description.clone().or(t.ev.title.clone()).unwrap_or_else(|| id.clone());
+            let title = if is_board {
+                match t.ev.title.as_deref().filter(|s| !s.is_empty() && *s != "Swarm") {
+                    Some(name) => format!("Swarm board · {name}"),
+                    None => "Swarm board".to_string(),
+                }
+            } else {
+                t.ev.description.clone().or(t.ev.title.clone()).unwrap_or_else(|| id.clone())
+            };
             let mut meta = vec![label.to_string()];
-            match &t.ev.agent {
-                Some(a) => meta.push(format!("{a} · {} tools", t.ev.tools.unwrap_or(0))),
-                None => meta.push("background shell".into()),
+            if is_board {
+                let posts = t.ev.tools.unwrap_or(0);
+                meta.push(format!("{posts} post{}", if posts == 1 { "" } else { "s" }));
+            } else {
+                match &t.ev.agent {
+                    Some(a) => meta.push(format!("{a} · {} tools", t.ev.tools.unwrap_or(0))),
+                    None => meta.push("background shell".into()),
+                }
             }
             if let Some(m) = &t.ev.model { meta.push(model_name(m, None)); }
             meta.push(elapsed(t.elapsed_ms(now_ms())));
             if let (Some(code), false) = (t.ev.exit_code, t.running()) { meta.push(format!("exit {code}")); }
             out = out.child(div().flex().items_center().gap_1p5().child(Icon::new(icon).size(px(13.0)).text_color(color)).child(div().flex_1().min_w_0().truncate().text_size(px(12.5)).text_color(c.fg).child(title)))
                 .child(dim(c, meta.join(" · ")));
-            if t.ev.agent.is_some() && !t.recent_lines.is_empty() {
+            if !is_board && t.ev.agent.is_some() && !t.recent_lines.is_empty() {
                 let mut steps = div().flex().flex_col().gap_0p5().font_family(mono.clone()).text_size(px(11.0));
                 let n = t.recent_lines.len();
                 for (i, l) in t.recent_lines.iter().enumerate() {
@@ -530,7 +558,7 @@ impl CodeView {
         if let Some(f) = file { out = out.child(dim(c, f)); }
         match output {
             Some(text) => out.child(div().rounded_md().border_1().border_color(c.edge).bg(c.app).p_2().font_family(mono).text_size(px(11.5)).text_color(c.muted).whitespace_normal().child(text)),
-            None if task.is_some_and(|t| t.running()) => out.child(dim(c, if task.is_some_and(|t| t.ev.agent.is_some()) { "Its result shows here when it finishes." } else if asked { "No output yet." } else { "Loading…" })),
+            None if task.is_some_and(|t| t.active()) => out.child(dim(c, if task.is_some_and(|t| t.ev.agent.is_some() && t.ev.output_file.is_none()) { "Its result shows here when it finishes." } else if asked { "No output yet." } else { "Loading…" })),
             None => out.child(dim(c, "No output.")),
         }
         .into_any_element()

@@ -404,7 +404,7 @@ pub const COMMANDS: [(&str, &str); 24] = [
     ("/model", "Switch model (ChatGPT, Claude, Codex, Muse)"),
     ("/subagent-model", "Model subagents run on while the main model orchestrates"),
     ("/effort", "Set reasoning effort"),
-    ("/ultracode", "Toggle Ultracode multi-agent mode (Claude & Codex)"),
+    ("/ultracode", "Toggle Ultracode multi-agent mode (Claude, Codex & Gemini)"),
     ("/mode", "Permission mode: ask, auto-edit, plan, yolo-plan, yolo"),
     ("/new", "Start a new conversation"),
     ("/resume", "Resume a past session"),

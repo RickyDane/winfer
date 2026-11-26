@@ -797,12 +797,13 @@ impl CodeView {
         let cooling = !on && self.picker.ultra_flash.is_some_and(|(at, dir)| !dir && at.elapsed() < Duration::from_millis(ULTRA_COOL_MS));
         let violet = theme::hex("#a855f7");
         let cyan = theme::hex("#38bdf8");
-        let is_codex = backend == "codex";
-        let subtitle = match (is_codex, compact) {
-            (true, true) => "Multi-agent · Ultra",
-            (true, false) => "Multi-agent v2 · Ultra effort",
-            (false, true) => "Dynamic workflows",
-            (false, false) => "Dynamic multi-agent workflows",
+        let subtitle = match (backend, compact) {
+            ("codex", true) => "Multi-agent · Ultra",
+            ("codex", false) => "Multi-agent v2 · Ultra effort",
+            ("agy", true) => "Agent swarm (/swarm)",
+            ("agy", false) => "Multi-agent swarm (/swarm)",
+            (_, true) => "Dynamic workflows",
+            (_, false) => "Dynamic multi-agent workflows",
         };
         let title_col = if on {
             if c.light { theme::hex("#2e1065") } else { gpui_kit::white() }
@@ -1154,6 +1155,8 @@ impl CodeView {
             "Ultracode boosts Codex to Ultra reasoning + multi-agent v2"
         } else if ultra_on && ultra_backend == Some("claude") {
             "Ultracode runs dynamic multi-agent workflows alongside your effort"
+        } else if ultra_on && ultra_backend == Some("agy") {
+            "Ultracode runs Antigravity's /swarm multi-agent coordinator alongside your effort"
         } else {
             effort_hint(&effort)
         };

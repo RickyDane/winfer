@@ -185,6 +185,10 @@ fn tool_icon(name: &str) -> IconName {
         "Bash" => IconName::SquareTerminal,
         "Edit" | "Write" => IconName::FilePen,
         "Agent" => IconName::Bot,
+        "Swarm" => IconName::Network,
+        "Swarm post" | "Swarm board" => IconName::MessageSquareText,
+        "Swarm wait" => IconName::Clock,
+        "Workflow" => IconName::Workflow,
         "WebFetch" | "WebSearch" => IconName::Globe,
         _ => IconName::Wrench,
     }
@@ -1136,7 +1140,9 @@ impl CodeView {
     /// Something on screen counts time: a running turn, a subagent still running in the background, or dictation.
     fn live(&self, cx: &App) -> bool {
         let st = &self.model.read(cx).state;
-        st.busy || st.tasks.iter().any(|t| t.ev.agent.is_some() && t.running()) || st.live_log_task().is_some() || self.dictation.is_some() || !st.tree_agents(now_ms()).is_empty()
+        let tree = st.tree_agents(now_ms());
+        let tree_needs_tick = !tree.is_empty() && !tree.iter().all(|t| t.waiting());
+        st.busy || st.tasks.iter().any(|t| t.ev.agent.is_some() && t.running()) || st.live_log_task().is_some() || self.dictation.is_some() || tree_needs_tick
     }
 
     /// Asks again for the tail of a running task whose output sheet is open (called each tick).
@@ -2702,29 +2708,71 @@ impl CodeView {
         Some(dock_inset(div().mb_2().rounded_xl().bg(c.raised).overflow_hidden().child(row), false).into_any_element())
     }
 
-    /// The live subagent tree above the composer: the main agent and the subagents it started, each
-    /// with its status, type, model, tool count and time. A row opens its output; its chevron shows
-    /// what it did last. Hidden once no subagent runs and the turn that started them is over.
+    /// The live subagent / swarm tree above the composer: the main agent (or swarm coordinator)
+    /// and the subagents/workers it started, each with its status, type/name, model, tool count
+    /// and time. A row opens its live output; its chevron shows what it did last.
     fn render_agent_tree(&self, c: Colors, mono: SharedString, cx: &mut Context<Self>) -> Option<AnyElement> {
         let st = &self.model.read(cx).state;
         let now = now_ms();
         let agents = st.tree_agents(now);
+        let board = st.swarm_board();
         if agents.is_empty() {
             return None;
         }
+        let is_swarm = board.is_some();
         let running = agents.iter().filter(|t| t.running()).count();
+        let waiting = agents.iter().filter(|t| t.waiting()).count();
         let failed = agents.iter().filter(|t| t.ev.status.as_deref() == Some("failed")).count();
-        let finished = agents.len() - running - failed;
+        let stopped = agents.iter().filter(|t| t.ev.status.as_deref() == Some("stopped")).count();
+        let finished = agents.len().saturating_sub(running + waiting + failed + stopped);
         let open = !self.flipped.contains("agent-tree");
         let mut counts = Vec::new();
-        if running > 0 { counts.push(format!("{running} running")); }
+        if running > 0 { counts.push(format!("{running} {}", if is_swarm { "working" } else { "running" })); }
+        if waiting > 0 { counts.push(format!("{waiting} waiting")); }
         if finished > 0 { counts.push(format!("{finished} done")); }
+        if stopped > 0 { counts.push(format!("{stopped} stopped")); }
         if failed > 0 { counts.push(format!("{failed} failed")); }
+        let heading = match board.and_then(|b| b.ev.title.as_deref()).filter(|t| !t.is_empty() && *t != "Swarm") {
+            Some(title) => format!("Swarm · {title}"),
+            None if is_swarm => "Swarm".to_string(),
+            None => "Subagents".to_string(),
+        };
+        let board_btn = board.map(|b| {
+            let bid = b.ev.id.clone();
+            let posts = b.ev.tools.unwrap_or(0);
+            let label = if posts > 0 { format!("Board · {posts}") } else { "Board".to_string() };
+            div()
+                .id("cw-swarm-board-btn")
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .gap_1()
+                .h(px(20.0))
+                .px_1p5()
+                .rounded_md()
+                .border_1()
+                .border_color(c.edge)
+                .bg(c.hover)
+                .text_size(px(11.0))
+                .text_color(c.fg)
+                .cursor_pointer()
+                .hover(move |d| d.border_color(c.accent).text_color(c.accent))
+                .tooltip(tip("Open live swarm message board"))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    let id = bid.clone();
+                    this.model.update(cx, |m, cx| { m.state.open_task_log(&id); m.flush(cx); cx.notify(); });
+                }))
+                .child(Icon::new(IconName::MessageSquareText).size(px(11.0)).text_color(c.accent))
+                .child(label)
+        });
         let head = div().id("cw-agents-head").flex().items_center().gap_2().h(px(34.0)).px_3().cursor_pointer().text_size(px(12.0)).text_color(c.muted)
             .on_click(cx.listener(move |this, _, _, cx| this.toggle("agent-tree", open, cx)))
-            .child(Icon::new(IconName::Workflow).size(px(13.0)).text_color(c.accent))
-            .child(div().text_color(c.fg).child("Subagents"))
+            .child(Icon::new(if is_swarm { IconName::Network } else { IconName::Workflow }).size(px(13.0)).text_color(c.accent))
+            .child(div().max_w(px(220.0)).truncate().text_color(c.fg).child(heading))
             .child(div().flex_1().min_w_0().truncate().text_color(c.subtle).child(counts.join(" · ")))
+            .children(board_btn)
             .child(Icon::new(if open { IconName::ChevronDown } else { IconName::ChevronUp }).size(px(12.0)).text_color(c.subtle));
         if !open {
             return Some(dock_inset(div().mb_2().rounded_xl().bg(c.raised).overflow_hidden().child(head), false).into_any_element());
@@ -2732,11 +2780,37 @@ impl CodeView {
         let branch = |last: bool| div().w(px(14.0)).flex_shrink_0().font_family(mono.clone()).text_color(alpha(c.subtle, 0.7)).child(if last { "└" } else { "├" });
         let rail = |last: bool| div().w(px(14.0)).flex_shrink_0().font_family(mono.clone()).text_color(alpha(c.subtle, 0.7)).child(if last { " " } else { "│" });
         let main_model = model_name(&st.model, None);
-        let mut list = div().flex().flex_col().px_3().pb_2p5().text_size(px(12.0))
-            .child(div().flex().items_center().gap_1p5().h(px(22.0))
-                .child(Icon::new(IconName::Bot).size(px(13.0)).text_color(c.accent))
-                .child(div().text_color(c.fg).child("Main agent"))
-                .child(div().text_color(c.subtle).child(main_model)));
+        let mut list = div().flex().flex_col().px_3().pb_2p5().text_size(px(12.0));
+        if let Some(b) = board {
+            if let Some(last_post) = b.ev.last.clone().filter(|s| !s.is_empty()) {
+                let bid = b.ev.id.clone();
+                list = list.child(
+                    div()
+                        .id("cw-swarm-last-post")
+                        .flex()
+                        .items_center()
+                        .gap_1p5()
+                        .h(px(22.0))
+                        .mb_1()
+                        .px_2()
+                        .rounded_md()
+                        .bg(alpha(c.hover, 0.75))
+                        .cursor_pointer()
+                        .hover(move |d| d.bg(c.hover))
+                        .tooltip(tip("Open live swarm message board"))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            let id = bid.clone();
+                            this.model.update(cx, |m, cx| { m.state.open_task_log(&id); m.flush(cx); cx.notify(); });
+                        }))
+                        .child(Icon::new(IconName::MessageSquareText).size(px(11.0)).text_color(c.accent))
+                        .child(div().flex_1().min_w_0().truncate().font_family(mono.clone()).text_size(px(11.0)).text_color(c.muted).child(last_post)),
+                );
+            }
+        }
+        list = list.child(div().flex().items_center().gap_1p5().h(px(22.0))
+            .child(Icon::new(IconName::Bot).size(px(13.0)).text_color(c.accent))
+            .child(div().text_color(c.fg).child(if is_swarm { "Coordinator" } else { "Main agent" }))
+            .child(div().text_color(c.subtle).child(main_model)));
         let n = agents.len();
         for (i, t) in agents.iter().enumerate() {
             let last = i + 1 == n;
@@ -2744,9 +2818,11 @@ impl CodeView {
             let key = format!("agt-{id}");
             let expanded = self.flipped.contains(&key);
             let live = t.running();
-            // Only a task that really runs spins; any other status (even one we don't know) is finished.
+            let waiting = t.waiting();
+            // Only a task that really runs spins; waiting workers show a calm clock; any other status is finished.
             let glyph: AnyElement = match t.ev.status.as_deref() {
                 _ if live => spinner(c.accent, 13.0, SharedString::from(format!("agt-sp-{id}"))).into_any_element(),
+                Some("waiting") => Icon::new(IconName::Clock).size(px(13.0)).text_color(c.subtle).into_any_element(),
                 Some("failed") => Icon::new(IconName::CircleX).size(px(13.0)).text_color(c.danger).into_any_element(),
                 Some("stopped") => Icon::new(IconName::CircleSlash).size(px(13.0)).text_color(c.subtle).into_any_element(),
                 _ => Icon::new(IconName::CircleCheck).size(px(13.0)).text_color(c.success).into_any_element(),
@@ -2754,6 +2830,7 @@ impl CodeView {
             let kind = t.ev.agent.clone().unwrap_or_default();
             let title = t.ev.description.clone().or(t.ev.title.clone()).unwrap_or_else(|| kind.clone());
             let mut meta = Vec::new();
+            if waiting { meta.push("waiting".to_string()); }
             if let Some(m) = &t.ev.model { meta.push(model_name(m, None)); }
             if let Some(n) = t.ev.tools { meta.push(format!("{n} tool{}", if n == 1 { "" } else { "s" })); }
             meta.push(elapsed(t.elapsed_ms(now)));
@@ -2770,7 +2847,7 @@ impl CodeView {
                 .child(div().flex_shrink_0().text_color(if live { c.fg } else { c.muted }).child(kind))
                 .child(div().flex_1().min_w_0().truncate().text_color(c.subtle).child(title))
                 .child(div().flex_shrink_0().font_family(mono.clone()).text_size(px(11.0)).text_color(c.subtle).child(meta.join(" · ")))
-                .when(live, |d| d.child(div().id(SharedString::from(format!("agt-stop-{id}"))).flex_shrink_0().p_0p5().rounded_md().hover(move |d| d.bg(alpha(c.danger, 0.14)))
+                .when(live && !is_swarm, |d| d.child(div().id(SharedString::from(format!("agt-stop-{id}"))).flex_shrink_0().p_0p5().rounded_md().hover(move |d| d.bg(alpha(c.danger, 0.14)))
                     .tooltip(tip("Stop this subagent"))
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(move |this, _, _, cx| { cx.stop_propagation(); this.send(Cmd::StopTask(id_stop.clone()), cx); }))
@@ -2781,8 +2858,14 @@ impl CodeView {
                     .on_click(cx.listener(move |this, _, _, cx| { cx.stop_propagation(); this.toggle(&key_toggle, expanded, cx); }))
                     .child(Icon::new(if expanded { IconName::ChevronDown } else { IconName::ChevronRight }).size(px(12.0)).text_color(c.subtle))));
             list = list.child(row);
-            // Collapsed, a running subagent still shows the step it's on; expanded, its last few.
-            let lines: Vec<String> = if expanded { t.recent_lines.clone() } else if live { t.recent_lines.last().cloned().into_iter().collect() } else { Vec::new() };
+            // Collapsed, a running subagent (or waiting swarm worker) shows the step it's on; expanded, its last few.
+            let lines: Vec<String> = if expanded {
+                t.recent_lines.clone()
+            } else if live || (is_swarm && waiting) {
+                t.recent_lines.last().cloned().into_iter().collect()
+            } else {
+                Vec::new()
+            };
             let k = lines.len();
             for (j, line) in lines.into_iter().enumerate() {
                 let current = live && j + 1 == k;
@@ -3047,10 +3130,10 @@ impl CodeView {
                 .on_click(cx.listener(move |this, _, window, cx| this.pick_model(&target, window, cx)))
         });
         let effort_tip = if ultra_on {
-            if model_backend == Some("codex") {
-                "Ultracode ON · Multi-agent v2 + Ultra reasoning".to_string()
-            } else {
-                format!("Reasoning effort: {} · Ultracode ON (Dynamic workflows)", super::code_pickers::effort_label(&effort_id))
+            match model_backend {
+                Some("codex") => "Ultracode ON · Multi-agent v2 + Ultra reasoning".to_string(),
+                Some("agy") => format!("Reasoning effort: {} · Ultracode ON (Agent swarm)", super::code_pickers::effort_label(&effort_id)),
+                _ => format!("Reasoning effort: {} · Ultracode ON (Dynamic workflows)", super::code_pickers::effort_label(&effort_id)),
             }
         } else {
             format!("Reasoning effort: {}", super::code_pickers::effort_label(&effort_id))

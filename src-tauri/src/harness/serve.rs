@@ -639,8 +639,7 @@ impl Serve {
                 let text = self
                     .task_files
                     .get(&id)
-                    .and_then(|f| super::tui::app::read_tail(std::path::Path::new(f), super::tui::app::TASK_LOG_MAX).ok())
-                    .map(|raw| super::tui::app::clean_log(&raw));
+                    .and_then(|f| read_task_log(std::path::Path::new(f)));
                 out(&json!({ "type": "task_log", "id": id, "text": text, "file": self.task_files.get(&id) }));
             }
             "btw" => self.btw(s("id"), s("question")),
@@ -748,6 +747,19 @@ fn save_images(v: &Value) -> Vec<PathBuf> {
             Some(path)
         })
         .collect()
+}
+
+/// Reads a background task's output tail: Antigravity's `board.jsonl` and worker
+/// `transcript.jsonl` files are formatted into readable logs; shell logs are cleaned of ANSI.
+fn read_task_log(path: &std::path::Path) -> Option<String> {
+    let raw = super::tui::app::read_tail(path, super::tui::app::TASK_LOG_MAX).ok()?;
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    let formatted = match name {
+        "board.jsonl" => backend::agy::format_board_log(&raw),
+        "transcript.jsonl" => backend::agy::format_transcript_log(&raw),
+        _ => super::tui::app::clean_log(&raw),
+    };
+    Some(formatted)
 }
 
 /// Raw mode on the PTY: no echo of our own input, and no canonical-mode line limit.

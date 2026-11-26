@@ -13,7 +13,7 @@ pub struct Config {
     /// `backend/model`; empty picks the first backend that's available.
     pub model: String,
     pub effort: Option<String>,
-    /// Ultracode multi-agent mode (Claude Code's `ultracode` flag, Codex's multi-agent + ultra effort).
+    /// Ultracode multi-agent mode (Claude Code's `ultracode` flag, Codex's multi-agent + ultra effort, Antigravity's `/swarm`).
     pub ultracode: bool,
     pub mode: Mode,
     /// Extra MCP servers for every backend: `{ name: { command, args, env } }`.

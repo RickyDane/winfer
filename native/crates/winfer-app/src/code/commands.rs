@@ -71,7 +71,7 @@ pub fn run_command(text: &str, s: &mut CodeState) -> Option<Effect> {
                 if super::names::supports_ultracode(&s.model) {
                     s.send(Cmd::SetUltracode(next));
                 } else {
-                    s.notice("Ultracode is available for Claude Code and Codex models.");
+                    s.notice("Ultracode is available for Claude Code, Codex, and Antigravity models.");
                 }
             } else {
                 s.send(Cmd::SetEffort(if arg == "default" { None } else { Some(arg) }));
@@ -79,7 +79,7 @@ pub fn run_command(text: &str, s: &mut CodeState) -> Option<Effect> {
         }
         "/ultracode" => {
             if !super::names::supports_ultracode(&s.model) {
-                s.notice("Ultracode is available for Claude Code and Codex models.");
+                s.notice("Ultracode is available for Claude Code, Codex, and Antigravity models.");
             } else {
                 let next = match arg.as_str() {
                     "on" | "true" | "1" => true,
@@ -197,6 +197,11 @@ mod tests {
         assert!(!s.ultracode);
         s.model = "codex/gpt-6.1-sol".into();
         run_command("/ultracode", &mut s);
+        assert!(s.ultracode);
+        s.model = "agy/gemini-4-neon".into();
+        run_command("/ultracode off", &mut s);
+        assert!(!s.ultracode);
+        run_command("/ultracode on", &mut s);
         assert!(s.ultracode);
         run_command("/submodel claude/haiku low", &mut s);
         assert_eq!((s.sub_model.as_deref(), s.sub_effort.as_deref()), (Some("haiku"), Some("low")));

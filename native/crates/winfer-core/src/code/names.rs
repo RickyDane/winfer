@@ -29,9 +29,9 @@ pub fn is_spec(s: &str) -> bool {
     backend_of(s).is_some()
 }
 
-/// Whether a model spec belongs to a backend that supports Ultracode (Claude Code or Codex).
+/// Whether a model spec belongs to a backend that supports Ultracode (Claude Code, Codex, or Antigravity).
 pub fn supports_ultracode(spec: &str) -> bool {
-    matches!(backend_of(spec).map(|(id, _)| id), Some("claude" | "codex"))
+    matches!(backend_of(spec).map(|(id, _)| id), Some("claude" | "codex" | "agy"))
 }
 
 fn tail(spec: &str) -> &str {
