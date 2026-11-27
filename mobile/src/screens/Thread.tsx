@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import type { DesktopClient } from "../client";
-import { ago, firstMessages, go, haptic, useClient, useTick, vtName } from "../hooks";
+import { ago, firstMessages, fromTask, go, haptic, useClient, useTick, vtName } from "../hooks";
 import { isFreeText, type BgItem, type Message, type Pane, type RequestOption } from "../protocol";
 import { Composer, Pill, PillIcon } from "./Composer";
 import { activeIsServer } from "../pairing";
@@ -541,7 +541,7 @@ export function Thread({ client, paneId }: { client: DesktopClient; paneId: stri
   // Back leads to the tab that lists this pane, also after it's gone.
   const fromHome = useRef(false);
   if (pane) fromHome.current = !!pane.home;
-  const back = () => go(fromHome.current ? "/home" : "/");
+  const back = () => go(fromHome.current || fromTask(paneId) ? "/home" : "/");
 
   const closeSession = () => {
     if (!pane) return;

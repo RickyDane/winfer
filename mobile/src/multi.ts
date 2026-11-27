@@ -5,6 +5,8 @@ import type { DesktopMsg, Pane, PhoneMsg, Workspace } from "./protocol";
 const SEP = "~";
 /** A workspace's side terminal is the pane `side-terminal-<workspace id>`: its machine goes on the workspace id. */
 const SIDE = "side-terminal-";
+/** A machine's pane or workspace id as the merged view names it. */
+export const qualify = (machine: string, id: string) => machine + SEP + id;
 
 export interface Member {
   /** The pairing's device id. */
@@ -110,7 +112,7 @@ export class MultiClient implements DesktopClient {
     const threads: Record<string, Thread> = {};
     for (const { m, s } of states) {
       const name = this.nameOf(m);
-      const q = (id: string) => m.id + SEP + id;
+      const q = (id: string) => qualify(m.id, id);
       const was = this.memo.get(m.id);
       const same = was?.name === name;
       const memo = {
@@ -119,7 +121,15 @@ export class MultiClient implements DesktopClient {
         panes:
           same && was.src.panes === s.panes
             ? was.panes
-            : s.panes.map((p) => ({ ...p, id: q(p.id), workspaceId: p.workspaceId && q(p.workspaceId), machine: m.id, machineName: name })),
+            : s.panes.map((p) => ({
+                ...p,
+                id: q(p.id),
+                workspaceId: p.workspaceId && q(p.workspaceId),
+                machine: m.id,
+                machineName: name,
+                // `remotePane` stays bare: it's another machine's pane (see `taskAgents`).
+                ...(p.tasks && { tasks: p.tasks.map((t) => ({ ...t, id: q(t.id), panes: t.panes.map(q) })) }),
+              })),
         ws: same && was.src.workspaces === s.workspaces ? was.ws : s.workspaces.map((w) => ({ ...w, id: q(w.id), machine: m.id, machineName: name })),
         threads: was?.src.threads === s.threads ? was.threads : Object.fromEntries(Object.entries(s.threads).map(([k, v]) => [q(k), v])),
       };

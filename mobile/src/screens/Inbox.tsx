@@ -1,11 +1,12 @@
 import { createPortal } from "react-dom";
 import { useCallback, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { DesktopClient } from "../client";
-import { ago, go, haptic, useClient, useTick, vtName } from "../hooks";
+import { ago, go, haptic, setFromTask, useClient, useTick, vtName } from "../hooks";
 import { isFreeText, sortPanes, type AgentStatus, type Pane, type RequestOption } from "../protocol";
 import { Avatar, ConnNotice, Icon, STATUS_LABEL, linkState, providerInfo } from "./common";
 import { activeIsServer } from "../pairing";
 import { forMachine } from "../multi";
+import { HomeTasks } from "./HomeTasks";
 import { matchesPane } from "./paneSearch";
 import { Segmented, SwipeCard, useFlip, usePullToRefresh } from "./widgets";
 
@@ -100,7 +101,10 @@ export function Inbox({ client, home = false }: { client: DesktopClient; home?: 
     void client.request({ t: "choose", paneId: p.id, option: o.n }).catch(() => {});
   };
 
-  const open = (p: Pane) => go(`/pane/${encodeURIComponent(p.id)}`);
+  const open = (p: Pane) => {
+    setFromTask(null);
+    go(`/pane/${encodeURIComponent(p.id)}`);
+  };
   const canStart = state.workspaces.length > 0 && state.providers.length > 0;
   let i = 0;
   const card = (p: Pane) => {
@@ -297,6 +301,7 @@ export function Inbox({ client, home = false }: { client: DesktopClient; home?: 
               <p className="sub">{agents.length ? (found.length ? "Try another filter." : "Try another search.") : home ? "Set up WinferCode in winfer on your computer and Home appears here, live." : canStart ? "Tap + below, or start one in winfer; it appears here live." : "Start one in winfer and it appears here, live."}</p>
             </div>
           )}
+          {home && <HomeTasks homes={shown} panes={state.panes} />}
         </div>
       </div>
       {menu &&

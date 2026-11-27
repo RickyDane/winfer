@@ -182,6 +182,29 @@ textarea, input, .md, .ask-code, .ask-q p, .turn-user p, .screen-text, .tool-bod
 .group-list[data-kind="rows"] .swipe + .swipe { border-top: 1px solid var(--border); }
 .group-list[data-kind="cards"] { display: flex; flex-direction: column; gap: 10px; }
 
+/* Home's tasks, as the desktop's Home panel shows them. */
+.task-list { display: flex; flex-direction: column; gap: 8px; }
+.task { display: flex; flex-direction: column; gap: 5px; width: 100%; min-width: 0; padding: 10px 12px; border: 1px solid var(--edge); border-radius: var(--r-xl); background: var(--raised); }
+.task:active { background: var(--hover); }
+.task[data-done] { opacity: 0.6; }
+.task-top { display: flex; align-items: center; gap: 8px; }
+.task-top .time { margin-left: auto; }
+.task-n { font-size: 11.5px; font-weight: 600; color: var(--muted); }
+.task-stage { --tone: var(--subtle); padding: 1px 7px; border-radius: 999px; background: color-mix(in srgb, var(--tone) 14%, transparent); color: var(--tone); font-size: 11px; font-weight: 600; }
+.task-stage[data-stage="planning"], .task-stage[data-stage="checking"] { --tone: var(--accent); }
+.task-stage[data-stage="running"], .task-stage[data-stage="ready"] { --tone: var(--ok); }
+.task-stage[data-stage="needs-you"] { --tone: var(--warn); }
+.task-stage[data-stage="failed"] { --tone: var(--danger); }
+.task-goal, .task-summary { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
+.task-goal { font-size: 13.5px; line-height: 1.4; }
+.task-summary { font-size: 12px; line-height: 1.45; color: var(--muted); }
+.task .card-meta { margin-top: 0; }
+.task-detail { max-height: 40dvh; overflow-y: auto; padding: 0 14px 10px; font-size: 13.5px; line-height: 1.5; overflow-wrap: anywhere; }
+.task-detail p { margin: 0 0 8px; }
+.task-detail .sub { font-size: 12.5px; color: var(--subtle); }
+.menu-item .avatar svg { color: inherit; }
+.menu-item .task-agent { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
 .swipe { position: relative; animation: rise 0.35s var(--ease) both; animation-delay: calc(var(--i) * 30ms); }
 .group-list[data-kind="rows"] .swipe { overflow: hidden; }
 .swipe-under {

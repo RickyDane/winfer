@@ -46,6 +46,27 @@ describe("MultiClient", () => {
     expect(forMachine(s, "B").providers.map((p) => p.id)).toEqual(["box"]);
   });
 
+  it("keeps each desktop's Home tasks apart", () => {
+    const { a, b, multi } = setup();
+    const home = (goal: string): Pane => ({
+      ...pane("winfer-conductor"),
+      workspaceId: "",
+      home: true,
+      tasks: [{ id: "task-1", number: 1, goal, stage: "running", workspace: "repo", summary: "", mode: "light", panes: ["p1"], machine: null, remotePane: "p9", updatedAt: 0 }],
+    });
+    a.feed(true, [home("on the mac"), pane("p1")]);
+    b.feed(true, [home("on the box"), pane("p1")]);
+    const homes = () => multi.getState().panes.filter((p) => p.home);
+    expect(homes().map((p) => p.tasks?.map((t) => [t.id, t.goal, t.panes, t.remotePane]))).toEqual([
+      [["A~task-1", "on the mac", ["A~p1"], "p9"]],
+      [["B~task-1", "on the box", ["B~p1"], "p9"]],
+    ]);
+    // A pushed change replaces that desktop's list; an older desktop's Home has none.
+    a.emit({ t: "status", pane: { ...home("renamed"), tasks: [] }, silent: true });
+    b.emit({ t: "status", pane: { ...pane("winfer-conductor"), home: true }, silent: true });
+    expect(homes().map((p) => p.tasks)).toEqual([[], undefined]);
+  });
+
   it("sends each request to its machine with the machine's own id, and names replies back", async () => {
     const { a, b, multi } = setup();
     await multi.request({ t: "approve", paneId: "B~p1" });

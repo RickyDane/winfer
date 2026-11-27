@@ -1,12 +1,53 @@
 // `?mock=1`: an in-memory desktop so the UI runs without relay or winfer.
 import { BaseClient } from "./client";
 import { MockPanel } from "./mockPanel";
-import type { DesktopMsg, Message, ModelOption, Pane, PhoneMsg, Provider, Workspace } from "./protocol";
+import type { DesktopMsg, HomeTask, Message, ModelOption, Pane, PhoneMsg, Provider, Workspace } from "./protocol";
 
 const now = Date.now();
 const min = 60_000;
 
 const LEVELS = ["default", "low", "medium", "high", "xhigh", "max"];
+const task = (number: number, stage: HomeTask["stage"], goal: string, more: Partial<HomeTask> = {}): HomeTask => ({
+  id: `task-${number}`,
+  number,
+  goal,
+  stage,
+  workspace: "winfer",
+  summary: "",
+  mode: "light",
+  panes: [],
+  machine: null,
+  remotePane: null,
+  updatedAt: now - number * 4 * min,
+  ...more,
+});
+
+/** In the desktop's order: open ones first (newest first), then the recently done. */
+const TASKS: HomeTask[] = [
+  task(9, "needs-you", "Decide how database migrations roll back", { workspace: "api", panes: ["p-q"], summary: "Waiting for your pick: reversible or forward-only.", updatedAt: now - 3 * min }),
+  task(8, "running", "Build the relay worker with Durable Objects", { workspace: "winfer-mobile-app", panes: ["p-relay"], updatedAt: now - 5 * min }),
+  task(7, "checking", "Refactor auth and cover it with tests", { mode: "fork", panes: ["p-auth", "p-wc"], summary: "Reviewer is running the auth suite.", updatedAt: now - 9 * min }),
+  task(6, "failed", "Draft the release notes on the build server", { mode: "remote", workspace: "mock-server/winfer", machine: "Mock server 1", remotePane: "p-remote", summary: "The changelog script exited with an error.", updatedAt: now - 14 * min }),
+  task(5, "planning", "Plan the offline cache for the phone app, including how stale transcripts are shown and when they're dropped", { mode: "fork", workspace: "winfer-mobile-app", updatedAt: now - 18 * min }),
+  task(4, "ready", "Document phone pairing in the README", { panes: ["p-docs"], summary: "README updated; ready to merge.", updatedAt: now - 25 * min }),
+  task(3, "running", "Run the nightly benchmarks", { mode: "remote", workspace: "mac-mini/bench", machine: "mac-mini", updatedAt: now - 40 * min }),
+  task(2, "merged", "Fix the tab bar on narrow phones", { summary: "Merged into main.", updatedAt: now - 120 * min }),
+  task(1, "cancelled", "Try a different icon set", { updatedAt: now - 26 * 60 * min }),
+];
+
+const REMOTE_PANE: Pane = {
+  id: "p-remote",
+  workspaceId: "w-winfer",
+  title: "Task 6 · release notes",
+  workspace: "winfer",
+  provider: "winfer",
+  status: "error",
+  message: "The changelog script exited with an error.",
+  updatedAt: now - 14 * min,
+  request: null,
+  reply: null,
+};
+
 const PANES: Pane[] = [
   {
     id: "p-home",
@@ -15,11 +56,12 @@ const PANES: Pane[] = [
     workspace: "All workspaces",
     provider: "winfer",
     status: "needs-input",
-    message: "Which of the two open tasks should go first?",
+    message: "Which of the open tasks should go first?",
     updatedAt: now - 2 * min,
     request: null,
     reply: null,
     home: true,
+    tasks: TASKS,
   },
   {
     id: "p-auth",
@@ -225,7 +267,7 @@ const THREADS: Record<string, Message[]> = {
 
 export class MockClient extends BaseClient {
   readonly name: string;
-  private panes = PANES.map((p) => ({ ...p }));
+  private panes: Pane[];
   private threads: Record<string, Message[]> = structuredClone(THREADS);
   private n = 100;
   private panel = new MockPanel((msg) => this.apply(msg));
@@ -234,12 +276,14 @@ export class MockClient extends BaseClient {
     this.panel.handle(msg);
   }
 
-  constructor(name = "Mock desktop") {
+  /** `server`: a winferd machine, which has no Home but runs a desktop's remote task. */
+  constructor(name = "Mock desktop", server = false) {
     super();
     this.name = name;
+    this.panes = (server ? [...PANES.filter((p) => !p.home), REMOTE_PANE] : PANES).map((p) => ({ ...p }));
     setTimeout(() => {
       this.set({ socket: "open", desktopOnline: true });
-      this.apply({ t: "welcome", desktop: this.name, version: "mock", vapidPublicKey: "" });
+      this.apply({ t: "welcome", desktop: this.name, version: "mock", vapidPublicKey: "", server });
       this.apply(this.mirror());
     }, 150);
     // A live event so the island, FLIP re-order and ring animate in the demo.

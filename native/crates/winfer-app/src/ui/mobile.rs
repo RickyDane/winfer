@@ -4,6 +4,7 @@
 
 use super::commands::{Command, PaneRef};
 use super::dialogs::ModelInfo as ProviderModelInfo;
+use super::home::HomeTask;
 use super::welcome::{HARNESS_BACKENDS, backend_default_efforts};
 use crate::code::protocol::{Cmd, Decision};
 use crate::code::session::CodeModel;
@@ -71,6 +72,15 @@ pub(super) fn ordered(ws: &Workspace) -> Vec<&Pane> {
     panes.extend(ws.panes.iter().filter(|p| !tiled.contains(&p.id)));
     panes.retain(|p| p.remote.is_none());
     panes
+}
+
+/// A Home task as the phones get it. `panes`: its agents still here; `machine`: the paired machine's name.
+fn task_json(t: &HomeTask, panes: Vec<&str>, machine: Option<String>) -> Value {
+    json!({
+        "id": t.id, "number": t.number, "goal": t.goal.chars().take(400).collect::<String>(), "stage": t.stage,
+        "workspace": t.workspace, "summary": t.summary, "mode": t.mode, "panes": panes,
+        "machine": machine, "remotePane": t.remote_pane, "updatedAt": t.updated * 1000,
+    })
 }
 
 fn status_text(status: AgentStatus) -> &'static str {
@@ -340,15 +350,34 @@ impl Root {
         };
         let open = self.home.tasks.iter().filter(|t| t.stage.open()).count();
         let message = self.orchestrator_step(cx).or_else(|| (open > 0).then(|| format!("{open} open task{}", if open == 1 { "" } else { "s" })));
-        Some(json!({
+        let mut snap = json!({
             "id": CONDUCTOR, "title": "Home", "workspace": "All workspaces", "workspaceId": "", "archived": false, "cwd": "",
             "provider": "winfer", "status": status, "message": message, "updatedAt": self.home.touched_ms, "request": null, "reply": reply,
             "config": null, "background": [], "home": true,
-        }))
+        });
+        // Not before the saved ones are read: an empty list would say there are none.
+        if self.home.loaded {
+            let tasks: Vec<Value> = super::home::listed_tasks(&self.home.tasks)
+                .into_iter()
+                .map(|t| {
+                    let panes = t.panes.iter().map(String::as_str).filter(|p| s.pane(p).is_some_and(|p| p.remote.is_none())).collect();
+                    let machine = t.machine.as_deref().map(|peer| crate::connect::peer_name(peer).unwrap_or_else(|| "another machine".into()));
+                    task_json(t, panes, machine)
+                })
+                .collect();
+            snap["tasks"] = json!(tasks);
+        }
+        Some(snap)
     }
 
     /// Home's orchestrator changed: tell the phones (its status, and its thread to those reading it).
     pub(super) fn mobile_home_changed(&mut self, cx: &mut Context<Self>) {
+        self.mobile_home_status(cx);
+        self.push_thread(CONDUCTOR, cx);
+    }
+
+    /// Home's row for the phones (its status and tasks), when it changed.
+    pub(super) fn mobile_home_status(&mut self, cx: &mut Context<Self>) {
         if let Some(snap) = self.home_snapshot(cx) {
             let sig = Self::signature(&snap);
             if self.mobile.last_sent.get(CONDUCTOR) != Some(&sig) {
@@ -356,7 +385,6 @@ impl Root {
                 send(None, json!({ "t": "status", "pane": snap, "silent": true }));
             }
         }
-        self.push_thread(CONDUCTOR, cx);
     }
 
     fn signature(snapshot: &Value) -> String {
@@ -482,6 +510,8 @@ impl Root {
             all["t"] = json!("panes");
             send(None, all);
         }
+        // Home's tasks follow their agents and forks.
+        self.mobile_home_status(cx);
         // Silent updates (a new title, a moved pane).
         for (id, status) in panes {
             if status == AgentStatus::NeedsInput && !self.mobile.requests.contains_key(&id) && self.approval_for(&id).is_none() && self.pane_questions(&id).is_none() {
@@ -850,9 +880,20 @@ impl Root {
 #[cfg(test)]
 mod tests {
     use super::agent_api::{Ask, AskOption, PendingQuestions};
-    use super::{model_efforts, provider_models_json, question_request};
+    use super::{model_efforts, provider_models_json, question_request, task_json};
     use crate::code::protocol::ModelInfo;
     use std::time::Instant;
+
+    #[test]
+    fn home_tasks_reach_the_phone() {
+        use super::super::home::{HomeTask, Stage, TaskMode};
+        let t = HomeTask { id: "t1".into(), number: 1, goal: "g".repeat(500), stage: Stage::NeedsYou, mode: TaskMode::Remote, updated: 2, ..Default::default() };
+        let v = task_json(&t, vec!["pane-1"], Some("mini".into()));
+        assert_eq!((v["stage"].as_str(), v["mode"].as_str(), v["updatedAt"].as_u64()), (Some("needs-you"), Some("remote"), Some(2000)));
+        assert_eq!(v["goal"].as_str().map(str::len), Some(400));
+        assert_eq!(v["panes"][0], "pane-1");
+        assert_eq!(v["machine"], "mini");
+    }
 
     #[test]
     fn default_model_is_what_a_pane_without_one_starts_with() {

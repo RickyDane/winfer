@@ -70,6 +70,28 @@ export interface Pane {
   background?: BgItem[];
   /** Home's orchestrator (the desktop's chat above every workspace), not a workspace's agent. */
   home?: boolean;
+  /** Home's tasks, as the desktop's Home panel lists them (on the Home pane only). Older desktops don't send it. */
+  tasks?: HomeTask[];
+}
+
+export type TaskStage = "planning" | "running" | "checking" | "needs-you" | "ready" | "merged" | "failed" | "cancelled";
+
+export interface HomeTask {
+  id: string;
+  number: number;
+  goal: string;
+  stage: TaskStage;
+  /** As the desktop names it: "api", or "mac-mini/web" on another machine. */
+  workspace: string;
+  summary: string;
+  /** One agent or a few, its own orchestrator, or running on another machine. */
+  mode: "light" | "fork" | "remote";
+  /** Its agent panes on the desktop. */
+  panes: string[];
+  /** A remote task's machine (the desktop's name for it) and its orchestrator's pane id there. */
+  machine: string | null;
+  remotePane: string | null;
+  updatedAt: number;
 }
 
 /** A running subagent (`kind: "agent"`) or background shell of a pane. */

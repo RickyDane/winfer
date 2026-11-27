@@ -201,15 +201,13 @@ impl Root {
     }
 
     fn home_tasks(&mut self, c: Colors, cx: &mut Context<Self>) -> Div {
-        let mut tasks: Vec<HomeTask> = self.home.tasks.clone();
-        // Open ones first (newest first), then the recently done.
-        tasks.sort_by_key(|t| (!t.stage.open(), std::cmp::Reverse(t.updated)));
-        let open = tasks.iter().filter(|t| t.stage.open()).count();
+        let tasks: Vec<HomeTask> = super::home::listed_tasks(&self.home.tasks).into_iter().cloned().collect();
+        let open = self.home.tasks.iter().filter(|t| t.stage.open()).count();
         let mut sec = div().flex().flex_col().gap_1p5().child(section(c, "Tasks", Some(open)));
         if tasks.is_empty() {
             return sec.child(div().px_1().text_size(px(12.0)).text_color(c.subtle).child("Ask Home for something to build: it becomes a task here."));
         }
-        for t in tasks.into_iter().take(12) {
+        for t in tasks {
             let color = stage_color(t.stage, &c);
             let how = match t.mode {
                 TaskMode::Light => "one agent",

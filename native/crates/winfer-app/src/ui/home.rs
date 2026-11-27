@@ -147,6 +147,14 @@ pub(super) fn now_secs() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
 
+/// The tasks Home's panel lists (and the phones): open ones first (newest first), then the recently done.
+pub fn listed_tasks(tasks: &[HomeTask]) -> Vec<&HomeTask> {
+    let mut list: Vec<&HomeTask> = tasks.iter().collect();
+    list.sort_by_key(|t| (!t.stage.open(), std::cmp::Reverse(t.updated)));
+    list.truncate(12);
+    list
+}
+
 /// Finds a task by "3", "Task 3", "t3" or its id.
 pub fn find_task<'a>(tasks: &'a [HomeTask], key: &Value) -> Option<&'a HomeTask> {
     let text = key.as_u64().map(|n| n.to_string()).or_else(|| key.as_str().map(str::to_string))?;
@@ -168,7 +176,7 @@ pub(super) struct Home {
     /// Forked tasks' orchestrators on this machine, by task id.
     forks: HashMap<String, Orch>,
     pub tasks: Vec<HomeTask>,
-    loaded: bool,
+    pub(super) loaded: bool,
     /// The thread the Home chat shows: None for the conductor, else a forked task's id.
     pub thread: Option<String>,
     pub views: HashMap<String, Entity<CodeView>>,
@@ -416,6 +424,7 @@ impl Root {
             }
             entry["tasks"] = tasks;
         });
+        self.mobile_home_status(cx);
     }
 
     fn next_task_number(&self, cx: &App) -> u32 {
@@ -1786,7 +1795,7 @@ pub(super) fn home_dir() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{AgentStatus, HomeTask, Item, Stage, TaskMode, Watch, answer_of, current_step, find_task, fork_brief, home_tools, light_stage, pane_event, ui_tools};
+    use super::{AgentStatus, HomeTask, Item, Stage, TaskMode, Watch, answer_of, current_step, find_task, fork_brief, home_tools, light_stage, listed_tasks, pane_event, ui_tools};
     use serde_json::json;
 
     fn user(text: &str) -> Item {
@@ -1845,6 +1854,17 @@ mod tests {
     fn events_name_the_task_and_pane() {
         assert_eq!(pane_event(None, "pane 2", "Claude Code", Some("winfer/api"), "finished", None), "[winfer] Pane 2 (Claude Code, branch winfer/api) finished.");
         assert_eq!(pane_event(Some(&task(3)), "api/1", "Codex", None, "needs input", Some(" Allow edit? ")), "[winfer] Task 3 · api/1 (Codex) needs input: Allow edit?");
+    }
+
+    #[test]
+    fn open_tasks_are_listed_first_newest_first() {
+        let mut tasks: Vec<HomeTask> = (1..=14).map(|n| HomeTask { updated: n.into(), ..task(n) }).collect();
+        tasks[13].stage = Stage::Merged;
+        tasks[1].stage = Stage::Cancelled;
+        let numbers: Vec<u32> = listed_tasks(&tasks).iter().map(|t| t.number).collect();
+        assert_eq!(numbers, [13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 1]);
+        tasks.truncate(3);
+        assert_eq!(listed_tasks(&tasks).iter().map(|t| t.number).collect::<Vec<_>>(), [3, 1, 2]);
     }
 
     #[test]

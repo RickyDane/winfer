@@ -28,7 +28,7 @@ const MOCK_MACHINES = Number(new URLSearchParams(location.search).get("mock")) |
 function makeClient(): DesktopClient | null {
   if (MOCK) {
     if (MOCK_MACHINES < 2) return new MockClient();
-    const members = Array.from({ length: MOCK_MACHINES }, (_, i) => ({ id: `mock${i}`, name: i ? `Mock server ${i}` : "Mock desktop", client: new MockClient(i ? `Mock server ${i}` : "Mock desktop") }));
+    const members = Array.from({ length: MOCK_MACHINES }, (_, i) => ({ id: `mock${i}`, name: i ? `Mock server ${i}` : "Mock desktop", client: new MockClient(i ? `Mock server ${i}` : "Mock desktop", i > 0) }));
     members.forEach((m, i) => (m.client.themed = i === 0));
     return new MultiClient(members, "mock0");
   }

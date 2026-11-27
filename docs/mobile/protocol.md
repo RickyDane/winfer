@@ -102,6 +102,18 @@ interface Message {
 }
 ```
 
+### Home and its tasks
+
+The desktop app's Home orchestrator is a `Pane` with `home: true` (id `winfer-conductor`, `workspaceId: ""`), part of `panes` when WinferCode is installed. winferd has none.
+
+Its `tasks?: HomeTask[]` are the ones the desktop's Home panel lists, in its order: open ones first, newest first, then merged and cancelled ones kept for a week; at most 12. A change to them comes as a silent `status` of the Home pane. Absent: an older desktop (or tasks not loaded yet); `[]`: no tasks.
+
+`HomeTask`: `{id, number, goal, stage, workspace, summary, mode, panes: string[], machine: string | null, remotePane: string | null, updatedAt}`
+- `stage`: `planning`, `running`, `checking`, `needs-you`, `ready`, `merged`, `failed` or `cancelled`
+- `mode`: `light` (one agent or a few), `fork` (own orchestrator) or `remote`
+- `panes`: ids of its agent panes on this desktop that still exist
+- remote tasks: `machine` is the paired machine's name, `remotePane` its orchestrator's pane id there. A phone also paired with that machine can open it; this desktop can't relay it.
+
 Phone handles frames strictly in arrival order and re-requests `panes.get` every 20 s while visible. A `thread.get` for a live winfer code pane leases direct in-memory transcript updates for 60 s, coalesced over 50 ms. The phone renews every 15 s and reloads on status changes, reconnection and foregrounding. Other providers are polled every second while working or running background tools, otherwise every 15 s. Sends render optimistically, survive stale snapshots until their transcript echo arrives, and roll back on delivery failure.
 
 ## Side panel

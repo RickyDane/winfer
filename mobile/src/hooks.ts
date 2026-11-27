@@ -82,6 +82,11 @@ export function go(path: string) {
   location.hash = path;
 }
 
+/** The agent opened from Home's task list: its thread's Back leads to the Home tab. */
+const FROM_TASK_KEY = "winfer.fromTask";
+export const fromTask = (paneId: string) => sessionStorage.getItem(FROM_TASK_KEY) === paneId;
+export const setFromTask = (paneId: string | null) => (paneId ? sessionStorage.setItem(FROM_TASK_KEY, paneId) : sessionStorage.removeItem(FROM_TASK_KEY));
+
 /** Where a side-panel screen's Back leads: the Panel tab, or the chat it was opened from. */
 const BACK_KEY = "winfer.panelBack";
 export const panelBack = () => sessionStorage.getItem(BACK_KEY) ?? "/panel";
