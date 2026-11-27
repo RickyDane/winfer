@@ -608,8 +608,11 @@ mod tests {
         assert!(allowed(&root.join("sub/a.md"), &roots, &[]));
         assert!(allowed(&root.join("sub/../b.png"), &roots, &[]));
         assert!(!allowed(&root.join(".."), &roots, &[]));
-        assert!(!allowed(Path::new("/etc/hosts"), &roots, &[]));
-        assert!(allowed(Path::new("/etc/hosts"), &roots, &["/etc/hosts".into()]));
+        let outside = std::env::temp_dir().join(format!("winfer-phone-outside-{}.md", std::process::id()));
+        std::fs::write(&outside, "x").unwrap();
+        assert!(!allowed(&outside, &roots, &[]));
+        assert!(allowed(&outside, &roots, &[outside.to_string_lossy().into_owned()]));
+        std::fs::remove_file(&outside).unwrap();
         let listed = list_dir(&root).unwrap();
         assert_eq!(listed[0]["name"], "sub");
         assert_eq!(listed[0]["dir"], true);
