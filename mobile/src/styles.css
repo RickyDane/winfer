@@ -798,7 +798,8 @@ button.row:active { background: var(--hover); }
 }
 .tabbar {
   position: relative; z-index: 1;
-  display: flex; align-items: center; justify-content: center; gap: 10px;
+  --tabbar-gap: 10px;
+  display: flex; align-items: center; justify-content: center; gap: var(--tabbar-gap);
   padding: 0 16px calc(var(--sb) + 10px);
   pointer-events: none;
 }
@@ -831,18 +832,15 @@ button.row:active { background: var(--hover); }
 .tabbar-pill[data-active="settings"] .tabbar-slider { transform: translateX(300%); }
 .tab {
   position: relative; z-index: 1; height: 100%;
-  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
-  padding: 2px 0;
+  display: flex; align-items: center; justify-content: center;
   border-radius: 999px; color: var(--subtle);
-  font-size: 11px; font-weight: 500;
   transition: color 0.2s var(--ease);
 }
 .tab:focus-visible, .tabbar-fab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .tab:active { color: var(--muted); }
-.tab[aria-current="page"] { color: var(--fg); font-weight: 600; }
+.tab[aria-current="page"] { color: var(--fg); }
 .tab[aria-current="page"] .tab-icon { color: var(--accent); }
 .tab-icon { position: relative; display: grid; place-items: center; }
-.tab-label { font-size: 11px; line-height: 1.1; letter-spacing: 0.01em; }
 .tab-badge {
   position: absolute; top: -5px; right: -10px;
   display: inline-grid; place-items: center; min-width: 16px; height: 16px; padding: 0 4px;
@@ -860,11 +858,19 @@ button.row:active { background: var(--hover); }
 .tabbar-fab {
   pointer-events: auto; flex: none;
   width: 58px; height: 58px; border-radius: 50%;
+  transition: width 0.36s var(--ease), margin 0.36s var(--ease), transform 0.42s var(--spring), opacity 0.24s var(--ease), box-shadow 0.3s;
 }
 .tabbar-fab:active:not(:disabled) { transform: scale(0.91); }
+/* Off the Agents tab the `+` collapses (the pill takes its room) and pops back in on return. */
+.tabbar-fab[data-shown="false"] {
+  width: 0; margin-left: calc(-1 * var(--tabbar-gap));
+  opacity: 0; transform: scale(0.3) rotate(-90deg);
+  pointer-events: none;
+}
 /* Four tabs beside the + button need the room on narrow phones. */
-@media (max-width: 359px) { .tabbar { gap: 8px; padding-inline: 10px; } }
-::view-transition-group(tabbar) { animation: none; }
+@media (max-width: 359px) { .tabbar { --tabbar-gap: 8px; padding-inline: 10px; } }
+/* Groups that exist only in the new view (e.g. Agents card titles/avatars) paint after the tab bar's by default. */
+::view-transition-group(tabbar) { animation: none; z-index: 100; }
 ::view-transition-old(tabbar) { display: none; }
 ::view-transition-new(tabbar) { animation: none; }
 

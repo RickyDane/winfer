@@ -4,7 +4,7 @@ import { Icon, linkState, type IconName } from "./common";
 
 const TABS: { route: Route["name"]; path: string; label: string; icon: IconName }[] = [
   { route: "home", path: "/home", label: "Home", icon: "home" },
-  { route: "inbox", path: "/", label: "Agents", icon: "sparkle" },
+  { route: "inbox", path: "/", label: "Agents", icon: "messages" },
   { route: "panel", path: "/panel", label: "Panel", icon: "panel" },
   { route: "settings", path: "/settings", label: "Settings", icon: "gear" },
 ];
@@ -32,6 +32,8 @@ export function TabBar({ client, active }: { client: DesktopClient; active: Rout
             <button
               key={t.route}
               className="tab"
+              aria-label={t.label}
+              title={t.label}
               aria-current={t.route === active ? "page" : undefined}
               onClick={() => {
                 if (t.route === active) {
@@ -43,18 +45,21 @@ export function TabBar({ client, active }: { client: DesktopClient; active: Rout
               }}
             >
               <span className="tab-icon">
-                <Icon name={t.icon} size={19} />
+                <Icon name={t.icon} size={22} />
                 {(t.route === "home" || t.route === "inbox") && badge(t.route === "home")}
               </span>
-              <span className="tab-label">{t.label}</span>
             </button>
           ))}
         </div>
+        {/* Only the Agents tab offers `+`; kept mounted elsewhere so it can animate in and out. */}
         {canStart && (
           <button
             className="tabbar-fab nebula"
             data-mode={online ? "send" : "idle"}
-            disabled={!online}
+            data-shown={active === "inbox"}
+            aria-hidden={active !== "inbox" || undefined}
+            tabIndex={active === "inbox" ? undefined : -1}
+            disabled={!online || active !== "inbox"}
             aria-label="New session"
             title="New session"
             onClick={() => {
