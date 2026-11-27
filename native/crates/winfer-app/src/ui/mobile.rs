@@ -10,7 +10,7 @@ use crate::code::protocol::{Cmd, Decision};
 use crate::code::session::CodeModel;
 use std::collections::HashSet;
 use super::*;
-use crate::voice::CONDUCTOR;
+use crate::voice::{CONDUCTOR, HomePane, home_pane, is_orchestrator, task_pane};
 use crate::model::Workspace;
 use crate::code::names::model_name;
 use crate::request::{AgentRequest, RequestOption, describe_request};
@@ -45,6 +45,40 @@ pub(super) struct MobileBridge {
     chat_cfg: HashMap<String, String>,
     /// A pane's running subagents and background shells at the last look, to tell the phones when they change.
     bg_sig: HashMap<String, String>,
+    /// Home's orchestrators' open questions, oldest first: the phones' Home thread shows the first.
+    home_asks: Vec<HomeAsk>,
+    /// The Home question the phones were last told about.
+    home_told: Option<HomeAsk>,
+}
+
+/// A question one of Home's orchestrators (the conductor's or a task's) waits on.
+#[derive(Clone, Debug, PartialEq)]
+struct HomeAsk {
+    pane: String,
+    /// The chat's approval id, or the `ask_user` call's id.
+    id: String,
+    /// Asked in the orchestrator's chat, not through winfer's `ask_user` tool.
+    chat: bool,
+}
+
+/// `queue` brought up to date: answered questions leave, new ones join at the end, so the one a
+/// phone is looking at doesn't change under it.
+fn queue_asks(queue: &[HomeAsk], pending: Vec<HomeAsk>) -> Vec<HomeAsk> {
+    let mut next: Vec<HomeAsk> = queue.iter().filter(|a| pending.contains(a)).cloned().collect();
+    for ask in pending {
+        if !next.contains(&ask) {
+            next.push(ask);
+        }
+    }
+    next
+}
+
+/// A task orchestrator's question in the Home thread says whose it is.
+fn from_task(mut request: AgentRequest, who: Option<String>) -> AgentRequest {
+    if let Some(who) = who {
+        request.text = format!("{who}\n{}", request.text);
+    }
+    request
 }
 
 fn now_ms() -> f64 {
@@ -184,6 +218,44 @@ impl Root {
         let Some(model) = self.chat(id) else { return 0 };
         let first = model.read(cx).state.approvals.first().map(|a| a.id.clone());
         self.mobile.answers.get(id).filter(|(a, _)| Some(a) == first.as_ref()).map_or(0, |(_, v)| v.len())
+    }
+
+    /// The questions Home's orchestrators wait on now.
+    fn pending_home_asks(&self, cx: &App) -> Vec<HomeAsk> {
+        let panes = std::iter::once(CONDUCTOR.to_string()).chain(self.home.tasks.iter().map(|t| task_pane(&t.id)));
+        let chats = panes.filter_map(|pane| {
+            let model = self.home_model(&pane)?;
+            let id = model.read(cx).state.approvals.first().filter(|a| !a.questions.is_empty())?.id.clone();
+            Some(HomeAsk { pane, id, chat: true })
+        });
+        let tools = self.questions.iter().filter(|q| is_orchestrator(&q.pane_id)).map(|q| HomeAsk { pane: q.pane_id.clone(), id: q.call.clone(), chat: false });
+        chats.chain(tools).collect()
+    }
+
+    /// The question the phones' Home thread shows, and answers.
+    fn home_ask(&self, cx: &App) -> Option<HomeAsk> {
+        queue_asks(&self.mobile.home_asks, self.pending_home_asks(cx)).into_iter().next()
+    }
+
+    /// A Home question as the phones show it, and the question alone for the row's message.
+    fn home_request(&self, ask: &HomeAsk, cx: &App) -> Option<(AgentRequest, String)> {
+        let (request, question) = if ask.chat {
+            let model = self.home_model(&ask.pane)?;
+            let answered = self.chat_answered(&ask.pane, cx);
+            let state = &model.read(cx).state;
+            let questions = &state.approvals.first()?.questions;
+            let question = questions.get(answered.min(questions.len().saturating_sub(1)))?.question.clone();
+            (crate::code::mobile::request(state, answered)?, question)
+        } else {
+            let asked = self.questions.iter().find(|q| q.call == ask.id)?;
+            (question_request(asked), asked.questions.get(asked.answers.len())?.question.clone())
+        };
+        let task = match home_pane(&ask.pane) {
+            Some(HomePane::Task(t)) => self.task(t),
+            _ => None,
+        };
+        let message = task.map_or_else(|| question.clone(), |t| format!("{}: {question}", t.title()));
+        Some((from_task(request, task.map(|t| format!("{} · {}", t.title(), t.workspace))), message))
     }
 
     /// A phone's answer to the chat's question; the last one of a form sends them all.
@@ -340,19 +412,24 @@ impl Root {
         if !s.providers.iter().any(|p| p.id == "winfer" && p.installed) {
             return None;
         }
+        let asked = self.home_ask(cx).and_then(|a| self.home_request(&a, cx));
         let (status, reply) = match self.home_model(CONDUCTOR) {
             Some(m) => {
                 let st = &m.read(cx).state;
-                let status = if st.approvals.iter().any(|a| !a.questions.is_empty()) { "needs-input" } else if st.busy { "working" } else { "idle" };
+                let status = if st.busy { "working" } else { "idle" };
                 (status, super::home::answer_of(&st.items).filter(|_| !st.busy))
             }
             None => ("idle", None),
         };
         let open = self.home.tasks.iter().filter(|t| t.stage.open()).count();
         let message = self.orchestrator_step(cx).or_else(|| (open > 0).then(|| format!("{open} open task{}", if open == 1 { "" } else { "s" })));
+        let (status, message, request, reply) = match asked {
+            Some((request, question)) => ("needs-input", Some(question), Some(request), None),
+            None => (status, message, None, reply),
+        };
         let mut snap = json!({
             "id": CONDUCTOR, "title": "Home", "workspace": "All workspaces", "workspaceId": "", "archived": false, "cwd": "",
-            "provider": "winfer", "status": status, "message": message, "updatedAt": self.home.touched_ms, "request": null, "reply": reply,
+            "provider": "winfer", "status": status, "message": message, "updatedAt": self.home.touched_ms, "request": request, "reply": reply,
             "config": null, "background": [], "home": true,
         });
         // Not before the saved ones are read: an empty list would say there are none.
@@ -376,13 +453,26 @@ impl Root {
         self.push_thread(CONDUCTOR, cx);
     }
 
-    /// Home's row for the phones (its status and tasks), when it changed.
-    pub(super) fn mobile_home_status(&mut self, cx: &mut Context<Self>) {
+    /// A Home orchestrator's chat changed: tell the phones if what it asks did.
+    pub(super) fn mobile_home_asking(&mut self, pane_id: &str, cx: &App) {
+        let asking = self.home_model(pane_id).is_some_and(|m| m.read(cx).state.approvals.first().is_some_and(|a| !a.questions.is_empty()));
+        if asking || self.mobile.home_asks.iter().any(|a| a.pane == pane_id) {
+            self.mobile_home_status(cx);
+        }
+    }
+
+    /// Home's row for the phones (its status, question and tasks), when it changed. A new question
+    /// is news (it notifies); anything else is silent.
+    pub(super) fn mobile_home_status(&mut self, cx: &App) {
+        self.mobile.home_asks = queue_asks(&self.mobile.home_asks, self.pending_home_asks(cx));
         if let Some(snap) = self.home_snapshot(cx) {
+            let first = self.mobile.home_asks.first().cloned();
+            let news = first.is_some() && first != self.mobile.home_told;
+            self.mobile.home_told = first;
             let sig = Self::signature(&snap);
-            if self.mobile.last_sent.get(CONDUCTOR) != Some(&sig) {
+            if news || self.mobile.last_sent.get(CONDUCTOR) != Some(&sig) {
                 self.mobile.last_sent.insert(CONDUCTOR.to_string(), sig);
-                send(None, json!({ "t": "status", "pane": snap, "silent": true }));
+                send(None, json!({ "t": "status", "pane": snap, "silent": !news }));
             }
         }
     }
@@ -406,6 +496,10 @@ impl Root {
     }
 
     fn mobile_broadcast(&mut self, id: &str, silent: bool, cx: &App) {
+        // Home's orchestrators aren't panes: they share Home's row.
+        if is_orchestrator(id) {
+            return self.mobile_home_status(cx);
+        }
         let Some(pane) = self.state.read(cx).pane(id).cloned().filter(|p| p.remote.is_none()) else { return };
         let snap = self.snapshot_pane(&pane, cx);
         self.mobile.last_sent.insert(id.to_string(), Self::signature(&snap));
@@ -577,6 +671,8 @@ impl Root {
         let target = PaneRef::Id(pane.id.clone());
         let ok = json!({ "t": "ack", "ok": true });
         let text = req["text"].as_str().map(str::trim).unwrap_or_default().to_string();
+        // Whose question an answer is for: on Home it can be a task orchestrator's.
+        let asker = (pane.id == CONDUCTOR).then(|| self.home_ask(cx)).flatten().map_or_else(|| pane.id.clone(), |a| a.pane);
         let short = |t: &str, n: usize| t.chars().take(n).collect::<String>();
         let via = crate::connect::peer_of(&device).map_or("from your phone".to_string(), |peer| format!("from {}", crate::connect::peer_name(peer).unwrap_or_else(|| "another machine".into())));
         let log = |this: &mut Self, text: String, cx: &mut Context<Self>| {
@@ -632,13 +728,13 @@ impl Root {
                 if text.is_empty() {
                     return reply(json!({ "t": "ack", "ok": false, "error": "Nothing to send." }));
                 }
-                let asked_here = self.chat(&pane.id).is_some_and(|m| m.read(cx).state.approvals.first().is_some_and(|a| !a.questions.is_empty()));
-                if let (Some(model), false) = (self.chat(&pane.id), asked_here) {
-                    model.update(cx, |m, cx| m.submit(&text, None, cx));
-                } else if asked_here {
-                    self.chat_answer(&pane.id, text.clone(), cx);
-                } else if self.front_question(&pane.id) {
+                let asked_here = self.chat(&asker).is_some_and(|m| m.read(cx).state.approvals.first().is_some_and(|a| !a.questions.is_empty()));
+                if asked_here {
+                    self.chat_answer(&asker, text.clone(), cx);
+                } else if self.front_question(&asker) {
                     self.answer_question(text.clone(), window, cx);
+                } else if let Some(model) = self.chat(&pane.id) {
+                    model.update(cx, |m, cx| m.submit(&text, None, cx));
                 } else {
                     self.execute(Command::SendText { target, text: text.clone(), submit: true }, window, cx);
                 }
@@ -647,16 +743,16 @@ impl Root {
             }
             "choose" => {
                 let n = req["option"].as_u64().unwrap_or(0) as usize;
-                if let Some(model) = self.chat(&pane.id).filter(|m| m.read(cx).state.approvals.first().is_some_and(|a| !a.questions.is_empty())) {
-                    let answer = crate::code::mobile::pick(&model.read(cx).state, self.chat_answered(&pane.id, cx), n, &text);
+                if let Some(model) = self.chat(&asker).filter(|m| m.read(cx).state.approvals.first().is_some_and(|a| !a.questions.is_empty())) {
+                    let answer = crate::code::mobile::pick(&model.read(cx).state, self.chat_answered(&asker, cx), n, &text);
                     let Some(answer) = answer else {
                         return reply(json!({ "t": "ack", "ok": false, "error": "That choice is no longer on screen." }));
                     };
                     log(self, format!("Chose \"{}\" from your phone", short(&answer, 60)), cx);
-                    self.chat_answer(&pane.id, answer, cx);
+                    self.chat_answer(&asker, answer, cx);
                     return reply(ok);
                 }
-                if self.front_question(&pane.id) {
+                if self.front_question(&asker) {
                     let asked = self.questions.front().unwrap();
                     let q = &asked.questions[asked.answers.len()];
                     let answer = if (1..=q.options.len()).contains(&n) { q.options[n - 1].label.clone() } else if n == q.options.len() + 1 { text.clone() } else { String::new() };
@@ -690,7 +786,15 @@ impl Root {
                 reply(ok);
             }
             "approve" | "decline" | "interrupt" => {
-                if let Some(model) = self.chat(&pane.id) {
+                // Interrupt stops Home itself; a yes or no goes to whoever asked.
+                let at = if kind == "interrupt" { pane.id.clone() } else { asker };
+                let chat_waits = self.chat(&at).is_some_and(|m| !m.read(cx).state.approvals.is_empty());
+                if kind == "decline" && !chat_waits && self.front_question(&at) {
+                    self.dismiss_question(window, cx);
+                    log(self, "Dismissed the agent's questions from your phone".into(), cx);
+                    return reply(ok);
+                }
+                if let Some(model) = self.chat(&at) {
                     let (pending, is_form) = { let m = model.read(cx); (m.state.approvals.first().map(|a| a.id.clone()), m.state.approvals.first().is_some_and(|a| !a.questions.is_empty())) };
                     match (pending, kind.as_str()) {
                         // A form is answered with its options, not approved.
@@ -880,9 +984,32 @@ impl Root {
 #[cfg(test)]
 mod tests {
     use super::agent_api::{Ask, AskOption, PendingQuestions};
-    use super::{model_efforts, provider_models_json, question_request, task_json};
+    use super::{HomeAsk, from_task, model_efforts, provider_models_json, question_request, queue_asks, task_json};
     use crate::code::protocol::ModelInfo;
     use std::time::Instant;
+
+    #[test]
+    fn home_questions_keep_their_turn() {
+        let ask = |pane: &str, id: &str| HomeAsk { pane: pane.into(), id: id.into(), chat: true };
+        let task = ask("home-task-1", "a");
+        let queue = queue_asks(&[], vec![task.clone()]);
+        // The conductor asks too (listed first among the pending): the phone's question stays put.
+        let queue = queue_asks(&queue, vec![ask("home-orch", "b"), task.clone()]);
+        assert_eq!(queue, vec![task, ask("home-orch", "b")]);
+        let queue = queue_asks(&queue, vec![ask("home-orch", "b")]);
+        assert_eq!(queue, vec![ask("home-orch", "b")]);
+        assert!(queue_asks(&queue, Vec::new()).is_empty());
+    }
+
+    #[test]
+    fn a_task_question_says_whose_it_is() {
+        let ask = Ask { header: None, question: "Which?".into(), options: vec![AskOption { label: "A".into(), description: None }], multi: false };
+        let p = PendingQuestions { pane_id: "home-task-1".into(), questions: vec![ask], answers: vec![], asked_at: Instant::now(), call: "c".into() };
+        let r = from_task(question_request(&p), Some("Task 2 · api".into()));
+        assert_eq!((r.kind, r.text.as_str()), ("question", "Task 2 · api\nWhich?"));
+        assert_eq!(r.options.map(|o| o.len()), Some(2));
+        assert_eq!(from_task(question_request(&p), None).text, "Which?");
+    }
 
     #[test]
     fn home_tasks_reach_the_phone() {

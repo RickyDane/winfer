@@ -33,6 +33,12 @@ pub struct PendingQuestions {
     pub call: String,
 }
 
+/// Whether a Home orchestrator's `ask_user` reaches the user: a task's always (it waits on Home
+/// and their phone), the conductor's unless it works for voice.
+fn home_may_ask(which: HomePane, conductor_can_ask: bool) -> bool {
+    matches!(which, HomePane::Task(_)) || conductor_can_ask
+}
+
 pub fn parse_questions(raw: &Value) -> Vec<Ask> {
     let text = |v: &Value| v.as_str().map(str::trim).unwrap_or("").to_string();
     raw.as_array()
@@ -213,7 +219,7 @@ impl Root {
                     self.orchestrator_says(pane_id, a["message"].as_str().unwrap_or_default(), cx);
                     return Outcome::Done(Ok("Told the user.".to_string()));
                 }
-                "ask_user" if which != HomePane::Conductor || !self.home_can_ask() => {
+                "ask_user" if !home_may_ask(which, self.home_can_ask()) => {
                     return Outcome::Done(Err("Nobody sees questions asked this way: put the question in your reply.".to_string()));
                 }
                 "spawn_agent" if which == HomePane::Conductor => {
@@ -298,6 +304,9 @@ impl Root {
                 self.question_serial += 1;
                 self.questions.push_back(PendingQuestions { pane_id: pane_id.to_string(), questions, answers: Vec::new(), asked_at: Instant::now(), call: call.to_string() });
                 self.reset_question_input(window, cx);
+                if crate::voice::is_orchestrator(pane_id) {
+                    self.mobile_home_status(cx);
+                }
                 cx.notify();
                 Outcome::Later
             }
@@ -582,6 +591,7 @@ impl Root {
         pending.answers.push(text);
         if pending.answers.len() < pending.questions.len() {
             self.reset_question_input(window, cx);
+            self.mobile_home_status(cx);
             return cx.notify();
         }
         let done = self.questions.pop_front().unwrap();
@@ -603,23 +613,31 @@ impl Root {
         self.reset_question_input(window, cx);
         self.question_picked.clear();
         self.focused_view = None;
+        if crate::voice::is_orchestrator(pane_id) {
+            self.mobile_home_status(cx);
+        }
         cx.notify();
     }
 
     /// Questions of panes that closed, and questions nobody answered in time.
     pub(super) fn expire_questions(&mut self, cx: &mut Context<Self>) {
-        let s = self.state.read(cx);
         let (mut keep, mut gone) = (std::collections::VecDeque::new(), Vec::new());
-        for q in self.questions.drain(..) {
-            if s.pane(&q.pane_id).is_some() && q.asked_at.elapsed() < ASK_TIMEOUT {
+        for q in std::mem::take(&mut self.questions) {
+            // Home's orchestrators aren't panes: theirs last while their session does.
+            let asker_runs = self.state.read(cx).pane(&q.pane_id).is_some() || self.home_model(&q.pane_id).is_some();
+            if asker_runs && q.asked_at.elapsed() < ASK_TIMEOUT {
                 keep.push_back(q);
             } else {
                 gone.push(q);
             }
         }
         self.questions = keep;
+        let home = gone.iter().any(|q| crate::voice::is_orchestrator(&q.pane_id));
         for q in gone {
             respond(&q.call, true, DISMISSED.to_string());
+        }
+        if home {
+            self.mobile_home_status(cx);
         }
     }
 
@@ -655,8 +673,15 @@ pub(super) fn status_name(status: AgentStatus) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{answers_text, parse_questions};
+    use super::{HomePane, answers_text, home_may_ask, parse_questions};
     use serde_json::json;
+
+    #[test]
+    fn which_home_orchestrators_may_ask() {
+        assert!(home_may_ask(HomePane::Task("t1"), false));
+        assert!(home_may_ask(HomePane::Conductor, true));
+        assert!(!home_may_ask(HomePane::Conductor, false));
+    }
 
     #[test]
     fn questions_are_cleaned() {
