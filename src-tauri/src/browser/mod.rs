@@ -1702,6 +1702,42 @@ pub async fn browser_input(
     log::check(&what, instance.call_target(&target_id, &method, params).await).map(drop)
 }
 
+/// Puts a tab in front, focused, so it paints and takes typing (a phone showing it).
+#[allow(dead_code)] // used by the native app's phone bridge, not the Tauri app
+pub async fn browser_front(app: &AppHandle, manager: &BrowserManager, workspace_id: &str, target_id: &str) -> Res<()> {
+    let instance = instance(app, manager, workspace_id).await?;
+    let session = instance.session(target_id).await?;
+    let cdp = instance.cdp().await?;
+    front(&cdp, target_id, &session, workspace_id).await;
+    Ok(())
+}
+
+/// A phone's picture of a tab: what its viewport shows, as JPEG at most `max_width` pixels wide,
+/// with the viewport's size in CSS pixels (where the phone's taps land).
+#[allow(dead_code)] // used by the native app's phone bridge, not the Tauri app
+pub async fn browser_capture(app: &AppHandle, manager: &BrowserManager, workspace_id: &str, target_id: &str, max_width: u32, quality: u8) -> Res<(Vec<u8>, f64, f64)> {
+    let instance = instance(app, manager, workspace_id).await?;
+    let metrics = instance.call_target(target_id, "Page.getLayoutMetrics", json!({})).await?;
+    let view = &metrics["cssVisualViewport"];
+    let (width, height) = (view["clientWidth"].as_f64().unwrap_or(0.0), view["clientHeight"].as_f64().unwrap_or(0.0));
+    if width < 1.0 || height < 1.0 {
+        return Err("the page has no size yet".into());
+    }
+    // Device pixels per CSS pixel (the deprecated viewport is in device pixels): shots are taken
+    // at that density. Only the picture's size depends on it, not where taps land.
+    let ratio = (metrics["visualViewport"]["clientWidth"].as_f64().unwrap_or(width) / width).max(1.0);
+    let scale = (max_width.max(200) as f64 / (width * ratio)).min(1.0);
+    let clip = json!({ "x": view["pageX"].as_f64().unwrap_or(0.0), "y": view["pageY"].as_f64().unwrap_or(0.0), "width": width, "height": height, "scale": scale });
+    let shot = instance
+        .call_target(target_id, "Page.captureScreenshot", json!({ "format": "jpeg", "quality": quality.clamp(20, 95), "clip": clip, "optimizeForSpeed": true }))
+        .await?;
+    let bytes = shot["data"]
+        .as_str()
+        .and_then(|d| base64::engine::general_purpose::STANDARD.decode(d).ok())
+        .ok_or("the screenshot came back empty")?;
+    Ok((bytes, width, height))
+}
+
 /// Types a plugin's secret into the field matching `selector` (replacing its contents) without
 /// the value passing through the webview or the agent that asked for it.
 #[tauri::command]

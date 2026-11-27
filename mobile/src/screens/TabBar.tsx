@@ -4,6 +4,7 @@ import { Icon, linkState, type IconName } from "./common";
 
 const TABS: { route: Route["name"]; path: string; label: string; icon: IconName }[] = [
   { route: "inbox", path: "/", label: "Agents", icon: "sparkle" },
+  { route: "panel", path: "/panel", label: "Panel", icon: "panel" },
   { route: "settings", path: "/settings", label: "Settings", icon: "gear" },
 ];
 

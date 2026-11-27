@@ -33,6 +33,10 @@ export interface DesktopClient {
   subscribe(fn: () => void): () => void;
   /** Send a request and wait for the reply carrying the same id. */
   request(msg: PhoneMsg): Promise<DesktopMsg>;
+  /** Send without waiting for (or getting) a reply: input events, frame acks. */
+  fire(msg: PhoneMsg): void;
+  /** Every message from the desktop as it comes (streams: terminal output, panel frames). */
+  onMessage(fn: (msg: DesktopMsg) => void): () => void;
   /** Show the user's message immediately, then reconcile it with the desktop transcript. */
   sendMessage(paneId: string, text: string): Promise<DesktopMsg>;
   reconnect(): void;
@@ -59,8 +63,15 @@ export abstract class BaseClient implements DesktopClient {
   private optimistic = new Map<string, { paneId: string; message: Message; known: Set<string> }>();
   private messageSeq = 0;
   private listeners = new Set<() => void>();
+  private streams = new Set<(msg: DesktopMsg) => void>();
   abstract readonly name: string;
   abstract request(msg: PhoneMsg): Promise<DesktopMsg>;
+  abstract fire(msg: PhoneMsg): void;
+
+  onMessage = (fn: (msg: DesktopMsg) => void) => {
+    this.streams.add(fn);
+    return () => void this.streams.delete(fn);
+  };
   abstract reconnect(): void;
   abstract close(): void;
 
@@ -97,6 +108,7 @@ export abstract class BaseClient implements DesktopClient {
 
   /** Fold a desktop message into state. */
   protected apply(msg: DesktopMsg) {
+    for (const fn of this.streams) fn(msg);
     switch (msg.t) {
       case "welcome":
         this.set({ welcome: { desktop: msg.desktop, version: msg.version, vapidPublicKey: msg.vapidPublicKey, server: msg.server }, error: null });

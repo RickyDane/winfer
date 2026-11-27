@@ -103,6 +103,46 @@ interface Message {
 
 Phone handles frames strictly in arrival order and re-requests `panes.get` every 20 s while visible. A `thread.get` for a live winfer code pane leases direct in-memory transcript updates for 60 s, coalesced over 50 ms. The phone renews every 15 s and reloads on status changes, reconnection and foregrounding. Other providers are polled every second while working or running background tools, otherwise every 15 s. Sends render optimistically, survive stale snapshots until their transcript echo arrives, and roll back on delivery failure.
 
+## Side panel
+
+The phone's Panel tab reaches the desktop's side panel per workspace: its browser, the Android mirror, terminals and
+files (native desktop: `ui/mobile_panel.rs`). Requests answer with `ack {ok, value?, error?}`; requests sent without
+an `id` (input, frame acks) aren't answered. Any request renews the phone's lease; a phone silent for 45 s loses its
+streams (terminal output, frames).
+
+| t | fields | value |
+|---|---|---|
+| `panel.get` | `workspaceId` | `{workspaceId, name, root, terminals: [{id, title, provider, side, running}]}`: the side terminal `side-terminal-<workspaceId>` first, then the workspace's terminal panes (not chats) |
+| `term.attach` / `term.in` / `term.resize` / `term.detach` | as in Winfer Connect (docs/connect/protocol.md, "Terminals and chats"); `paneId` may be a side terminal, which starts if it never ran | streamed: `term.snapshot` (the last 256 KiB, from a line), `term.out`, `term.exit`, `term.reclaim` |
+| `browser.call` | `op`, `workspaceId`, op fields | per op |
+| `android.call` | `op`, op fields | per op |
+| `files.call` | `op`, op fields | per op |
+| `panel.frameDone` | `seq` | — |
+
+Browser ops: `state {retry?}` → `{workspaceId, ready, needsInstall, installing, error, tabs: [{id, url, title, favicon}], active}`
+(starts the workspace's browser), `install`, `select {tab}` (the desktop panel shows it too), `watch {tab, maxWidth}`,
+`unwatch`, `input {tab, method, params}` (CDP `Input.dispatchMouseEvent` / `dispatchKeyEvent` / `insertText`, page CSS
+pixels), `newTab {url?}` → tab id, `closeTab {tab}`, `navigate {tab, url}` (typed text becomes a URL or search),
+`history {tab, delta}` (-1 back, 1 forward, 0 reload).
+
+Android ops: `state` → `{loaded, adb, devices: [{serial, state, model, emulator}], avds, current, starting, error,
+mirror: {serial, mode, error, showing, live}}`, `watch {maxWidth}` (the mirror runs while a phone or the panel shows it),
+`unwatch`, `select {serial}`, `startAvd {name}`, `touch {kind: down|move|up, x, y}` (fractions of the screen; scrcpy
+plays them live, adb turns them into a tap or swipe), `scroll {x, y, v}`, `key {code}` (Android keycodes), `text {text}`.
+
+Files ops (only paths in a workspace's folder or its agents' worktrees, or open in the viewer): `docs {workspaceId}` →
+`{root, docs, active}` (the viewer's open files there), `list {workspaceId, dir?}` → `{root, dir, entries: [{name, dir,
+size}]}`, `read {path}` → `{path, kind: text|markdown|image|binary|large, text? | mime + data (base64)?, size, modified}`
+(text up to 400 KB, images up to 480 KB), `write {path, text, expected}` → `{modified}` (refused when the file changed
+since `expected`), `comment {path, afterLine, body, expected}` (adds `<!-- @user: body -->` after the line), `open {path}`
+(in the desktop's viewer, without switching its panel), `close {path}`.
+
+Frames: one watch per phone (watching another replaces it). `panel.frame {feed: browser|android, seq, data (JPEG,
+base64), width, height, workspaceId?, tab?}`: `width`/`height` are the page's viewport in CSS pixels (browser) or the
+screen's pixels (Android), what taps map to. The next frame goes once the phone acks `seq` (or after 4 s); JPEG quality
+follows how long acks take. Browser frames are screenshots of the tab's viewport (a still page repeats every 5 s);
+`panel.error {feed, error}` when the tab can't be shown.
+
 ## Push
 
 Desktop holds a VAPID P-256 keypair (keychain, account `mobile-vapid`) and sends Web Push (RFC 8291 aes128gcm, RFC 8292 VAPID, `TTL: 3600`, `Urgency: high`) directly to each device's subscription on transitions to `done`, `needs-input`, `error` — throttled to 1 per pane per 5 s. Only while the user is away from the desktop: no winfer window is focused, or one is but had no key, click or scroll for 60 min (the webview reports input via `mobile_activity`, at most every 20 s). VAPID `sub` = `mailto:noreply@winfer.dev`.

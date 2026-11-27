@@ -198,7 +198,85 @@ export type PhoneMsg =
   | { t: "pane.new"; workspaceId: string; provider?: string; text?: string; model?: string; effort?: string }
   | { t: "pane.close"; paneId: string }
   | { t: "push.subscribe"; subscription: PushSubscriptionJSON }
-  | { t: "push.unsubscribe" };
+  | { t: "push.unsubscribe" }
+  // The side panel (see "Side panel" in docs/mobile/protocol.md).
+  | { t: "panel.get"; workspaceId: string }
+  | { t: "panel.frameDone"; seq: number }
+  | { t: "term.attach" | "term.resize"; paneId: string; cols: number; rows: number }
+  | { t: "term.in"; paneId: string; data: string }
+  | { t: "term.detach"; paneId: string }
+  | ({ t: "browser.call"; op: BrowserOp; workspaceId: string } & Record<string, unknown>)
+  | ({ t: "android.call"; op: AndroidOp } & Record<string, unknown>)
+  | ({ t: "files.call"; op: FilesOp } & Record<string, unknown>);
+
+export type BrowserOp = "state" | "install" | "select" | "watch" | "unwatch" | "input" | "newTab" | "closeTab" | "navigate" | "history";
+export type AndroidOp = "state" | "watch" | "unwatch" | "select" | "startAvd" | "touch" | "scroll" | "key" | "text";
+export type FilesOp = "docs" | "list" | "read" | "write" | "comment" | "open" | "close";
+
+/** `panel.get`: a workspace's terminals (its side terminal first, then its terminal panes). */
+export interface PanelInfo {
+  workspaceId: string;
+  name: string;
+  root: string;
+  terminals: { id: string; title: string; provider: string; side: boolean; running: boolean }[];
+}
+
+export interface BrowserTab {
+  id: string;
+  url: string;
+  title: string;
+  /** A small data URL, or "". */
+  favicon: string;
+}
+
+export interface BrowserState {
+  workspaceId: string;
+  /** The workspace's browser is up (its tabs are known). */
+  ready: boolean;
+  needsInstall: boolean;
+  installing: boolean;
+  error: string | null;
+  tabs: BrowserTab[];
+  active: string | null;
+}
+
+export interface AndroidDevice {
+  serial: string;
+  state: string;
+  model?: string;
+  emulator?: boolean;
+}
+
+export interface AndroidState {
+  loaded: boolean;
+  adb: boolean | null;
+  devices: AndroidDevice[] | null;
+  avds: string[] | null;
+  current: string | null;
+  starting: string | null;
+  error: string | null;
+  mirror: { serial: string; mode: "scrcpy" | "stream" | "screenshots"; error: string | null; showing: boolean; live: boolean } | null;
+}
+
+export interface FileEntry {
+  name: string;
+  dir: boolean;
+  size: number;
+}
+
+export type FileData =
+  | { path: string; kind: "text" | "markdown"; text: string; size: number; modified: number }
+  | { path: string; kind: "image"; mime: string; data: string; size: number; modified: number }
+  | { path: string; kind: "binary" | "large"; size: number; modified: number };
+
+/** Streamed to the phone (no `id`): terminal output and panel frames. */
+export type StreamMsg =
+  | { t: "term.snapshot"; paneId: string; data: string; chat?: boolean; provider?: string }
+  | { t: "term.out"; paneId: string; data: string }
+  | { t: "term.exit"; paneId: string; code: number; gone?: boolean }
+  | { t: "term.reclaim"; paneId: string }
+  | { t: "panel.frame"; feed: "browser" | "android"; seq: number; data: string; width: number; height: number; workspaceId?: string; tab?: string; mime?: string }
+  | { t: "panel.error"; feed: "browser" | "android"; error: string; workspaceId?: string; tab?: string };
 
 export type DesktopMsg =
   | { t: "welcome"; id?: string; desktop: string; version: string; vapidPublicKey: string; server?: boolean }
@@ -208,8 +286,9 @@ export type DesktopMsg =
   | { t: "config"; id?: string; paneId: string; models: ModelOption[] }
   | { t: "models"; id?: string; provider: string; models: ModelOption[]; defaultModel?: string | null; defaultEffort?: string | null; defaultEfforts?: string[] }
   | { t: "usage"; id?: string; providers: UsageProvider[]; tokens?: UsageTokens | null; now: number }
-  | { t: "ack"; id: string; ok: boolean; error?: string; paneId?: string }
-  | { t: "error"; id?: string; error: string };
+  | { t: "ack"; id: string; ok: boolean; error?: string; paneId?: string; value?: unknown }
+  | { t: "error"; id?: string; error: string }
+  | StreamMsg;
 
 export interface Presence {
   t: "presence";

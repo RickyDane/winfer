@@ -90,6 +90,8 @@ mod settings_system;
 mod model_logos;
 #[path = "mobile.rs"]
 mod mobile;
+#[path = "mobile_panel.rs"]
+mod mobile_panel;
 #[path = "updates_ui.rs"]
 mod updates_ui;
 #[path = "voice_tools.rs"]
@@ -476,6 +478,7 @@ impl Root {
                     this.deliver_bg_notes(cx);
                     this.tick_orchestrators(cx);
                     this.expire_questions(cx);
+                    this.tick_phone_panel(cx);
                 }).is_err() {
                     break;
                 }

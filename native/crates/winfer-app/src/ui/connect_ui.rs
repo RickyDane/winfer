@@ -265,9 +265,11 @@ impl Root {
     // ---- terminals (host) ----
 
     /// A peer attaching to, typing into, sizing or leaving one of this machine's panes.
-    fn on_term_request(&mut self, peer: &str, msg: &Value, cx: &mut Context<Self>) {
+    /// Also a phone's (`phone:<device>`), which may open a workspace's side terminal too.
+    pub(super) fn on_term_request(&mut self, peer: &str, msg: &Value, cx: &mut Context<Self>) {
         let pane_id = msg["paneId"].as_str().unwrap_or_default().to_string();
-        let pane = self.state.read(cx).pane(&pane_id).cloned().filter(|p| p.remote.is_none());
+        let side = crate::connect::is_phone(peer).then(|| self.side_terminal_pane(&pane_id, cx)).flatten();
+        let pane = self.state.read(cx).pane(&pane_id).cloned().filter(|p| p.remote.is_none()).or(side.clone());
         let Some(pane) = pane else {
             if msg["t"] == "term.attach" {
                 crate::connect::send(peer, json!({"t": "term.exit", "paneId": pane_id, "code": 0, "gone": true}));
@@ -279,7 +281,14 @@ impl Root {
             "term.attach" => {
                 // A pane that was never drawn here has no process yet.
                 if SESSIONS.get(&pane_id).is_none_or(|s| !s.spawned.load(std::sync::atomic::Ordering::Relaxed)) {
-                    self.start_detached(&pane_id, cx);
+                    match side {
+                        Some(side) => {
+                            let settings = terminal::SpawnSettings::of(self.state.read(cx), &side);
+                            let session = SESSIONS.get_or_create(&pane_id, &self.events);
+                            terminal::spawn(session, side, settings, self.events.clone());
+                        }
+                        None => self.start_detached(&pane_id, cx),
+                    }
                 }
                 let chat = SESSIONS.get(&pane_id).is_some_and(|s| s.is_code());
                 crate::connect_term::attach(&pane_id, peer, chat, &pane.provider);
@@ -289,7 +298,7 @@ impl Root {
                     session.force_resize(cols, rows);
                     session.write_screen(&[]);
                 }
-                let name = crate::connect::peer_name(peer).unwrap_or_else(|| "another machine".into());
+                let name = if crate::connect::is_phone(peer) { "your phone".into() } else { crate::connect::peer_name(peer).unwrap_or_else(|| "another machine".into()) };
                 self.update_state(cx, |s| s.log_activity(&pane.workspace_id, format!("Opened on {name}"), Some(pane.provider.clone())));
             }
             "term.in" => {

@@ -116,6 +116,44 @@ fn jpeg(image: &RenderImage) -> Option<Vec<u8>> {
     Some(out.into_inner())
 }
 
+/// The panel's newest picture for a phone, when it's newer than `after` (a serial this returned):
+/// its serial, JPEG at most `max_width` wide, and the picture's own size. Encodes, so call it off
+/// the main thread.
+pub fn newest_jpeg(source: Source, after: u64, max_width: u32, quality: u8) -> Option<(u64, Vec<u8>, u32, u32)> {
+    let (serial, picture) = {
+        let slots = SLOTS.lock();
+        let slot = &slots[source.index()];
+        (slot.serial, slot.picture.clone()?)
+    };
+    if serial == after {
+        return None;
+    }
+    let rgb = match picture {
+        Picture::Encoded(bytes) => image::load_from_memory(&bytes).ok()?.into_rgb8(),
+        Picture::Image(image) => {
+            let size = image.size(0);
+            let (width, height) = (u32::try_from(size.width.0).ok()?, u32::try_from(size.height.0).ok()?);
+            let bgra = image.as_bytes(0)?;
+            let mut rgb = Vec::with_capacity(bgra.len() / 4 * 3);
+            for p in bgra.chunks_exact(4) {
+                rgb.extend_from_slice(&[p[2], p[1], p[0]]);
+            }
+            image::RgbImage::from_raw(width, height, rgb)?
+        }
+    };
+    let (width, height) = rgb.dimensions();
+    let max_width = max_width.max(160);
+    let rgb = if width > max_width {
+        let h = ((height as f64) * (max_width as f64) / (width as f64)).round().max(1.0) as u32;
+        image::imageops::resize(&rgb, max_width, h, image::imageops::FilterType::Triangle)
+    } else {
+        rgb
+    };
+    let mut out = Cursor::new(Vec::new());
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, quality.clamp(20, 95)).encode_image(&rgb).ok()?;
+    Some((serial, out.into_inner(), width, height))
+}
+
 /// The pictures of read panels that haven't gone out yet. Encodes decoded ones, so call it off the main thread.
 pub fn take() -> Vec<(Source, Frame)> {
     let due: Vec<(Source, Picture)> = {

@@ -107,6 +107,10 @@ pub struct AndroidPanel {
     press: Option<(u32, u32, Instant)>,
     /// A finger is down on the scrcpy session.
     touching: bool,
+    /// A phone shows the mirror (mobile_panel.rs): it runs while the panel or a phone shows it.
+    phone: bool,
+    /// Where the phone's finger went down, for a tap or swipe without scrcpy.
+    phone_press: Option<(f32, f32, Instant)>,
     focus: FocusHandle,
     _poll: Task<()>,
 }
@@ -242,7 +246,7 @@ impl AndroidPanel {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         let poll = cx.spawn(async move |this, cx| {
             loop {
-                let visible = this.update(cx, |this, _| this.visible).unwrap_or(false);
+                let visible = this.update(cx, |this, _| this.live()).unwrap_or(false);
                 if visible {
                     let status = tauri::async_runtime::spawn(android::android_status()).await.map_err(|e| e.to_string()).and_then(|r| r).and_then(|s| serde_json::to_value(s).map_err(|e| e.to_string()));
                     if this.update(cx, |this, cx| this.on_status(status, cx)).is_err() {
@@ -252,16 +256,26 @@ impl AndroidPanel {
                 cx.background_executor().timer(Duration::from_secs(3)).await;
             }
         });
-        Self { state, visible: false, status: None, starting: None, error: None, mirror: None, restart: 0, latest: Default::default(), shown: None, area: Bounds::default(), press: None, touching: false, focus: cx.focus_handle(), _poll: poll }
+        Self { state, visible: false, status: None, starting: None, error: None, mirror: None, restart: 0, latest: Default::default(), shown: None, area: Bounds::default(), press: None, touching: false, phone: false, phone_press: None, focus: cx.focus_handle(), _poll: poll }
     }
 
     /// Shown or hidden with the side panel's Android tab: the mirror only runs while on screen.
     pub fn set_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
-        if self.visible == visible {
+        let was = self.live();
+        self.visible = visible;
+        self.live_changed(was, cx);
+    }
+
+    /// Shown on the panel or on a phone.
+    fn live(&self) -> bool {
+        self.visible || self.phone
+    }
+
+    fn live_changed(&mut self, was: bool, cx: &mut Context<Self>) {
+        if self.live() == was {
             return;
         }
-        self.visible = visible;
-        if visible {
+        if self.live() {
             self.sync_device(cx);
         } else {
             self.stop_mirror();
@@ -288,7 +302,7 @@ impl AndroidPanel {
     }
 
     fn sync_device(&mut self, cx: &mut Context<Self>) {
-        if !self.visible {
+        if !self.live() {
             return;
         }
         let serial = self.current(cx).and_then(|d| d["serial"].as_str().map(str::to_string));
@@ -490,6 +504,98 @@ impl AndroidPanel {
         } else if let Some(code) = keycode(&k.key) {
             self.flush_text();
             self.key(code);
+        }
+    }
+
+    // ---- the phone (mobile_panel.rs) ----
+
+    pub fn phone_watching(&self) -> bool {
+        self.phone
+    }
+
+    /// A phone starts or stops showing the mirror.
+    pub fn set_phone(&mut self, on: bool, cx: &mut Context<Self>) {
+        let was = self.live();
+        self.phone = on;
+        self.live_changed(was, cx);
+        cx.notify();
+    }
+
+    /// What a phone shows: adb, the devices, emulators to start, and the device mirrored and how.
+    pub fn phone_state(&self, cx: &App) -> Value {
+        let status = self.status.clone().unwrap_or(Value::Null);
+        let mirror = self.mirror.as_ref().map(|m| {
+            let mode = match m.mode {
+                Mode::Scrcpy => "scrcpy",
+                Mode::Stream => "stream",
+                Mode::Screenshots => "screenshots",
+            };
+            json!({ "serial": m.serial, "mode": mode, "error": m.error, "showing": m.frames > 0, "live": m.session.is_some() })
+        });
+        json!({
+            "loaded": self.status.is_some(),
+            "adb": status["adb"],
+            "devices": status["devices"],
+            "avds": status["avds"],
+            "current": self.current(cx).and_then(|d| d["serial"].as_str().map(str::to_string)),
+            "starting": self.starting,
+            "error": self.error,
+            "mirror": mirror,
+        })
+    }
+
+    pub fn phone_select(&mut self, serial: String, cx: &mut Context<Self>) {
+        self.state.update(cx, |s, cx| {
+            s.rest.insert("androidSerial".into(), Value::String(serial));
+            cx.notify();
+        });
+        self.sync_device(cx);
+    }
+
+    pub fn phone_start_avd(&mut self, name: String, cx: &mut Context<Self>) {
+        self.start_avd(name, cx);
+    }
+
+    /// A finger on the phone's picture, as a fraction of the screen (0..1 both ways).
+    pub fn phone_touch(&mut self, touch: Touch, at: (f32, f32)) {
+        let at = (at.0.clamp(0.0, 1.0), at.1.clamp(0.0, 1.0));
+        if let Some(s) = self.session() {
+            s.touch(touch, at);
+            return;
+        }
+        // Without scrcpy, adb input: a tap, or a swipe when the finger moved.
+        match touch {
+            Touch::Down => self.phone_press = Some((at.0, at.1, Instant::now())),
+            Touch::Move => {}
+            Touch::Up => {
+                let Some((x0, y0, t0)) = self.phone_press.take() else { return };
+                let Some((w, h, _, _)) = self.mirror.as_ref().and_then(|m| m.info) else { return };
+                let p = |x: f32, y: f32| ((x * w).round() as u32, (y * h).round() as u32);
+                let (a, b) = (p(x0, y0), p(at.0, at.1));
+                if (at.0 - x0).abs() < 0.02 && (at.1 - y0).abs() < 0.02 {
+                    self.send(json!({ "kind": "tap", "x": a.0, "y": a.1 }));
+                } else {
+                    self.send(json!({ "kind": "swipe", "x1": a.0, "y1": a.1, "x2": b.0, "y2": b.1, "ms": t0.elapsed().as_millis().clamp(80, 2000) as u32 }));
+                }
+            }
+        }
+    }
+
+    /// Wheel notches at a point (scrcpy only; adb has swipes for that).
+    pub fn phone_scroll(&self, at: (f32, f32), v: f32) {
+        if let Some(s) = self.session() {
+            s.scroll(at, 0.0, v);
+        }
+    }
+
+    pub fn phone_key(&self, code: u32) {
+        self.key(code);
+    }
+
+    pub fn phone_text(&self, text: &str) {
+        match self.session() {
+            Some(s) => s.text(text),
+            None => self.send(json!({ "kind": "text", "text": text })),
         }
     }
 

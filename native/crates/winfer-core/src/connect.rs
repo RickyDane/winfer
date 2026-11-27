@@ -122,8 +122,13 @@ pub fn start(app: tauri::AppHandle, data_dir: &std::path::Path) {
     }
 }
 
-/// Sends to one peer (dropped while its link is down).
+/// Sends to one peer (dropped while its link is down). A phone (`phone:<device id>`, see
+/// [`phone_peer`]) gets it over its mobile relay, in order.
 pub fn send(peer: &str, msg: Value) {
+    if let Some(device) = peer.strip_prefix(PHONE) {
+        let _ = winfer_backend::mobile::mobile_send(Some(device.to_string()), msg);
+        return;
+    }
     if let Some(connect) = get() {
         connect.send(peer, msg);
     }
@@ -157,6 +162,17 @@ pub fn device(peer: &str) -> String {
 
 pub fn peer_of(device: &str) -> Option<&str> {
     device.strip_prefix("connect:")
+}
+
+const PHONE: &str = "phone:";
+
+/// A phone as a stream peer (terminals, panel frames): `phone:<device id>`.
+pub fn phone_peer(device: &str) -> String {
+    format!("{PHONE}{device}")
+}
+
+pub fn is_phone(peer: &str) -> bool {
+    peer.starts_with(PHONE)
 }
 
 /// A peer's name, for "from ‹machine›" in the activity log.
