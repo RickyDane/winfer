@@ -6,6 +6,7 @@ import { isFreeText, sortPanes, type AgentStatus, type Pane, type RequestOption 
 import { Avatar, ConnNotice, Icon, STATUS_LABEL, linkState, providerInfo } from "./common";
 import { activeIsServer } from "../pairing";
 import { forMachine } from "../multi";
+import { matchesPane } from "./paneSearch";
 import { Segmented, SwipeCard, useFlip, usePullToRefresh } from "./widgets";
 
 type Filter = "all" | "needs" | "working" | "done";
@@ -21,6 +22,12 @@ const GROUPS: { title: string; statuses: AgentStatus[] }[] = [
   { title: "Finished", statuses: ["done"] },
   { title: "Idle", statuses: ["idle"] },
 ];
+
+function countStatuses(panes: Pane[]): Record<AgentStatus, number> {
+  const c: Record<AgentStatus, number> = { "needs-input": 0, working: 0, done: 0, error: 0, idle: 0 };
+  for (const p of panes) c[p.status]++;
+  return c;
+}
 
 /** One muted line under the title: what needs you first, then the rest. */
 function summary(counts: Record<AgentStatus, number>, total: number): string {
@@ -44,6 +51,7 @@ export function Inbox({ client }: { client: DesktopClient }) {
   const state = useClient(client);
   useTick(30_000);
   const [filter, setFilter] = useState<Filter>("all");
+  const [query, setQuery] = useState("");
   const [menu, setMenu] = useState<Pane | null>(null);
   const [confirm, setConfirm] = useState(false);
   const openMenu = (p: Pane) => {
@@ -61,12 +69,10 @@ export function Inbox({ client }: { client: DesktopClient }) {
   const ptr = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLDivElement>(null);
 
-  const panes = sortPanes(state.panes);
-  const counts = useMemo(() => {
-    const c: Record<AgentStatus, number> = { "needs-input": 0, working: 0, done: 0, error: 0, idle: 0 };
-    for (const p of state.panes) c[p.status]++;
-    return c;
-  }, [state.panes]);
+  const found = sortPanes(state.panes).filter((p) => matchesPane(p, query, providerInfo(p.provider)?.name, state.threads[p.id]?.messages));
+  const counts = useMemo(() => countStatuses(state.panes), [state.panes]);
+  // The filters count what the search left; the headline keeps counting everything.
+  const foundCounts = countStatuses(found);
   const link = linkState(state);
   const multi = state.machines.length > 1;
   const desktop = multi ? "All machines" : (state.welcome?.desktop ?? client.name);
@@ -75,7 +81,7 @@ export function Inbox({ client }: { client: DesktopClient }) {
   // A failed machine says why (it won't heal by itself); one that's away or offline comes back on its own.
   const failed = away.filter((m) => m.error);
   const gone = away.filter((m) => !m.error && ["away", "offline"].includes(linkState(forMachine(state, m.id))));
-  const shown = panes.filter(MATCH[filter]);
+  const shown = found.filter(MATCH[filter]);
   useFlip(list, shown.map((p) => `${p.id}:${p.status}`).join() + filter);
 
   const refresh = useCallback(() => client.request({ t: "panes.get" }).catch(() => client.reconnect()), [client]);
@@ -202,15 +208,33 @@ export function Inbox({ client }: { client: DesktopClient }) {
           <h1>Agents</h1>
           <p>{summary(counts, state.panes.length)}</p>
         </section>
+        {state.panes.length > 0 && (
+          <form
+            className="pick-search agent-search"
+            role="search"
+            onSubmit={(e) => {
+              e.preventDefault();
+              (document.activeElement as HTMLElement | null)?.blur();
+            }}
+          >
+            <Icon name="search" size={15} />
+            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search workspaces, sessions, content…" aria-label="Search agents" inputMode="search" enterKeyHint="search" autoCapitalize="off" autoCorrect="off" spellCheck={false} />
+            {query && (
+              <button type="button" className="icon-btn" aria-label="Clear search" onClick={() => setQuery("")}>
+                <Icon name="x" size={15} />
+              </button>
+            )}
+          </form>
+        )}
         <div className="filters">
           <Segmented<Filter>
             value={filter}
             onChange={setFilter}
             options={[
-              { value: "all", label: "All", count: state.panes.length },
-              { value: "needs", label: "Needs you", count: counts["needs-input"] + counts.error, hot: true },
-              { value: "working", label: "Working", count: counts.working },
-              { value: "done", label: "Done", count: counts.done },
+              { value: "all", label: "All", count: found.length },
+              { value: "needs", label: "Needs you", count: foundCounts["needs-input"] + foundCounts.error, hot: true },
+              { value: "working", label: "Working", count: foundCounts.working },
+              { value: "done", label: "Done", count: foundCounts.done },
             ]}
           />
         </div>
@@ -259,8 +283,8 @@ export function Inbox({ client }: { client: DesktopClient }) {
               <span className="empty-mark">
                 <img src="./icons/logo.svg" alt="" />
               </span>
-              <h3>{state.panes.length ? "Nothing here" : "No agents running"}</h3>
-              <p className="sub">{state.panes.length ? "Try another filter." : canStart ? "Tap + below, or start one in winfer; it appears here live." : "Start one in winfer and it appears here, live."}</p>
+              <h3>{!state.panes.length ? "No agents running" : found.length ? "Nothing here" : "No matches"}</h3>
+              <p className="sub">{state.panes.length ? (found.length ? "Try another filter." : "Try another search.") : canStart ? "Tap + below, or start one in winfer; it appears here live." : "Start one in winfer and it appears here, live."}</p>
             </div>
           )}
         </div>
