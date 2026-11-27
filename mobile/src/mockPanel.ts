@@ -10,6 +10,7 @@ const FILES: Record<string, string> = {
   "/Users/me/code/winfer/README.md": "# winfer\n\nA workspace of terminal panes with coding agents.\n\n<!-- @user: mention the phone panel here -->\n\n## Build\n\n```sh\npnpm build\n```\n",
   "/Users/me/code/winfer/src/main.ts": 'import { start } from "./app";\n\nstart({ port: 5173 });\n',
   "/Users/me/code/winfer/package.json": '{\n  "name": "winfer",\n  "private": true\n}\n',
+  "/Users/me/.claude/plans/mobile-panel.md": "# Plan\n\nShow every open file on the phone.\n",
 };
 const ROOT = "/Users/me/code/winfer";
 
@@ -26,7 +27,7 @@ export class MockPanel {
   private scrollY = 0;
   private typed = "";
   private files = { ...FILES };
-  private docs = [`${ROOT}/README.md`];
+  private docs = [`${ROOT}/README.md`, "/Users/me/.claude/plans/mobile-panel.md"];
   private line = "";
   private avdStarted = false;
 
@@ -189,7 +190,13 @@ export class MockPanel {
         const path = m.path as string;
         switch (msg.op) {
           case "docs":
-            return { value: { root: ROOT, docs: this.docs, active: this.docs[0] ?? null } };
+          {
+            // Like the desktop: this workspace's files first, then ones outside every workspace.
+            const here = this.docs.filter((d) => d.startsWith(`${ROOT}/`));
+            const other = this.docs.filter((d) => !d.startsWith(`${ROOT}/`));
+            const groups = [{ id: "w", name: "repo", docs: here, here: true }, { id: "__other_files__", name: "Other files", docs: other, here: false }].filter((g) => g.docs.length);
+            return { value: { root: ROOT, docs: [...here, ...other], groups, active: this.docs[0] ?? null } };
+          }
           case "list": {
             const dir = ((m.dir as string) || ROOT).replace(/\/+$/, "");
             const names = new Map<string, { dir: boolean; size: number }>();

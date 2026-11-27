@@ -116,9 +116,9 @@ streams (terminal output, frames).
 | `panel.get` | `workspaceId` | `{workspaceId, name, root, terminals: [{id, title, provider, side, running}]}`: the side terminal `side-terminal-<workspaceId>` first, then the workspace's terminal panes (not chats) |
 | `term.attach` / `term.in` / `term.resize` / `term.detach` | as in Winfer Connect (docs/connect/protocol.md, "Terminals and chats"); `paneId` may be a side terminal, which starts if it never ran | streamed: `term.snapshot` (the last 256 KiB, from a line), `term.out`, `term.exit`, `term.reclaim` |
 | `browser.call` | `op`, `workspaceId`, op fields | per op |
-| `android.call` | `op`, op fields | per op |
+| `android.call` | `op`, op fields, `workspaceId?` (ignored by the desktop; a phone paired with several machines routes by it) | per op |
 | `files.call` | `op`, op fields | per op |
-| `panel.frameDone` | `seq` | — |
+| `panel.frameDone` | `seq`, `feed?` (`browser` / `android`: which machine's frames it acknowledges) | — |
 
 Browser ops: `state {retry?}` → `{workspaceId, ready, needsInstall, installing, error, tabs: [{id, url, title, favicon}], active}`
 (starts the workspace's browser), `install`, `select {tab}` (the desktop panel shows it too), `watch {tab, maxWidth}`,
@@ -132,7 +132,8 @@ mirror: {serial, mode, error, showing, live}}`, `watch {maxWidth}` (the mirror r
 plays them live, adb turns them into a tap or swipe), `scroll {x, y, v}`, `key {code}` (Android keycodes), `text {text}`.
 
 Files ops (only paths in a workspace's folder or its agents' worktrees, or open in the viewer): `docs {workspaceId}` →
-`{root, docs, active}` (the viewer's open files there), `list {workspaceId, dir?}` → `{root, dir, entries: [{name, dir,
+`{root, docs, groups, active}` (every file open in the viewer, as `groups: [{id, name, docs, here}]` by project — this
+workspace's first, then the others and "Other files" — and `docs` all of them in that order), `list {workspaceId, dir?}` → `{root, dir, entries: [{name, dir,
 size}]}`, `read {path}` → `{path, kind: text|markdown|image|binary|large, text? | mime + data (base64)?, size, modified}`
 (text up to 400 KB, images up to 480 KB), `write {path, text, expected}` → `{modified}` (refused when the file changed
 since `expected`), `comment {path, afterLine, body, expected}` (adds `<!-- @user: body -->` after the line), `open {path}`

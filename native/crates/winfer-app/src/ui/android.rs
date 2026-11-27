@@ -415,8 +415,12 @@ impl AndroidPanel {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         let poll = cx.spawn(async move |this, cx| {
             loop {
-                let Ok((visible, machine)) = this.update(cx, |this, _| (this.live(), this.machine.clone())) else { break };
-                if visible && this.update(cx, |this, cx| this.refresh(machine, cx)).is_err() {
+                let Ok((visible, machine, phone)) = this.update(cx, |this, _| (this.live(), this.machine.clone(), this.phone)) else { break };
+                if visible && this.update(cx, |this, cx| this.refresh(machine.clone(), cx)).is_err() {
+                    break;
+                }
+                // A phone shows this machine's devices, even while the panel shows a paired one's.
+                if phone && machine.is_some() && this.update(cx, |this, cx| this.refresh(None, cx)).is_err() {
                     break;
                 }
                 cx.background_executor().timer(Duration::from_secs(3)).await;
@@ -907,6 +911,10 @@ impl AndroidPanel {
         let was = self.live();
         self.phone = on;
         self.live_changed(was, cx);
+        // Its devices are this machine's: list them now, whatever the panel shows.
+        if on && (self.machine.is_some() || self.status.is_none()) {
+            self.refresh(None, cx);
+        }
         cx.notify();
     }
 

@@ -224,12 +224,13 @@ export type PhoneMsg =
   | { t: "push.unsubscribe" }
   // The side panel (see "Side panel" in docs/mobile/protocol.md).
   | { t: "panel.get"; workspaceId: string }
-  | { t: "panel.frameDone"; seq: number }
+  | { t: "panel.frameDone"; seq: number; feed?: "browser" | "android" }
   | { t: "term.attach" | "term.resize"; paneId: string; cols: number; rows: number }
   | { t: "term.in"; paneId: string; data: string }
   | { t: "term.detach"; paneId: string }
   | ({ t: "browser.call"; op: BrowserOp; workspaceId: string } & Record<string, unknown>)
-  | ({ t: "android.call"; op: AndroidOp } & Record<string, unknown>)
+  // `workspaceId` (optional, ignored by the desktop) picks the machine when several are paired.
+  | ({ t: "android.call"; op: AndroidOp; workspaceId?: string } & Record<string, unknown>)
   | ({ t: "files.call"; op: FilesOp } & Record<string, unknown>);
 
 export type BrowserOp = "state" | "install" | "select" | "watch" | "unwatch" | "input" | "newTab" | "closeTab" | "navigate" | "history";

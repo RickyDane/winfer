@@ -19,8 +19,9 @@ export class MultiClient implements DesktopClient {
   private listeners = new Set<() => void>();
   private unsubs: (() => void)[];
   private streamListeners = new Set<(msg: DesktopMsg) => void>();
-  /** The machine whose panel frames are showing: it gets their acknowledgements. */
-  private frameFrom: Member | null = null;
+  /** The machine whose panel frames are showing, per feed (browser, android): it gets their acknowledgements. */
+  private frameFrom = new Map<string, Member>();
+  private lastFrameFrom: Member | null = null;
   private state: ClientState;
   /** Each member's last mapped lists, so an unchanged machine keeps its objects. */
   private memo = new Map<string, { name: string; src: ClientState; panes: Pane[]; ws: Workspace[]; threads: Record<string, Thread> }>();
@@ -37,7 +38,10 @@ export class MultiClient implements DesktopClient {
         for (const fn of this.listeners) fn();
       }),
       m.client.onMessage((msg) => {
-        if (msg.t === "panel.frame") this.frameFrom = m;
+        if (msg.t === "panel.frame") {
+          this.frameFrom.set(msg.feed, m);
+          this.lastFrameFrom = m;
+        }
         const lifted = this.lift(m, msg);
         for (const fn of this.streamListeners) fn(lifted);
       }),
@@ -182,7 +186,7 @@ export class MultiClient implements DesktopClient {
     }
     const target = this.members.find((m) => m.id === via);
     if (target) return { member: target, msg };
-    if (msg.t === "panel.frameDone") return { member: this.frameFrom ?? this.primary, msg };
+    if (msg.t === "panel.frameDone") return { member: (msg.feed && this.frameFrom.get(msg.feed)) || this.lastFrameFrom || this.primary, msg };
     if (msg.t === "panes.get") return null;
     // The rest (usage, notifications, models, the Android panel) from the primary.
     return { member: this.primary, msg };

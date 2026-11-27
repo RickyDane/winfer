@@ -332,8 +332,10 @@ fn normalized(path: &str) -> String {
 
 /// Groups files by project: the most specific root wins, a worktree belongs to its project.
 pub fn viewer_projects(docs: &[String], workspaces: &[Workspace]) -> Vec<ViewerProject> {
+    // Only this machine's workspaces: a paired machine's can have the same folder (its own files).
     let mut roots: Vec<(&Workspace, String)> = workspaces
         .iter()
+        .filter(|w| w.remote.is_none() && !w.root_dir.is_empty())
         .flat_map(|w| std::iter::once(w.root_dir.clone()).chain(w.panes.iter().filter_map(|p| p.worktree.as_ref().map(|t| t.path.clone()))).map(move |r| (w, normalized(&expand(&r)))))
         .collect();
     roots.sort_by_key(|(_, r)| std::cmp::Reverse(r.len()));

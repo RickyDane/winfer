@@ -116,7 +116,7 @@ function Screens({ client, mock, onChanged }: { client: DesktopClient; mock: boo
     ) : route.name === "browser" ? (
       <Browser key={route.workspaceId} client={client} workspaceId={route.workspaceId} />
     ) : route.name === "android" ? (
-      <Android client={client} />
+      <Android key={route.workspaceId ?? ""} client={client} workspaceId={route.workspaceId} />
     ) : route.name === "terminal" ? (
       <Suspense fallback={<div className="screen panel-screen" />}>
         <Term key={route.paneId} client={client} workspaceId={route.workspaceId} paneId={route.paneId} />

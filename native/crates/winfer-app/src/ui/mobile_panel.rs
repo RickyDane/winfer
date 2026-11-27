@@ -12,6 +12,7 @@ use super::*;
 use crate::ui::browser::{normalize_url, ops};
 use crate::ui::capture::{self, Source};
 use winfer_core::scrcpy::Touch;
+use crate::model::Workspace;
 use crate::ui::viewer::{expand, insert_comment, viewer_projects};
 use parking_lot::Mutex;
 use serde_json::json;
@@ -199,6 +200,18 @@ async fn pump(device: String, serial: u64) {
 fn allowed(path: &Path, roots: &[PathBuf], docs: &[String]) -> bool {
     let Ok(real) = path.canonicalize() else { return false };
     roots.iter().filter_map(|r| r.canonicalize().ok()).any(|r| real.starts_with(r)) || docs.iter().any(|d| Path::new(&expand(d)).canonicalize().ok().as_ref() == Some(&real))
+}
+
+/// The viewer's files for a phone in workspace `ws`: like the desktop's viewer, every open file,
+/// grouped by project (this workspace's first, then the others and "Other files"); `docs` lists
+/// them all in that order (what older phones show).
+fn phone_docs(docs: &[String], active: Option<&String>, workspaces: &[Workspace], ws: &Workspace) -> Value {
+    let mut groups = viewer_projects(docs, workspaces);
+    groups.sort_by_key(|g| g.id != ws.id);
+    let all: Vec<&String> = groups.iter().flat_map(|g| &g.docs).collect();
+    let active = active.filter(|a| all.contains(a));
+    let groups: Vec<Value> = groups.iter().map(|g| json!({ "id": g.id, "name": g.name, "docs": g.docs, "here": g.id == ws.id })).collect();
+    json!({ "root": expand(&ws.root_dir), "docs": all, "groups": groups, "active": active })
 }
 
 fn extension(path: &str) -> String {
@@ -488,11 +501,8 @@ impl Root {
         match op.as_str() {
             "docs" => {
                 let s = self.state.read(cx);
-                let Some(ws) = s.workspaces.iter().find(|w| w.id == str_of(req, "workspaceId")) else { return reply(no("That workspace is gone.")) };
-                let group = viewer_projects(&s.viewer.docs, &s.workspaces).into_iter().find(|g| g.id == ws.id);
-                let docs = group.map(|g| g.docs).unwrap_or_default();
-                let active = s.viewer.active.clone().filter(|a| docs.contains(a));
-                reply(ok(json!({ "root": expand(&ws.root_dir), "docs": docs, "active": active })))
+                let Some(ws) = s.workspaces.iter().find(|w| w.id == str_of(req, "workspaceId") && w.remote.is_none()) else { return reply(no("That workspace is gone.")) };
+                reply(ok(phone_docs(&s.viewer.docs, s.viewer.active.as_ref(), &s.workspaces, ws)))
             }
             "list" => {
                 let s = self.state.read(cx);
@@ -596,6 +606,24 @@ mod tests {
         let p = phones.entry(device.to_string()).or_default();
         p.seen = Some(Instant::now());
         p.watch = Some(Watch { feed: Feed::Android, serial: 0, max_width: 720, quality: 55, sent: 0, acked: 0, sent_at: Instant::now() });
+    }
+
+    #[test]
+    fn phone_sees_every_open_file_with_its_workspace_first() {
+        use crate::model::{RemoteWorkspace, Workspace};
+        let ws = |id: &str, root: &str| Workspace { id: id.into(), name: id.into(), root_dir: root.into(), ..Default::default() };
+        let here = ws("here", "/code/app");
+        let other = ws("other", "/code/lib");
+        // A paired machine's workspace in the same folder: its files aren't this machine's.
+        let remote = Workspace { remote: Some(RemoteWorkspace { peer: "connect:x".into(), workspace: "w".into() }), ..ws("remote", "/code/app") };
+        let docs: Vec<String> = ["/code/lib/a.md", "/tmp/plan.md", "/code/app/b.md"].map(String::from).to_vec();
+        let all = [remote, other, here.clone()];
+        let v = super::phone_docs(&docs, Some(&docs[1]), &all, &here);
+        assert_eq!(v["docs"], serde_json::json!(["/code/app/b.md", "/code/lib/a.md", "/tmp/plan.md"]));
+        assert_eq!(v["groups"][0]["id"], "here");
+        assert_eq!(v["groups"][0]["here"], true);
+        assert_eq!(v["groups"][2]["name"], "Other files");
+        assert_eq!(v["active"], "/tmp/plan.md");
     }
 
     #[test]

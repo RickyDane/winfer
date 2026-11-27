@@ -13,17 +13,22 @@ const KEY = { back: 4, home: 3, recents: 187, power: 26, enter: 66, del: 67, tab
 
 const MODE: Record<string, string> = { scrcpy: "live", stream: "screen recording", screenshots: "screenshots" };
 
-export function Android({ client }: { client: DesktopClient }) {
+export function Android({ client, workspaceId }: { client: DesktopClient; workspaceId: string | null }) {
   const state = useClient(client);
-  // The Android panel is the primary machine's, when several are paired.
-  const online = linkState(forMachine(state, state.machines.find((m) => m.primary)?.id)) === "online";
+  // The devices of the machine of the workspace it was opened from (else the primary machine's),
+  // when several are paired: its calls carry the workspace, which routes them there.
+  const ws = workspaceId ? state.workspaces.find((w) => w.id === workspaceId) : undefined;
+  const machine = ws?.machine ?? state.machines.find((m) => m.primary)?.id;
+  const machineName = state.machines.length > 1 ? state.machines.find((m) => m.id === machine)?.name : undefined;
+  const online = linkState(forMachine(state, machine)) === "online";
+  const at = ws ? { workspaceId: ws.id } : {};
   const [as, setAs] = useState<AndroidState | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [typing, setTyping] = useState(false);
   const { frame, drawn } = useFrames(client, "android");
 
-  const op = <T,>(o: AndroidOp, extra: Record<string, unknown> = {}) => call<T>(client, { t: "android.call", op: o, ...extra });
-  const fire = (o: AndroidOp, extra: Record<string, unknown>) => client.fire({ t: "android.call", op: o, ...extra });
+  const op = <T,>(o: AndroidOp, extra: Record<string, unknown> = {}) => call<T>(client, { t: "android.call", op: o, ...at, ...extra });
+  const fire = (o: AndroidOp, extra: Record<string, unknown>) => client.fire({ t: "android.call", op: o, ...at, ...extra });
   const refresh = () =>
     op<AndroidState>("state")
       .then((s) => {
@@ -42,7 +47,7 @@ export function Android({ client }: { client: DesktopClient }) {
     document.addEventListener("visibilitychange", watch);
     return () => {
       document.removeEventListener("visibilitychange", watch);
-      client.fire({ t: "android.call", op: "unwatch" });
+      client.fire({ t: "android.call", op: "unwatch", ...at });
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [online]);
@@ -66,12 +71,35 @@ export function Android({ client }: { client: DesktopClient }) {
 
   const body = () => {
     if (!online) return <Notice icon="phone" title="Desktop offline" />;
-    if (!as || !as.loaded) return err ? <Notice icon="alert" title="Can't reach the mirror" text={err} /> : <Notice icon="phone" title="Looking for devices…" />;
+    if (!as || !as.loaded) {
+      const why = err ?? as?.error;
+      return why ? <Notice icon="alert" title="Can't reach the mirror" text={why} /> : <Notice icon="phone" title="Looking for devices…" />;
+    }
     if (as.adb === false) return <Notice icon="phone" title="No adb on the desktop" text="Install the Android SDK platform tools on the desktop to mirror devices and emulators." />;
     if (!current)
       return (
         <div className="android-empty">
-          <Notice icon="phone" title={as.starting ? `Starting ${as.starting}…` : "No device connected"} text={as.error ?? (as.avds?.length ? "Start an emulator, or connect a device to the desktop." : "Connect a device to the desktop, or create an emulator in Android Studio.")} />
+          <Notice
+            icon="phone"
+            title={as.starting ? `Starting ${as.starting}…` : ready.length ? "Pick a device" : "No device connected"}
+            text={as.error ?? (ready.length ? "The desktop's panel shows another machine's device. Pick one of these to mirror it here." : as.avds?.length ? "Start an emulator, or connect a device to the desktop." : "Connect a device to the desktop, or create an emulator in Android Studio.")}
+          />
+          {ready.length > 0 && (
+            <div className="group-card android-avds">
+              {ready.map((d) => (
+                <button key={d.serial} className="row" onClick={() => void act("select", { serial: d.serial })}>
+                  <span className="row-icon">
+                    <Icon name="phone" size={15} />
+                  </span>
+                  <span className="row-main">
+                    <b>{label(d)}</b>
+                    <span>{d.serial}</span>
+                  </span>
+                  <Icon name="right" size={16} />
+                </button>
+              ))}
+            </div>
+          )}
           {!as.starting && (as.avds ?? []).length > 0 && (
             <div className="group-card android-avds">
               {(as.avds ?? []).map((name) => (
@@ -103,7 +131,7 @@ export function Android({ client }: { client: DesktopClient }) {
 
   return (
     <div className="screen panel-screen">
-      <PanelBar title={current ? label(current) : "Android"} subtitle={current ? `${current.serial}${as?.mirror ? ` · ${MODE[as.mirror.mode]}` : ""}` : "The desktop's Android mirror"}>
+      <PanelBar title={current ? label(current) : "Android"} subtitle={current ? `${current.serial}${as?.mirror ? ` · ${MODE[as.mirror.mode]}` : ""}` : machineName ? `Devices on ${machineName}` : "The desktop's Android mirror"}>
         <BarButton icon="keyboard" label="Type" active={typing} disabled={!current} onClick={() => setTyping((t) => !t)} />
       </PanelBar>
       {ready.length > 1 && (

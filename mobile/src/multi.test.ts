@@ -96,6 +96,21 @@ describe("MultiClient", () => {
     expect(a.fire).not.toHaveBeenCalled();
   });
 
+  it("sends the Android panel to the opened workspace's machine and acknowledges each feed's frames to its sender", async () => {
+    const { a, b, multi } = setup();
+    await multi.request({ t: "android.call", op: "state", workspaceId: "B~w" });
+    expect(b.request).toHaveBeenCalledWith({ t: "android.call", op: "state", workspaceId: "w" });
+    expect(a.request).not.toHaveBeenCalled();
+    await multi.request({ t: "android.call", op: "state" });
+    expect(a.request).toHaveBeenCalledWith({ t: "android.call", op: "state" });
+    b.emit({ t: "panel.frame", feed: "android", seq: 1, data: "", width: 1, height: 1 });
+    a.emit({ t: "panel.frame", feed: "browser", seq: 7, data: "", width: 1, height: 1, workspaceId: "w" });
+    multi.fire({ t: "panel.frameDone", seq: 1, feed: "android" });
+    expect(b.fire).toHaveBeenLastCalledWith({ t: "panel.frameDone", seq: 1, feed: "android" });
+    multi.fire({ t: "panel.frameDone", seq: 7, feed: "browser" });
+    expect(a.fire).toHaveBeenLastCalledWith({ t: "panel.frameDone", seq: 7, feed: "browser" });
+  });
+
   it("keeps an unchanged machine's pane objects across another machine's update", () => {
     const { a, multi } = setup();
     const before = multi.getState().panes.find((p) => p.id === "B~p2");

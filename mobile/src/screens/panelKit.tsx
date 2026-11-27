@@ -94,7 +94,7 @@ export function useFrames(client: DesktopClient, feed: "browser" | "android") {
     const keep = urls.current.indexOf(url);
     urls.current.slice(0, Math.max(0, keep)).forEach((u) => URL.revokeObjectURL(u));
     urls.current = urls.current.slice(Math.max(0, keep));
-    client.fire({ t: "panel.frameDone", seq });
+    client.fire({ t: "panel.frameDone", seq, feed });
   };
   return { frame, error, drawn };
 }

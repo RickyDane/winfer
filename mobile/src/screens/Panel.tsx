@@ -22,8 +22,8 @@ function openModule(wsId: string, id: ModuleId, from: string) {
   haptic(6);
   setPanelBack(from);
   const w = encodeURIComponent(wsId);
-  if (id === "android") go("/panel/android");
-  else if (id === "terminal") go(`/panel/terminal/${w}/${encodeURIComponent(`side-terminal-${wsId}`)}`);
+  if (id === "terminal") go(`/panel/terminal/${w}/${encodeURIComponent(`side-terminal-${wsId}`)}`);
+  // Android too: the workspace picks the machine whose devices show.
   else go(`/panel/${id}/${w}`);
 }
 

@@ -13,7 +13,8 @@ import { Sheet } from "./Pickers";
 import { Segmented } from "./widgets";
 
 type Listing = { root: string; dir: string; entries: FileEntry[] };
-type Docs = { root: string; docs: string[]; active: string | null };
+/** The desktop viewer's open files: all of them, grouped by project (this workspace's first). */
+type Docs = { root: string; docs: string[]; active: string | null; groups?: { id: string; name: string; docs: string[]; here: boolean }[] };
 
 const base = (p: string) => p.replace(/\/+$/, "").split("/").pop() || p;
 const parent = (p: string) => p.replace(/\/+$/, "").replace(/\/[^/]*$/, "") || "/";
@@ -90,27 +91,32 @@ export function Files({ client, workspaceId }: { client: DesktopClient; workspac
           ) : docs.docs.length === 0 ? (
             <Notice icon="file" title="No files open" text="Files agents show you, and ones you open here, appear in the desktop's Files panel." action={{ label: "Browse the workspace", onClick: () => setView("browse") }} />
           ) : (
-            <div className="group-card file-list">
-              {docs.docs.map((d) => (
-                <div key={d} className="file-row">
-                  <button className="row" onClick={() => setPath(d)}>
-                    <span className="row-icon">
-                      <Icon name="file" size={15} />
-                    </span>
-                    <span className="row-main">
-                      <b>{base(d)}</b>
-                      <span>
-                        {relative(parent(d), root)}
-                        {d === docs.active ? " · shown on the desktop" : ""}
-                      </span>
-                    </span>
-                  </button>
-                  <button className="icon-btn" aria-label="Close" title="Close on the desktop" onClick={() => void op("close", { path: d }).then(loadDocs)}>
-                    <Icon name="x" size={15} />
-                  </button>
+            (docs.groups ?? [{ id: "", name: "", docs: docs.docs, here: true }]).map((g, _, all) => (
+              <section key={g.id} className="group files-group">
+                {(all.length > 1 || !g.here) && <h2>{g.name}</h2>}
+                <div className="group-card file-list">
+                  {g.docs.map((d) => (
+                    <div key={d} className="file-row">
+                      <button className="row" onClick={() => setPath(d)}>
+                        <span className="row-icon">
+                          <Icon name="file" size={15} />
+                        </span>
+                        <span className="row-main">
+                          <b>{base(d)}</b>
+                          <span>
+                            {relative(parent(d), root)}
+                            {d === docs.active ? " · shown on the desktop" : ""}
+                          </span>
+                        </span>
+                      </button>
+                      <button className="icon-btn" aria-label="Close" title="Close on the desktop" onClick={() => void op("close", { path: d }).then(loadDocs)}>
+                        <Icon name="x" size={15} />
+                      </button>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
+              </section>
+            ))
           )
         ) : !listing ? (
           <Notice icon="folder" title="Loading…" />
