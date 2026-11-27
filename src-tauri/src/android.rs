@@ -156,10 +156,18 @@ fn avd_exists(name: &str) -> bool {
 /// Starts an emulator in its own window; it shows up in the device list once booted.
 #[tauri::command]
 pub fn android_start_avd(name: String) -> Result<(), String> {
+    start_avd(&name, false)
+}
+
+/// `headless`: without a window (a server with no display, mirrored on another machine).
+pub fn start_avd(name: &str, headless: bool) -> Result<(), String> {
     let emulator = tool("emulator", "emulator").ok_or("The Android emulator isn't installed.")?;
     let mut cmd = Command::new(emulator);
-    no_window(&mut cmd)
-        .args(["-avd", &name])
+    no_window(&mut cmd).args(["-avd", name]);
+    if headless {
+        cmd.args(["-no-window", "-no-audio"]);
+    }
+    cmd
         .envs(login_env())
         .stdin(Stdio::null())
         .stdout(Stdio::null())

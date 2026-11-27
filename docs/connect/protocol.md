@@ -194,6 +194,36 @@ starting the browser), `newTab {url}` (tab id), `closeTab`, `navigate {tab, url}
 withData}`, `pasteImage {tab, data, mime}`. A desktop asks for `list` when a server's link comes up; its tabs leave the
 panel when it goes down.
 
+### Devices (phones, emulators, iOS Simulators)
+
+Any paired machine (desktop or server) answers for its Android devices and emulators (adb) and, on a Mac, its iOS
+Simulators (`xcrun simctl`). A desktop's device panel picks the machine, then one of its devices
+(`native/crates/winfer-core/src/devices.rs` hosts, `connect_devices.rs` watches). Android streams H.264 from scrcpy
+(lighter over the relay: 2 Mbit/s, 30 fps), else PNG screenshots; simulators stream JPEG screenshots. Each frame is
+acknowledged with `frameDone` once drawn: with 6 H.264 frames unacknowledged the next ones are dropped until the link
+catches up, then the encoder restarts at a keyframe (scrcpy's reset video); a screenshot waits for the last one's ack.
+
+| t | from | fields |
+|---|---|---|
+| `device.call` | watcher | `op`, op fields; with an `id`, answered by `ack {ok, value?, error?}`. `input`, `frameDone` and `detach` come without one |
+| `device.frame` | host | `streamId`, `codec` (`h264`, `jpeg` or `png`), `key` (a keyframe), `data` (base64) |
+| `device.end` | host | `streamId`, `error`: the stream stopped (the device went away, the video ended) |
+
+Ops: `list` (`{android: {adb, devices: [{serial, state, model, emulator}], avds}, ios: {simctl, input, devices: [{udid,
+name, state, runtime, booted}]}}`; `input` is the simulator input tool there, `axe` or `idb`, or null), `boot {platform,
+device}` (an AVD name, started without a window on a server, or a simulator udid), `attach {streamId, platform
+(`android`/`ios`), device (serial/udid), name}` (`{codec, live, input, inputTool?, width?, height?}`; `live`: touches
+follow the pointer, else a press becomes a tap or swipe when it lifts; `input` false: view only), `frameDone {streamId}`,
+`detach {streamId}`, and `input {streamId, kind, …}`, applied in order:
+
+- `touch {action: down|move|up, x, y}`, `scroll {x, y, h, v}` (wheel notches; positive: right, up): points as
+  fractions of the screen (0..1), so the watcher needn't know its size or rotation
+- `key {key: enter|backspace|tab|escape|up|down|left|right}`, `text {text}`
+- `button {button: back|home|recents|power}` (a simulator has home and power only)
+
+Simulators take input through AXe (`brew install cameroncooke/axe/axe`) or idb on the Mac they run on. A machine's
+streams end when the watcher's link goes down.
+
 ### Review on a server
 
 When an agent on a server finishes work (its worktree has changes), the server makes a review of it: diff stats, a
