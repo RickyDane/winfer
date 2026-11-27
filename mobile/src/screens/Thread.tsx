@@ -11,6 +11,7 @@ import { buildDisplayRows, describeStep, useCompactTools, workGroupSummary } fro
 import { useShowBgNotes } from "./bgNotes";
 import { Markdown } from "./Markdown";
 import { EffortIcon, EffortPicker, ModelPicker, Sheet, backendOf, effortLabel } from "./Pickers";
+import { PanelSheet, hasPanel } from "./Panel";
 import { Sky } from "./Sky";
 
 type ToolState = "running" | "done" | "failed" | "stopped" | "unknown";
@@ -390,7 +391,7 @@ export function Thread({ client, paneId }: { client: DesktopClient; paneId: stri
   const [picked, setPicked] = useState<number | null>(null);
   /** A "Type something" row the composer answers. */
   const [typing, setTyping] = useState<number | null>(null);
-  const [picker, setPicker] = useState<"model" | "effort" | "menu" | "bg" | null>(null);
+  const [picker, setPicker] = useState<"model" | "effort" | "menu" | "bg" | "panel" | null>(null);
   const [confirm, setConfirm] = useState(false);
   const scroller = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
@@ -601,6 +602,11 @@ export function Thread({ client, paneId }: { client: DesktopClient; paneId: stri
           </span>
         </div>
         {pane?.background?.length ? <BgChip items={pane.background} open={picker === "bg"} onOpen={() => setPicker("bg")} /> : null}
+        {pane && hasPanel(state, pane) && (
+          <button className="icon-btn" aria-label="Side panel" title="Side panel" data-on={picker === "panel" || undefined} onClick={() => (haptic(5), setPicker("panel"))}>
+            <Icon name="panel" size={18} />
+          </button>
+        )}
         {pane && (
           <button className="icon-btn" aria-label="More" onClick={() => (haptic(5), setConfirm(false), setPicker("menu"))}>
             <Icon name="more" size={18} />
@@ -794,6 +800,7 @@ export function Thread({ client, paneId }: { client: DesktopClient; paneId: stri
       {picker === "model" && pane && cfg && <ModelPicker client={client} pane={pane} config={cfg} online={ready} onClose={() => setPicker(null)} />}
       {picker === "effort" && pane && cfg && <EffortPicker client={client} pane={pane} config={cfg} online={ready} onClose={() => setPicker(null)} />}
       {picker === "bg" && pane && <BgSheet client={client} paneId={pane.id} items={pane.background ?? []} ready={ready} onClose={closePicker} />}
+      {picker === "panel" && pane && <PanelSheet client={client} pane={pane} onClose={() => setPicker(null)} />}
       {picker === "menu" && pane && (
         <Sheet label="Agent" title={pane.title} sub={`${pane.workspace} · ${STATUS_LABEL[pane.status]}`} onClose={() => setPicker(null)}>
           <div className="sheet-body">
@@ -810,6 +817,12 @@ export function Thread({ client, paneId }: { client: DesktopClient; paneId: stri
                   </button>
                 )}
               </>
+            )}
+            {hasPanel(state, pane) && (
+              <button className="menu-item" onClick={() => setPicker("panel")}>
+                <Icon name="panel" size={16} /> Side panel
+                <span className="menu-value">Browser, terminal, files</span>
+              </button>
             )}
             <button className="menu-item danger" disabled={!ready} onClick={closeSession}>
               <Icon name="x" size={16} /> {confirm ? "Stop the agent and close?" : "Close session"}

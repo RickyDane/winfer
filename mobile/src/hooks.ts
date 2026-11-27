@@ -35,7 +35,7 @@ export function parseRoute(hash: string): Route {
 
 // One hash listener for the app; screen changes run inside a view transition so the old screen
 // slides out and shared elements (an agent's avatar and title) morph into the next screen.
-const DEPTH: Record<Route["name"], number> = { inbox: 0, pair: 0, pane: 1, new: 1, settings: 0, usage: 1, panel: 0, browser: 1, android: 1, terminal: 1, files: 1 };
+const DEPTH: Record<Route["name"], number> = { inbox: 0, pair: 0, pane: 1, new: 1, settings: 0, usage: 1, panel: 0, browser: 2, android: 2, terminal: 2, files: 2 };
 /** Screens reached from the bottom tab bar: switching between them cross-fades. */
 export const TABS: Route["name"][] = ["inbox", "panel", "settings"];
 let current = location.hash;
@@ -76,6 +76,11 @@ export const firstMessages = new Map<string, string>();
 export function go(path: string) {
   location.hash = path;
 }
+
+/** Where a side-panel screen's Back leads: the Panel tab, or the chat it was opened from. */
+const BACK_KEY = "winfer.panelBack";
+export const panelBack = () => sessionStorage.getItem(BACK_KEY) ?? "/panel";
+export const setPanelBack = (path: string) => sessionStorage.setItem(BACK_KEY, path);
 
 /** A tiny tap on phones that support it (Android); no-op elsewhere. */
 export function haptic(pattern: number | number[] = 8) {

@@ -69,7 +69,7 @@ export function Files({ client, workspaceId }: { client: DesktopClient; workspac
 
   return (
     <div className="screen panel-screen">
-      <PanelBar title="Files" subtitle={ws?.name} back={view === "browse" && !atRoot ? back : "/panel"}>
+      <PanelBar title="Files" subtitle={ws?.name} back={view === "browse" && !atRoot ? back : undefined}>
         <BarButton icon="refresh" label="Refresh" onClick={() => (view === "open" ? void loadDocs() : void list(listing?.dir))} />
       </PanelBar>
       <div className="filters">

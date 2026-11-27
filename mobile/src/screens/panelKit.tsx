@@ -1,7 +1,7 @@
 // Shared pieces of the side-panel screens (Browser, Android, Terminal, Files).
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { DesktopClient } from "../client";
-import { go } from "../hooks";
+import { go, panelBack } from "../hooks";
 import type { DesktopMsg, PhoneMsg, StreamMsg } from "../protocol";
 import { Icon, type IconName } from "./common";
 
@@ -99,11 +99,11 @@ export function useFrames(client: DesktopClient, feed: "browser" | "android") {
   return { frame, error, drawn };
 }
 
-/** A screen's bar: back to the Panel tab, a title and its actions. */
-export function PanelBar({ title, subtitle, back = "/panel", children }: { title: string; subtitle?: string; back?: string | (() => void); children?: ReactNode }) {
+/** A screen's bar: back to where it was opened from (the Panel tab or a chat), a title and its actions. */
+export function PanelBar({ title, subtitle, back, children }: { title: string; subtitle?: string; back?: string | (() => void); children?: ReactNode }) {
   return (
     <header className="bar">
-      <button className="icon-btn" aria-label="Back" onClick={() => (typeof back === "string" ? go(back) : back())}>
+      <button className="icon-btn" aria-label="Back" onClick={() => (typeof back === "function" ? back() : go(back ?? panelBack()))}>
         <Icon name="back" size={19} />
       </button>
       <div className="bar-title">
