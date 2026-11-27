@@ -234,6 +234,30 @@ pub fn next_account(provider: &str, current: Option<&str>, reset_at: Option<i64>
     crate::accounts::pick(provider, &[current.as_str()])
 }
 
+/// What a bridge sends to carry on after moving off an account that wasn't signed in, when the
+/// session already had turns (a first message is sent again instead).
+pub const SIGNED_IN_PROMPT: &str = "[winfer] The previous request stopped because the account wasn't signed in. winfer switched to another account: continue where you left off.";
+
+/// Whether a CLI's error says its account isn't signed in. Claude Code: "Not logged in · Please
+/// run /login", "Invalid API key · Please run /login", "OAuth token revoked · Please run /login".
+pub fn signed_out(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    ["not logged in", "please run /login"].iter().any(|p| lower.contains(p))
+}
+
+/// Moves an agent off an account that isn't signed in: the next signed-in one, or None.
+pub fn next_signed_in(provider: &str, current: Option<&str>) -> Option<String> {
+    let current = current.map_or_else(|| crate::accounts::default_id(provider), String::from);
+    crate::accounts::mark_signed_out(&current);
+    crate::accounts::pick(provider, &[current.as_str()])
+}
+
+/// The notice for a move off an account that isn't signed in.
+pub fn signed_out_notice(from: Option<&str>, to: &str, provider: &str) -> String {
+    let from = crate::accounts::label(&from.map_or_else(|| crate::accounts::default_id(provider), String::from));
+    format!("Account \"{from}\" isn't signed in here; continuing on \"{}\".", crate::accounts::label(to))
+}
+
 /// The notice for a move between accounts.
 pub fn switched_notice(from: Option<&str>, to: &str, reset_at: Option<i64>, provider: &str) -> String {
     let from = crate::accounts::label(&from.map_or_else(|| crate::accounts::default_id(provider), String::from));
@@ -778,7 +802,7 @@ mod preload_tests {
 
 #[cfg(test)]
 mod account_tests {
-    use super::usage_limit;
+    use super::{signed_out, usage_limit};
 
     #[test]
     fn recognizes_usage_limits() {
@@ -791,5 +815,15 @@ mod account_tests {
         assert_eq!(usage_limit("You hit your stride, no limits here"), None);
         assert_eq!(usage_limit("Prompt is too long"), None);
         assert_eq!(usage_limit("context limit reached"), None);
+    }
+
+    #[test]
+    fn recognizes_signed_out_accounts() {
+        assert!(signed_out("Not logged in · Please run /login"));
+        assert!(signed_out("Invalid API key · Please run /login"));
+        assert!(signed_out("OAuth token revoked · Please run /login"));
+        assert!(!signed_out("Claude AI usage limit reached|1730000000"));
+        assert!(!signed_out("API Error: 500 Internal server error"));
+        assert_eq!(usage_limit("Not logged in · Please run /login"), None);
     }
 }

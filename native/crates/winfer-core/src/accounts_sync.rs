@@ -101,18 +101,6 @@ pub fn fingerprint(parts: &Parts) -> String {
     h.finalize().iter().take(12).map(|b| format!("{b:02x}")).collect()
 }
 
-fn is_default(id: &str) -> bool {
-    id == accounts::default_id(accounts::provider_of(id))
-}
-
-/// Claude Code's own record of the account (`.claude.json`): next to the config dir for the
-/// default sign-in, inside it otherwise.
-fn claude_json(id: &str) -> Option<PathBuf> {
-    if is_default(id) && std::env::var_os("CLAUDE_CONFIG_DIR").is_none() {
-        return dirs::home_dir().map(|h| h.join(".claude.json"));
-    }
-    accounts::dir(id).map(|d| d.join(".claude.json"))
-}
 
 /// The Keychain item Claude Code keeps an account's sign-in in (macOS).
 #[cfg(target_os = "macos")]
@@ -171,7 +159,7 @@ pub fn read(id: &str) -> Result<Parts, String> {
             let creds = keychain.or_else(|| std::fs::read_to_string(dir.join(".credentials.json")).ok()).ok_or("Not signed in to Claude Code on this account.")?;
             serde_json::from_str::<Value>(&creds).map_err(|_| "Claude Code's sign-in isn't readable.")?;
             parts.insert("credentials".into(), creds);
-            let record = claude_json(id).and_then(|p| std::fs::read_to_string(p).ok()).and_then(|t| serde_json::from_str::<Value>(&t).ok());
+            let record = accounts::claude_record(id).and_then(|p| std::fs::read_to_string(p).ok()).and_then(|t| serde_json::from_str::<Value>(&t).ok());
             if let Some(account) = record.map(|r| r["oauthAccount"].clone()).filter(|a| a.is_object()) {
                 parts.insert("account".into(), account.to_string());
             }
@@ -218,7 +206,7 @@ pub fn write(id: &str, parts: &Parts) -> Result<(), String> {
             #[cfg(not(target_os = "macos"))]
             write_private(&dir.join(".credentials.json"), creds)?;
             // Claude Code's record: signed in as that account, its first-run setup done.
-            if let Some(path) = claude_json(id) {
+            if let Some(path) = accounts::claude_record(id) {
                 let mut record: Value = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str(&t).ok()).filter(Value::is_object).unwrap_or_else(|| json!({}));
                 if let Some(account) = parts.get("account").and_then(|a| serde_json::from_str::<Value>(a).ok()) {
                     record["oauthAccount"] = account;
@@ -233,6 +221,8 @@ pub fn write(id: &str, parts: &Parts) -> Result<(), String> {
         "codex" => write_private(&dir.join("auth.json"), parts.get("auth").ok_or("no Codex sign-in in it")?)?,
         other => return Err(format!("{other} sign-ins can't be shared")),
     }
+    // Signed in now, whatever its agent said before.
+    accounts::clear_signed_out(id);
     Ok(())
 }
 
@@ -265,7 +255,7 @@ fn codex_identity(auth: &Value) -> Option<String> {
 /// Who this machine's account is signed in as, from its files (no Keychain prompt).
 fn identity_here(id: &str) -> Option<String> {
     match accounts::provider_of(id) {
-        "claude" => claude_identity(&serde_json::from_str::<Value>(&std::fs::read_to_string(claude_json(id)?).ok()?).ok()?["oauthAccount"]),
+        "claude" => claude_identity(&serde_json::from_str::<Value>(&std::fs::read_to_string(accounts::claude_record(id)?).ok()?).ok()?["oauthAccount"]),
         "codex" => codex_identity(&serde_json::from_str(&std::fs::read_to_string(accounts::dir(id)?.join("auth.json")).ok()?).ok()?),
         _ => None,
     }

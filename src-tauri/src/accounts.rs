@@ -41,6 +41,10 @@ struct File {
     /// Account id → when its usage resets (unix ms); 0 when unknown.
     #[serde(default)]
     exhausted: BTreeMap<String, i64>,
+    /// Account id → when the agent said it isn't signed in (unix ms). Holds until its sign-in
+    /// files change (signed in again).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    signed_out: BTreeMap<String, i64>,
 }
 
 /// An account as the app shows it.
@@ -277,30 +281,104 @@ fn email(id: &str) -> Option<String> {
     }
 }
 
-fn signed_in(id: &str) -> bool {
+/// Claude Code's own record of the account (`.claude.json`, with `oauthAccount`): next to the
+/// config dir for the default sign-in, inside it otherwise.
+pub fn claude_record(id: &str) -> Option<PathBuf> {
+    if is_default(id) && std::env::var_os("CLAUDE_CONFIG_DIR").is_none() {
+        return dirs::home_dir().map(|h| h.join(".claude.json"));
+    }
+    dir(id).map(|d| d.join(".claude.json"))
+}
+
+/// Whether Claude Code has a sign-in in `dir`: its credentials file (Linux, Windows, and macOS
+/// without a Keychain), or on macOS, where the Keychain can't be read without a prompt, the
+/// account record it writes on sign-in. `token` is a sign-in through the environment.
+fn claude_signed_in(dir: &Path, record: Option<&Path>, keychain: bool, token: bool) -> bool {
+    token
+        || dir.join(".credentials.json").is_file()
+        || keychain && record.and_then(|r| std::fs::read_to_string(r).ok()).is_some_and(|t| t.contains("\"oauthAccount\""))
+}
+
+/// A sign-in the default Claude account gets from winfer's environment (`claude setup-token`,
+/// an API key); the other accounts' config dirs don't change that, so only the default counts it.
+fn claude_env_token() -> bool {
+    ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"].iter().any(|v| std::env::var_os(v).is_some_and(|s| !s.is_empty()))
+}
+
+/// Whether the account has a sign-in on this machine (from its files; no Keychain prompt).
+fn has_sign_in(id: &str) -> bool {
     let Some(dir) = dir(id) else { return false };
     match provider_of(id) {
         "codex" => dir.join("auth.json").is_file(),
-        // Keychain sign-ins can't be checked without a prompt; the account record says enough.
-        _ => is_default(id) || std::fs::read_to_string(dir.join(".claude.json")).ok().is_some_and(|t| t.contains("\"oauthAccount\"")) || dir.join(".credentials.json").is_file(),
+        _ => claude_signed_in(&dir, claude_record(id).as_deref(), cfg!(target_os = "macos"), is_default(id) && claude_env_token()),
     }
 }
 
-/// The accounts to try for an agent, in order: enabled and not out of usage.
+/// The files a new sign-in rewrites: one changing after the agent said "not logged in" means
+/// the account was signed in again.
+fn sign_in_files(id: &str) -> Vec<PathBuf> {
+    let Some(dir) = dir(id) else { return Vec::new() };
+    match provider_of(id) {
+        "codex" => vec![dir.join("auth.json")],
+        _ => vec![dir.join(".credentials.json")],
+    }
+}
+
+/// An account the agent said isn't signed in is retried after this long even when its files
+/// don't show a new sign-in (a Keychain sign-in leaves none).
+const SIGNED_OUT_RETRY_MS: i64 = 60 * 60 * 1000;
+
+fn modified_ms(path: &Path) -> Option<i64> {
+    let t = std::fs::metadata(path).ok()?.modified().ok()?;
+    t.duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_millis() as i64)
+}
+
+/// Whether the agent said the account isn't signed in, and it hasn't been signed in since.
+fn marked_out(file: &File, id: &str, files: &[PathBuf], now: i64) -> bool {
+    let Some(&at) = file.signed_out.get(id) else { return false };
+    at + SIGNED_OUT_RETRY_MS > now && !files.iter().filter_map(|f| modified_ms(f)).any(|m| m > at)
+}
+
+fn signed_in_with(file: &File, id: &str, now: i64) -> bool {
+    has_sign_in(id) && !marked_out(file, id, &sign_in_files(id), now)
+}
+
+/// The accounts to try for an agent, in order: enabled, signed in and not out of usage.
 pub fn pick(provider: &str, exclude: &[&str]) -> Option<String> {
     let file = load();
     let now = now_ms();
+    first_usable(&file, provider, exclude, now, |id| signed_in_with(&file, id, now))
+}
+
+fn first_usable(file: &File, provider: &str, exclude: &[&str], now: i64, signed_in: impl Fn(&str) -> bool) -> Option<String> {
     file.accounts
         .iter()
         .filter(|a| a.provider == provider && a.enabled && !exclude.contains(&a.id.as_str()))
-        .find(|a| exhausted_until(&file, &a.id, now).is_none() && signed_in(&a.id))
+        .find(|a| exhausted_until(file, &a.id, now).is_none() && signed_in(&a.id))
         .map(|a| a.id.clone())
 }
 
 /// Whether the account is enabled, signed in and has usage left.
 pub fn usable(id: &str) -> bool {
     let file = load();
-    file.accounts.iter().any(|a| a.id == id && a.enabled) && exhausted_until(&file, id, now_ms()).is_none() && signed_in(id)
+    let now = now_ms();
+    file.accounts.iter().any(|a| a.id == id && a.enabled) && exhausted_until(&file, id, now).is_none() && signed_in_with(&file, id, now)
+}
+
+/// Records that the agent said the account isn't signed in ("Not logged in · Please run
+/// /login"): agents skip it until it's signed in again.
+pub fn mark_signed_out(id: &str) {
+    let mut file = load();
+    file.signed_out.insert(id.to_string(), now_ms());
+    let _ = save(&file);
+}
+
+/// The account was just signed in (a pushed sign-in, a login): forget it said it wasn't.
+pub fn clear_signed_out(id: &str) {
+    let mut file = load();
+    if file.signed_out.remove(id).is_some() {
+        let _ = save(&file);
+    }
 }
 
 /// Whether there's more than the default account for this agent.
@@ -335,7 +413,7 @@ pub fn list() -> Vec<Entry> {
         .map(|a| Entry {
             account: a.clone(),
             dir: dir(&a.id).map(|d| d.to_string_lossy().into_owned()).unwrap_or_default(),
-            signed_in: signed_in(&a.id),
+            signed_in: signed_in_with(&file, &a.id, now),
             email: email(&a.id),
             exhausted_until: exhausted_until(&file, &a.id, now),
         })
@@ -380,6 +458,7 @@ pub fn accounts_remove(id: String) -> Result<(), String> {
     let mut file = load();
     file.accounts.retain(|a| a.id != id);
     file.exhausted.remove(&id);
+    file.signed_out.remove(&id);
     save(&file)?;
     if let Some(dir) = dir(&id) {
         remove_account_dir(&dir);
@@ -455,6 +534,7 @@ pub struct Login {
 #[tauri::command]
 pub fn accounts_login(id: String) -> Result<Login, String> {
     ensure_links(&id)?;
+    clear_signed_out(&id);
     let command = match provider_of(&id) {
         "claude" => "claude /login",
         "codex" => "codex login",
@@ -518,6 +598,66 @@ mod tests {
         assert_eq!(codex_email(&json!({ "tokens": { "id_token": format!("h.{payload}.s") } })).as_deref(), Some("x@y.z"));
         assert_eq!(codex_email(&json!({ "tokens": {} })), None);
         assert_eq!(codex_email(&json!({ "tokens": { "id_token": "not-a-jwt" } })), None);
+    }
+
+    #[test]
+    fn claude_sign_ins_come_from_credentials_not_the_account_record() {
+        let root = std::env::temp_dir().join(format!("winfer-accounts-signin-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let record = root.join(".claude.json");
+        // A logged-out config dir (a server's own ~/.claude): not signed in, default or not.
+        assert!(!claude_signed_in(&root, Some(&record), false, false));
+        assert!(!claude_signed_in(&root, Some(&record), true, false));
+        // A stale account record isn't a sign-in where credentials live in a file.
+        std::fs::write(&record, r#"{"oauthAccount":{"emailAddress":"a@b.c"}}"#).unwrap();
+        assert!(!claude_signed_in(&root, Some(&record), false, false));
+        // On macOS the record stands in for the Keychain item.
+        assert!(claude_signed_in(&root, Some(&record), true, false));
+        // A token in the environment.
+        assert!(claude_signed_in(&root, None, false, true));
+        // The credentials file (a pushed sign-in on Linux).
+        std::fs::write(root.join(".credentials.json"), "{}").unwrap();
+        assert!(claude_signed_in(&root, None, false, false));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn pick_skips_signed_out_accounts() {
+        let account = |id: &str| Account { id: id.into(), provider: "claude".into(), label: id.into(), enabled: true };
+        let mut file = File { accounts: vec![account("claude:default"), account("claude:account-2"), account("claude:account-3")], ..Default::default() };
+        // The default account is first, but a pushed one is the one signed in.
+        let pushed = |id: &str| id != "claude:default";
+        assert_eq!(first_usable(&file, "claude", &[], 0, pushed).as_deref(), Some("claude:account-2"));
+        assert_eq!(first_usable(&file, "claude", &[], 0, |_| true).as_deref(), Some("claude:default"));
+        assert_eq!(first_usable(&file, "claude", &[], 0, |_| false), None);
+        // Out of usage, or excluded: the next signed-in one.
+        file.exhausted.insert("claude:account-2".into(), 10);
+        assert_eq!(first_usable(&file, "claude", &[], 0, pushed).as_deref(), Some("claude:account-3"));
+        assert_eq!(first_usable(&file, "claude", &["claude:account-3"], 0, pushed), None);
+        assert_eq!(first_usable(&file, "codex", &[], 0, |_| true), None);
+    }
+
+    #[test]
+    fn signed_out_marks_hold_until_a_new_sign_in() {
+        let root = std::env::temp_dir().join(format!("winfer-accounts-out-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let creds = root.join(".credentials.json");
+        std::fs::write(&creds, "{}").unwrap();
+        let files = vec![creds.clone(), root.join("missing")];
+        let written = modified_ms(&creds).unwrap();
+        let mut file = File::default();
+        assert!(!marked_out(&file, "claude:default", &files, written));
+        // Marked after the sign-in was written: out, until the retry time passes.
+        file.signed_out.insert("claude:default".into(), written + 1_000);
+        assert!(marked_out(&file, "claude:default", &files, written + 2_000));
+        assert!(!marked_out(&file, "claude:default", &files, written + 1_000 + SIGNED_OUT_RETRY_MS));
+        assert!(!marked_out(&file, "claude:account-2", &files, written + 2_000));
+        // Signed in again since (the credentials changed after the mark): usable.
+        file.signed_out.insert("claude:default".into(), written - 1_000);
+        assert!(!marked_out(&file, "claude:default", &files, written));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

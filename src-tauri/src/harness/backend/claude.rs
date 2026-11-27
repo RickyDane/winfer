@@ -292,6 +292,13 @@ struct Bridge {
     limit: Option<(String, Option<i64>)>,
     /// The account's usage is nearly gone: the next turn starts on another account.
     low: bool,
+    /// Claude Code said the account isn't signed in (its error): move to the next signed-in
+    /// account once idle.
+    signed_out: Option<String>,
+    /// The last message sent, to send again when it never reached a signed-in account.
+    last_sent: Option<crate::harness::event::UserMsg>,
+    /// A turn of this session finished without an error.
+    answered: bool,
     /// Out of usage on every account: waiting for the reset, with the messages sent meanwhile.
     wait: super::LimitWait,
     /// Where Claude Code keeps plan files (`<config dir>/plans`), which plan mode may write.
@@ -457,6 +464,9 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         settled: false,
         limit: None,
         low: false,
+        signed_out: None,
+        last_sent: None,
+        answered: false,
         wait: Default::default(),
         plans: plans_dir(opts.account.as_deref()),
         plan_file: None,
@@ -541,6 +551,31 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                 None if super::LimitWait::enabled() => b.wait.start(reset, &b.events),
                 // Without the CLI's own message (a rate limit event), it has already reported the error.
                 None if text.is_empty() => {}
+                None => b.emit(Ev::Error(text)),
+            }
+        }
+        // Not signed in: on to the next signed-in account, like running out of usage.
+        if b.signed_out.is_some() && b.idle() {
+            let text = b.signed_out.take().unwrap();
+            match super::next_signed_in("claude", opts.account.as_deref()) {
+                Some(next) => {
+                    let notice = super::signed_out_notice(opts.account.as_deref(), &next, "claude");
+                    // A first message that never got an answer goes again, on a new session;
+                    // a session with turns continues.
+                    let again = (!b.answered && opts.resume.is_none()).then(|| b.last_sent.clone()).flatten();
+                    if again.is_some() {
+                        b.session = None;
+                    }
+                    if let Err(e) = switch_account(&mut b, &mut proc, &mut opts, next, &rx, &me, &mut stale_exits) {
+                        let _ = b.events.send(Ev::Exited(format!("Claude Code didn't restart: {e}")));
+                        return;
+                    }
+                    b.emit(Ev::Notice(notice));
+                    let msg = again.unwrap_or_else(|| crate::harness::event::UserMsg { text: super::SIGNED_IN_PROMPT.into(), ..Default::default() });
+                    if !b.on_cmd(Cmd::Send(msg), &mut proc) {
+                        return;
+                    }
+                }
                 None => b.emit(Ev::Error(text)),
             }
         }
@@ -702,6 +737,7 @@ impl Bridge {
     fn on_cmd(&mut self, cmd: Cmd, proc: &mut LineProcess) -> bool {
         match cmd {
             Cmd::Send(msg) => {
+                self.last_sent = Some(msg.clone());
                 self.busy = true;
                 self.emit(Ev::TurnStart);
                 self.live.turn.request_started(std::time::Instant::now());
@@ -1008,8 +1044,12 @@ impl Bridge {
                     let limit = super::usage_limit(text).or_else(|| self.limit.as_ref().map(|_| None));
                     match limit {
                         Some(reset) => self.limit = Some((text.to_string(), reset.or(self.limit.as_ref().and_then(|l| l.1)))),
+                        // Reported (or worked around) once the bridge picks a signed-in account.
+                        None if super::signed_out(text) => self.signed_out = Some(text.to_string()),
                         None => self.emit(Ev::Error(text.to_string())),
                     }
+                } else if v["is_error"].as_bool() != Some(true) {
+                    self.answered = true;
                 }
                 self.busy = false;
                 self.settled = true;
@@ -1500,7 +1540,7 @@ mod tests {
             trim_at: 0,
             compact_at: 0,
             running: Default::default(),
-            settled: false, limit: None, low: false, wait: Default::default(),
+            settled: false, limit: None, low: false, signed_out: None, last_sent: None, answered: false, wait: Default::default(),
             plans: None, plan_file: None, ultracode: false,
         };
         (b, rx)
@@ -1737,6 +1777,24 @@ mod tests {
         let file = rx.try_iter().find_map(|e| if let Ev::Approval(a) = e { a.plan_file } else { None }).unwrap();
         assert_eq!(file, plan);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn not_logged_in_waits_for_another_account_instead_of_failing() {
+        let (mut b, rx) = bridge();
+        b.on_line(&json!({ "type": "result", "subtype": "success", "is_error": true, "result": "Not logged in · Please run /login" }));
+        assert_eq!(b.signed_out.as_deref(), Some("Not logged in · Please run /login"));
+        assert!(!b.answered);
+        assert!(!rx.try_iter().any(|e| matches!(e, Ev::Error(_))), "reported only when no signed-in account is left");
+        // Other errors are reported as before; a turn without one counts as answered.
+        b.signed_out = None;
+        b.busy = true;
+        b.on_line(&json!({ "type": "result", "subtype": "success", "is_error": true, "result": "API Error: 500" }));
+        assert!(b.signed_out.is_none());
+        assert!(rx.try_iter().any(|e| matches!(e, Ev::Error(t) if t == "API Error: 500")));
+        b.busy = true;
+        b.on_line(&json!({ "type": "result", "subtype": "success", "is_error": false, "result": "done" }));
+        assert!(b.answered);
     }
 
     #[test]
