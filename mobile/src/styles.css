@@ -345,6 +345,10 @@ textarea, input, .md, .ask-code, .ask-q p, .turn-user p, .screen-text, .tool-bod
 }
 .turn-user .time { padding-right: 4px; }
 .turn-assistant { padding: 6px 2px; }
+.thread-notice { display: flex; justify-content: center; margin: 6px 0; }
+.thread-notice > span { display: inline-flex; align-items: flex-start; gap: 6px; max-width: 90%; padding: 5px 11px; border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--raised); color: var(--muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.thread-notice svg { flex: none; margin-top: 3px; color: var(--subtle); }
+.thread-notice[data-kind="account"] svg { color: var(--accent); }
 .bg-row { margin: 4px 0; }
 .bg-row > button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px; border: 0; border-radius: var(--r-lg); background: transparent; color: var(--muted); font: inherit; font-size: 12.5px; text-align: left; }
 .bg-row .bg-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--success, #3fb27f); }

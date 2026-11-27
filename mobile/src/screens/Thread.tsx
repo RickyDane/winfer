@@ -49,6 +49,20 @@ function BgRow({ msg, fresh }: { msg: Message; fresh: boolean }) {
   );
 }
 
+const NOTICE_ICON: Record<NonNullable<Message["kind"]>, IconName> = { compact: "layers", microcompact: "minus", account: "refresh" };
+
+/** A session note the desktop shows too: compaction, micro-compaction, an account change. */
+function NoticeRow({ msg, fresh }: { msg: Message; fresh: boolean }) {
+  return (
+    <div className={`thread-notice${fresh ? " fresh" : ""}`} data-kind={msg.kind} role="note">
+      <span>
+        <Icon name={NOTICE_ICON[msg.kind ?? "compact"] ?? "info"} size={12} />
+        {msg.text}
+      </span>
+    </div>
+  );
+}
+
 function Steps({ msgs, active, legacyLive, fresh }: { msgs: Message[]; active: boolean; legacyLive: boolean; fresh: boolean }) {
   // Sessions that don't report states: the last call of the last group runs while the agent works.
   const states = msgs.map((m, i) => (m.state ? toolState(m, active) : legacyLive && i === msgs.length - 1 ? "running" : "unknown"));
@@ -552,6 +566,7 @@ export function Thread({ client, paneId }: { client: DesktopClient; paneId: stri
             const fresh = isFresh(m.id) ? " fresh" : "";
             if (m.report) return <div key={m.id} className={`turn-viz${fresh}`}><VizReport report={m.report} /></div>;
             if (m.role === "bg") return <BgRow key={m.id} msg={m} fresh={fresh !== ""} />;
+            if (m.role === "notice") return <NoticeRow key={m.id} msg={m} fresh={fresh !== ""} />;
             if (m.role === "user")
               return (
                 <div key={m.id} className={`turn-user${fresh}`}>

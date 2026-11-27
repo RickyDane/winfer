@@ -93,7 +93,7 @@ export type ReportBlock = { title: string | null; caption: string | null; span: 
 export interface Message {
   id: string;
   /** "thinking": a text-less marker ending the thread while the agent reasons; never shown. */
-  role: "user" | "assistant" | "tool" | "thinking" | "bg";
+  role: "user" | "assistant" | "tool" | "thinking" | "bg" | "notice";
   text: string;
   tool?: string;
   /** Short human-readable tool description (e.g. Bash/Agent `description`), used in compact rows. */
@@ -109,6 +109,8 @@ export interface Message {
   report?: Report;
   /** "bg": a finished background task: `text` is its one-line summary, `detail` its command and output. */
   detail?: string;
+  /** "notice": what the session note is about (context compaction, or a move to another account at a usage limit). */
+  kind?: "compact" | "microcompact" | "account";
 }
 
 /** One plan limit (5-hour, weekly…): `left` is the percent still available. */

@@ -90,13 +90,14 @@ interface Pane {
   config?: { model: string; label: string; effort: string; efforts: string[]; mode?: string; yolo?: boolean; cwd?: string | null; branch?: string | null } | null; // winfer code chats only
 }
 interface Message {
-  id: string; role: "user" | "assistant" | "tool";
+  id: string; role: "user" | "assistant" | "tool" | "notice"; // also "bg", "thinking" (see mobile/src/protocol.ts)
   text: string;           // markdown for assistant, tool = one-line summary
   tool?: string;          // tool name for role=tool
   ts: number | null;      // ms epoch
   state?: "running" | "done" | "failed"; // tools: from the session (Claude: tool_result /
                           // <task-notification>; Codex: *_call_output; winfer code: saved state)
   background?: boolean;   // tools: a background shell or subagent, which outlives its call
+  kind?: "compact" | "microcompact" | "account"; // notice (winfer code): compaction, micro-compaction, account change at a usage limit
   report?: Report;        // tools: a `visualize` call's validated report (see mobile/src/protocol.ts); the phone draws it as charts/tables instead of a tool row
 }
 ```

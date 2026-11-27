@@ -47,6 +47,8 @@ pub fn live_thread(state: &CodeState, limit: usize) -> Vec<Value> {
                 if let Some(n) = super::bg_note::parse(text) {
                     let detail = [n.cmd.as_str(), n.output.as_str()].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join("\n\n");
                     out.push(json!({ "id": key, "role": "bg", "text": n.title(), "detail": detail, "state": if n.failed() { "failed" } else { "done" }, "ts": null }));
+                } else if let Some(kind) = notice_kind(text) {
+                    out.push(json!({ "id": key, "role": "notice", "kind": kind, "text": text, "ts": null }));
                 }
             }
             _ => {}
@@ -57,6 +59,21 @@ pub fn live_thread(state: &CodeState, limit: usize) -> Vec<Value> {
     }
     let skip = out.len().saturating_sub(limit);
     out.split_off(skip)
+}
+
+/// Which of the harness's notices the phone shows too: compaction, micro-compaction and a move
+/// to another account (or a wait) over a usage limit. The texts are the backends' (`harness/backend`).
+fn notice_kind(text: &str) -> Option<&'static str> {
+    let t = text.trim();
+    if t.starts_with("Micro-compacted") {
+        Some("microcompact")
+    } else if t.starts_with("Context compacted") || t.starts_with("Conversation compacted") || t.starts_with("Compacting the conversation") || t.starts_with("Couldn't compact the context") || (t.starts_with("Context ") && t.ends_with("compacting…")) {
+        Some("compact")
+    } else if (t.starts_with("Account \"") && t.contains("out of usage")) || t.starts_with("Continuing on \"") || t.starts_with("Queued until the usage limit resets") || t.starts_with("The usage limit has reset") {
+        Some("account")
+    } else {
+        None
+    }
 }
 
 /// The first pending approval or question as the phone shows it. For a form of several questions,
@@ -173,6 +190,18 @@ mod tests {
         assert_eq!(t.len(), 1);
         assert_eq!((t[0]["role"].as_str(), t[0]["text"].as_str(), t[0]["state"].as_str()), (Some("bg"), Some("Dev · exit 1 · 4s"), Some("failed")));
         assert_eq!(t[0]["detail"], "npm run dev\n\nboom");
+    }
+
+    #[test]
+    fn compaction_and_account_notices_reach_the_phone() {
+        let mut s = CodeState::default();
+        for text in ["Context compacted.", "Micro-compacted: trimmed 42 KB of old tool output.", "Context at 91%; compacting…", "Account \"Work\" is out of usage for 2h; continuing on \"Home\".", "Resumed", "The model hit its output limit."] {
+            s.apply(ev(json!({ "type": "notice", "text": text })));
+        }
+        let t = live_thread(&s, 10);
+        assert!(t.iter().all(|m| m["role"] == "notice"));
+        assert_eq!(t.iter().map(|m| m["kind"].as_str().unwrap()).collect::<Vec<_>>(), ["compact", "microcompact", "compact", "account"]);
+        assert_eq!(t[3]["text"], "Account \"Work\" is out of usage for 2h; continuing on \"Home\".");
     }
 
     #[test]
