@@ -186,6 +186,7 @@ type PushMessage = Result<(String, (Value, String)), String>;
 
 /// Sign-ins sent to one machine together (Settings → Accounts, `push_sign_in`).
 struct PushBatch {
+    peer: String,
     machine: String,
     left: usize,
     /// Labels of the accounts signed in there.
@@ -682,6 +683,11 @@ impl Root {
             let what = if accounts.as_ref().is_some_and(|a| a.len() == 1) { "the sign-in" } else { "sign-ins" };
             self.toast(format!("Sending {what} to {name}…"), cx);
         }
+        // In flight from now on (the button says so), though reading them takes a moment.
+        self.connect.seq += 1;
+        let batch = format!("b{}", self.connect.seq);
+        self.connect.push_batches.insert(batch.clone(), PushBatch { peer: peer.to_string(), machine: name, left: 0, signed: Vec::new(), failed: Vec::new(), call });
+        cx.notify();
         let peer = peer.to_string();
         cx.spawn(async move |this, cx| {
             // Reading the sign-ins can touch the Keychain: off the UI thread.
@@ -690,15 +696,14 @@ impl Root {
                 let ids = accounts.unwrap_or_else(|| winfer_core::accounts_sync::shareable(&lookup));
                 ids.into_iter().map(|id| (winfer_backend::accounts::label(&id), winfer_core::accounts_sync::push_message(&id).map(|m| (id, m)))).collect::<Vec<_>>()
             }).await;
-            let _ = this.update(cx, |this, cx| this.send_push_batch(&peer, name, msgs, call, cx));
+            let _ = this.update(cx, |this, cx| this.send_push_batch(&batch, &peer, msgs, cx));
         })
         .detach();
     }
 
-    fn send_push_batch(&mut self, peer: &str, machine: String, msgs: Vec<(String, PushMessage)>, call: Option<String>, cx: &mut Context<Self>) {
-        self.connect.seq += 1;
-        let batch = format!("b{}", self.connect.seq);
-        let mut entry = PushBatch { machine: machine.clone(), left: 0, signed: Vec::new(), failed: Vec::new(), call };
+    fn send_push_batch(&mut self, batch: &str, peer: &str, msgs: Vec<(String, PushMessage)>, cx: &mut Context<Self>) {
+        let Some(mut entry) = self.connect.push_batches.remove(batch) else { return };
+        let (batch, machine) = (batch.to_string(), entry.machine.clone());
         for (label, msg) in msgs {
             match msg {
                 Ok((account, (msg, fp))) => {
@@ -729,6 +734,11 @@ impl Root {
         .detach();
     }
 
+    /// Sign-ins on their way to `peer` (Settings → Accounts shows it).
+    pub(super) fn push_in_flight(&self, peer: &str) -> bool {
+        self.connect.push_batches.values().any(|b| b.peer == peer)
+    }
+
     fn push_answered(&mut self, batch: &str, outcome: Result<String, String>, cx: &mut Context<Self>) {
         let Some(b) = self.connect.push_batches.get_mut(batch) else { return };
         match outcome {
@@ -743,6 +753,7 @@ impl Root {
 
     fn finish_push_batch(&mut self, batch: &str, cx: &mut Context<Self>) {
         let Some(b) = self.connect.push_batches.remove(batch) else { return };
+        cx.notify();
         let text = push_summary(&b);
         match &b.call {
             Some(call) => super::agent_api::respond(call, !b.signed.is_empty() || b.failed.is_empty(), text),

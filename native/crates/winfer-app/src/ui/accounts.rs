@@ -476,25 +476,9 @@ impl Root {
                 .child(note_tile(c, IconName::Route, "Runs out? Next account.", "Agents move down the list and continue their session. WinferCode chats switch right away; terminal panes when the agent stops."))
                 .child(note_tile(c, IconName::Link2, "Only the sign-in is separate.", "Every account shares sessions, settings and skills with the default sign-in.")),
         );
-        // Paired machines: sign them in with every account here at once.
-        let machines: Vec<(String, String)> = crate::connect::get().map(|c| c.status().peers.into_iter().map(|p| (p.peer_id, p.name)).collect()).unwrap_or_default();
-        if !machines.is_empty() {
-            let links = winfer_core::accounts_sync::links();
-            let synced: Vec<String> = machines.iter().filter(|(p, _)| links.iter().any(|l| l.peer == *p && !l.received)).map(|(_, n)| n.clone()).collect();
-            let sub = if synced.is_empty() { "Sign a paired machine in with every account here, Claude Code and Codex. Each copy stays in step when either side refreshes.".to_string() } else { format!("Kept in step on {}. Sync again to add accounts added here since.", synced.join(", ")) };
-            page = page.child(panel(c).flex().items_center().gap_3().px_3p5().py_2p5()
-                .child(Icon::new(IconName::Upload).size(px(14.0)).text_color(c.subtle))
-                .child(div().flex_1().min_w_0().flex().flex_col().gap_0p5()
-                    .child(div().text_size(px(13.0)).font_weight(FontWeight::MEDIUM).text_color(c.fg).child("Sign-ins on your other machines"))
-                    .child(div().text_size(px(11.5)).text_color(c.subtle).child(sub)))
-                .child(btn(c, "accounts-sync-all", Some(IconName::Upload), "Sync all to…", Btn::Plain, true)
-                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, e: &MouseDownEvent, _, cx| {
-                        let items = machines.iter().map(|(peer, name)| {
-                            let peer = peer.clone();
-                            super::menu::MenuItem::run(name.clone(), move |this: &mut Self, _, cx| this.push_accounts(None, &peer, None, cx))
-                        }).collect();
-                        this.open_menu(e.position, Some("Sign in with every account here".into()), items, cx);
-                    }))));
+        // Paired machines first: what's signed in where.
+        if let Some(machines) = self.machines_section(c, cx) {
+            page = page.child(machines);
         }
         for (pi, provider) in ACCOUNT_PROVIDERS.into_iter().enumerate() {
             let list: Vec<Account> = self.usage.accounts.iter().filter(|a| a.provider == provider).cloned().collect();
@@ -709,6 +693,78 @@ impl Root {
             page = page.child(div().flex().flex_col().gap_2p5().child(head).child(rows));
         }
         page
+    }
+
+    /// Settings → Accounts → Other machines: each paired machine, how many of the sign-ins here
+    /// it has (kept in step), and a button that sends it all of them.
+    fn machines_section(&mut self, c: Colors, cx: &mut Context<Self>) -> Option<Div> {
+        use super::settings_kit::{icon_tile, panel};
+        use super::settings_more::{Btn, btn};
+        let connect = crate::connect::get()?;
+        // (id, name, server, online)
+        let peers: Vec<(String, String, bool, bool)> = connect.peers().into_iter().map(|p| {
+            let up = connect.is_up(&p.peer_id);
+            (p.peer_id, p.name, p.kind == winfer_connect::pairing::Kind::Server, up)
+        }).collect();
+        if peers.is_empty() {
+            return None;
+        }
+        let links = winfer_core::accounts_sync::links();
+        let signed_in: Vec<&Account> = self.usage.accounts.iter().filter(|a| a.signed_in).collect();
+        let mut rows = panel(c).overflow_hidden();
+        for (i, (peer_id, peer_name, server, up)) in peers.into_iter().enumerate() {
+            let sending = self.push_in_flight(&peer_id);
+            let mine: Vec<&winfer_core::accounts_sync::Link> = links.iter().filter(|l| l.peer == peer_id).collect();
+            // What can go there: signed in here and not a copy that machine sent us.
+            let total = signed_in.iter().filter(|a| !mine.iter().any(|l| l.received && l.local == a.id)).count();
+            let synced = signed_in.iter().filter(|a| mine.iter().any(|l| !l.received && !l.out_there && l.local == a.id)).count();
+            let out_there = mine.iter().filter(|l| !l.received && l.out_there).count();
+            let (status, color, icon) = if !up {
+                ("Offline".to_string(), c.subtle, None)
+            } else if sending {
+                ("Sending sign-ins…".to_string(), c.muted, Some(IconName::Upload))
+            } else if out_there > 0 {
+                (format!("Signed out of {out_there} there · sync again to fix"), c.warning, Some(IconName::TriangleAlert))
+            } else if synced == 0 {
+                ("No sign-ins from here yet".to_string(), c.subtle, None)
+            } else if synced >= total {
+                (format!("All {synced} sign-in{} kept in step", if synced == 1 { "" } else { "s" }), c.success, Some(IconName::CircleCheck))
+            } else {
+                (format!("{synced} of {total} sign-ins kept in step"), c.muted, Some(IconName::RefreshCw))
+            };
+            let done = up && synced >= total && total > 0 && out_there == 0;
+            let (label, kind, bicon) = if sending || !up {
+                (if sending { "Sending…".to_string() } else { "Sync".to_string() }, Btn::Plain, if up { None } else { Some(IconName::Upload) })
+            } else if done {
+                ("Sync again".to_string(), Btn::Ghost, Some(IconName::RefreshCw))
+            } else {
+                (format!("Sync {total} sign-in{}", if total == 1 { "" } else { "s" }), Btn::Primary, Some(IconName::Upload))
+            };
+            let enabled = up && !sending && total > 0;
+            let pid = peer_id.clone();
+            rows = rows.child(
+                div().flex().items_center().gap_3().px_3p5().min_h(px(56.0)).py_2()
+                    .when(i > 0, |d| d.border_t_1().border_color(c.border))
+                    .child(icon_tile(if up { c.accent } else { c.subtle }, if server { IconName::Server } else { IconName::Monitor }, 28.0))
+                    .child(div().flex_1().min_w_0().flex().flex_col().gap_0p5()
+                        .child(div().flex().items_center().gap_1p5().min_w_0()
+                            .child(div().truncate().text_size(px(13.0)).font_weight(FontWeight::MEDIUM).text_color(if up { c.fg } else { c.muted }).child(peer_name))
+                            .child(div().flex_shrink_0().text_size(px(11.0)).text_color(c.subtle).child(if server { "server" } else { "desktop" })))
+                        .child(div().flex().items_center().gap_1().text_size(px(11.5)).text_color(color)
+                            .when_some(icon, |d, i| d.child(Icon::new(i).size(px(11.0))))
+                            .child(status)))
+                    .child(btn(c, SharedString::from(format!("sync-signins-{peer_id}")), bicon, label, kind, enabled)
+                        .when(enabled, |d| d.on_click(cx.listener(move |this, _, _, cx| this.push_accounts(None, &pid, None, cx))))),
+            );
+        }
+        rows = rows.child(div().flex().items_center().gap_2().px_3p5().py_2().border_t_1().border_color(c.border).bg(super::settings_kit::alpha(c.app, 0.35)).text_size(px(11.5)).text_color(c.subtle)
+            .child(Icon::new(IconName::Lock).size(px(12.0)))
+            .child("Sent end-to-end encrypted. The machine can use these sign-ins, so only sync to machines you trust."));
+        let head = div().flex().items_center().gap_2().px_0p5()
+            .child(icon_tile(c.accent, IconName::Upload, 24.0))
+            .child(div().text_size(px(13.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child("Other machines"))
+            .child(div().text_size(px(12.0)).text_color(c.subtle).child("Sign them in with your accounts here; refreshes flow both ways"));
+        Some(div().flex().flex_col().gap_2p5().child(head).child(rows))
     }
 
     pub(super) fn refresh_all_usage(&mut self, cx: &mut Context<Self>) {
