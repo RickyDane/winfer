@@ -1204,7 +1204,8 @@ impl Root {
             return;
         }
         self.focused_view = focused.clone();
-        if let Some(id) = focused {
+        // Not a pane: Home's chats focus their own composer.
+        if let Some(id) = focused.filter(|id| !crate::voice::is_orchestrator(id)) {
             let provider = self.state.read(cx).pane(&id).map(|p| p.provider.clone()).unwrap_or_default();
             if self.uses_code(&provider, &id, cx) {
                 if let Some(view) = self.code_view(&id, window, cx) {
