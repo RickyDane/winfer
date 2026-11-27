@@ -3,6 +3,7 @@
 **Status: built** (native only, branch `home-orchestrator`). Main code: `native/crates/winfer-app/src/ui/home.rs`
 (engine, tasks, tools) and `ui/home_view.rs` (the view). Roles: `assets/conductor-role.txt`, `assets/task-role.txt`.
 Differences from the design below:
+- Settings → Home → Task agent picks what tasks start (default WinferCode; "Orchestrator picks" leaves it to them). read_pane returns a WinferCode pane's transcript.
 - The side panel shows only the task cards (needs you, reviews, workspaces and usage were removed).
 - Shortcut is ⌘⇧M (⌘0 resets the text size). Also in the palette, and first in the sidebar and rail.
 - "Chips when unsure" are the conductor's `ask_user` picker in Home's chat (typed requests only).

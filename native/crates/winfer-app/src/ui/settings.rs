@@ -20,7 +20,7 @@ const GROUPS: [(&str, &[Page]); 5] = [
     ("Agents", &[
         ("agents", "Agents", IconName::Bot, "Your agents, new panes, the system prompt, tools and review."),
         ("winfer-code", "WinferCode", IconName::SquareTerminal, "winfer's own agent: interface, model and context."),
-        ("home", "Home", IconName::LayoutDashboard, "The orchestrator above every workspace: models, launch and brief."),
+        ("home", "Home", IconName::LayoutDashboard, "The orchestrator above every workspace: models, task agent, launch and brief."),
     ]),
     ("AI & voice", &[
         ("accounts", "Accounts", IconName::Users, "Sign-ins and the accounts winfer switches between."),

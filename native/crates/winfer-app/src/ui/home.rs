@@ -117,6 +117,8 @@ pub struct HomeTask {
     pub summary: String,
     /// A fork's winfer code session, to resume it after a restart.
     pub session: Option<String>,
+    /// The agent (provider id) its agents run as; None: its orchestrator picks.
+    pub agent: Option<String>,
     pub created: u64,
     pub updated: u64,
 }
@@ -272,17 +274,22 @@ pub fn ui_tools(providers: &[(String, String)]) -> Vec<Value> {
 }
 
 /// Home's own tools: the conductor's and a task orchestrator's.
-pub fn home_tools(conductor: bool) -> Vec<Value> {
+/// `agent`: the agent the user set for tasks (Settings → Home), if any.
+pub fn home_tools(conductor: bool, agent: Option<&str>) -> Vec<Value> {
+    let provider = match agent {
+        Some(a) => format!("The agent to start. Leave it out: tasks run as {a} (the user's setting). Only give one when the user asked for a specific agent in this request."),
+        None => "Light: the agent to start (installed ids, e.g. claude, codex, winfer). Fork: the agent its orchestrator starts (optional)".to_string(),
+    };
     let task = json!({ "type": "string", "description": "Task number (3, \"Task 3\") or id, from list_tasks" });
     let stage = json!({ "type": "string", "enum": ["planning", "running", "checking", "needs-you", "ready", "failed", "merged", "cancelled"] });
     let mut tools = vec![json!({ "name": "list_tasks", "description": "List Home's tasks: number, stage, workspace, how it runs (light, fork, remote), its agents and summary. Done ones (merged, cancelled) only with all: true.", "inputSchema": { "type": "object", "properties": { "all": { "type": "boolean" } } } })];
     if conductor {
         tools.extend([
-            json!({ "name": "start_task", "description": "Start a coding task in a workspace and get a card for it on Home. Light (default): one agent with your prompt, which you follow yourself; give provider and a complete standalone prompt. fork: true: a task orchestrator plans, runs and checks it there and reports to you; give the goal and what you know. Workspaces on other machines always fork, on that machine.", "inputSchema": { "type": "object", "properties": {
+            json!({ "name": "start_task", "description": "Start a coding task in a workspace and get a card for it on Home. Light (default): one agent with your prompt, which you follow yourself; give a complete standalone prompt. fork: true: a task orchestrator plans, runs and checks it there and reports to you; give the goal and what you know. Workspaces on other machines always fork, on that machine.", "inputSchema": { "type": "object", "properties": {
                 "workspace": { "type": "string", "description": "Workspace name from list_workspaces; \"machine/name\" for another machine's" },
                 "goal": { "type": "string", "description": "One line: what the task achieves (the card's title)" },
                 "prompt": { "type": "string", "description": "Light: the agent's complete prompt. Fork: context for the task orchestrator (what you found, constraints)" },
-                "provider": { "type": "string", "description": "Light: the agent to start (installed ids, e.g. claude, codex, winfer)" },
+                "provider": { "type": "string", "description": provider },
                 "fork": { "type": "boolean" },
                 "worktree": { "type": "boolean", "description": "Light: its own git worktree (default true)" },
                 "model": { "type": "string" }
@@ -316,6 +323,8 @@ pub(super) fn address(ws: &Workspace, pane_id: &str) -> String {
 pub(super) struct HomeSettings {
     pub conductor_model: Option<String>,
     pub task_model: Option<String>,
+    /// The agent tasks start (provider id); None: the orchestrators pick.
+    pub task_agent: Option<String>,
     pub open_on_launch: bool,
     pub brief: bool,
 }
@@ -327,6 +336,12 @@ pub(super) fn home_settings(s: &AppState) -> HomeSettings {
         // Before Home, voice's orchestrator had its own model setting.
         conductor_model: text(home.map(|h| &h["conductorModel"])).or_else(|| text(s.rest.get("voice").map(|v| &v["orchestratorModel"]))),
         task_model: text(home.map(|h| &h["taskModel"])),
+        // Default: WinferCode (when it's installed); "auto": the orchestrators pick.
+        task_agent: match text(home.map(|h| &h["taskAgent"])) {
+            Some(a) if a == "auto" => None,
+            Some(a) => Some(a),
+            None => s.providers.iter().any(|p| p.id == "winfer" && p.installed).then(|| "winfer".to_string()),
+        },
         open_on_launch: home.and_then(|h| h["openOnLaunch"].as_bool()).unwrap_or(true),
         brief: home.and_then(|h| h["brief"].as_bool()).unwrap_or(true),
     }
@@ -995,6 +1010,14 @@ impl Root {
         !self.home.voice_turn
     }
 
+    /// The agent a task's orchestrator must start, when the task has one set.
+    pub(super) fn task_agent(&self, pane_id: &str) -> Option<String> {
+        match crate::voice::home_pane(pane_id) {
+            Some(crate::voice::HomePane::Task(t)) => self.task(t).and_then(|t| t.agent.clone()),
+            _ => None,
+        }
+    }
+
     /// A task's orchestrator started an agent for it.
     pub(super) fn task_gets_pane(&mut self, task_id: &str, pane_id: &str, cx: &mut Context<Self>) {
         let Some(t) = self.task_mut(task_id) else { return };
@@ -1099,10 +1122,11 @@ impl Root {
         if voice_tools::needs_confirmation(tool, args) {
             return Some(Ok("Not done: ask the user in your reply, and call again with confirmed: true once they said yes.".into()));
         }
-        // The actions work on the workspace on screen.
+        // The actions work on the workspace on screen; app-wide ones leave the user where they are.
+        const APP_WIDE: &[&str] = &["switch_workspace", "create_workspace", "open_settings", "set_theme", "show_shortcuts", "toggle_sidebar", "toggle_browser", "show_side_panel", "show_overview", "show_history", "usage_status"];
         let mut note = String::new();
         let s = self.state.read(cx);
-        if (s.active_workspace_id != ws_id || s.view() != View::Workspace) && tool != "switch_workspace" && !ws_id.is_empty() {
+        if (s.active_workspace_id != ws_id || s.view() != View::Workspace) && !APP_WIDE.contains(&tool) && !ws_id.is_empty() {
             let name = s.workspaces.iter().find(|w| w.id == ws_id).map(|w| w.name.clone()).unwrap_or_default();
             self.execute(Command::WorkspaceSwitch(ws_id.to_string()), window, cx);
             self.update_state(cx, |s| s.set_view(View::Workspace));
@@ -1129,7 +1153,8 @@ impl Root {
 
     /// The MCP tools a Home orchestrator gets on top of the agent tools.
     pub(super) fn orchestrator_mcp_tools(&self, pane_id: &str, cx: &App) -> Vec<Value> {
-        let mut tools = home_tools(pane_id == CONDUCTOR);
+        let agent = home_settings(self.state.read(cx)).task_agent;
+        let mut tools = home_tools(pane_id == CONDUCTOR, agent.as_deref());
         tools.extend(ui_tools(&self.voice_context(cx).providers));
         tools
     }
@@ -1228,7 +1253,9 @@ impl Root {
         let target = a["workspace"].as_str().map(str::trim).filter(|w| !w.is_empty()).ok_or("Which workspace? list_workspaces lists them.")?;
         let prompt = a["prompt"].as_str().map(str::trim).unwrap_or_default().to_string();
         let number = self.next_task_number(cx);
-        let mut task = HomeTask { id: format!("t{number}"), number, goal: goal.clone(), created: now_secs(), updated: now_secs(), ..Default::default() };
+        // The agent: one the user asked for in this request, else Settings → Home's.
+        let agent = a["provider"].as_str().map(str::trim).filter(|p| !p.is_empty()).map(str::to_string).or_else(|| home_settings(self.state.read(cx)).task_agent);
+        let mut task = HomeTask { id: format!("t{number}"), number, goal: goal.clone(), agent: agent.clone(), created: now_secs(), updated: now_secs(), ..Default::default() };
         let place = self.find_workspace(target, cx)?;
         let reply = match place {
             Place::Local(ws_id, name) => {
@@ -1242,7 +1269,7 @@ impl Root {
                     model.update(cx, |m, cx| m.submit(&text, None, cx));
                     format!("{} started in {name}: a task orchestrator plans and runs it, and reports to you.", task.title())
                 } else {
-                    let provider = a["provider"].as_str().map(str::trim).filter(|p| !p.is_empty()).ok_or("A light task needs provider (the agent to start).")?;
+                    let provider = agent.as_deref().ok_or("A light task needs provider (the agent to start).")?;
                     if prompt.is_empty() {
                         return Err("A light task needs the agent's prompt.".into());
                     }
@@ -1480,6 +1507,9 @@ pub(super) enum Place {
 fn fork_brief(task: &HomeTask, context: &str) -> String {
     let context = context.trim();
     let mut text = format!("[Home] {}: {}", task.title(), task.goal);
+    if let Some(agent) = &task.agent {
+        text.push_str(&format!("\n\nStart this task's agents with provider \"{agent}\" (the user's choice)."));
+    }
     if !context.is_empty() {
         text.push_str(&format!("\n\n{context}"));
     }
@@ -1495,7 +1525,7 @@ pub(super) fn home_dir() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{AgentStatus, HomeTask, Item, Stage, TaskMode, Watch, answer_of, current_step, find_task, home_tools, light_stage, pane_event, ui_tools};
+    use super::{AgentStatus, HomeTask, Item, Stage, TaskMode, Watch, answer_of, current_step, find_task, fork_brief, home_tools, light_stage, pane_event, ui_tools};
     use serde_json::json;
 
     fn user(text: &str) -> Item {
@@ -1581,6 +1611,31 @@ mod tests {
     }
 
     #[test]
+    fn tasks_run_as_winfer_code_unless_set() {
+        use super::home_settings;
+        let mut s = winfer_core::model::AppState::default();
+        let winfer = winfer_backend::providers::builtin().iter().find(|p| p.id == "winfer").cloned().unwrap();
+        s.providers = vec![winfer_core::model::AgentProvider { info: winfer, installed: true }];
+        assert_eq!(home_settings(&s).task_agent.as_deref(), Some("winfer"));
+        s.rest.insert("home".into(), json!({ "taskAgent": "codex" }));
+        assert_eq!(home_settings(&s).task_agent.as_deref(), Some("codex"));
+        s.rest.insert("home".into(), json!({ "taskAgent": "auto" }));
+        assert_eq!(home_settings(&s).task_agent, None);
+        // Not installed: the orchestrators pick rather than fail.
+        s.rest.clear();
+        s.providers[0].installed = false;
+        assert_eq!(home_settings(&s).task_agent, None);
+    }
+
+    #[test]
+    fn the_brief_names_the_tasks_agent() {
+        let mut t = task(4);
+        assert!(!fork_brief(&t, "").contains("provider"));
+        t.agent = Some("codex".into());
+        assert!(fork_brief(&t, "ctx").contains("provider \"codex\""));
+    }
+
+    #[test]
     fn stages_parse_loosely() {
         assert_eq!(Stage::parse("Needs you"), Some(Stage::NeedsYou));
         assert_eq!(Stage::parse(" ready"), Some(Stage::Ready));
@@ -1603,7 +1658,7 @@ mod tests {
 
     #[test]
     fn tool_sets_differ_by_role() {
-        let names = |c: bool| home_tools(c).iter().map(|t| t["name"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+        let names = |c: bool| home_tools(c, None).iter().map(|t| t["name"].as_str().unwrap().to_string()).collect::<Vec<_>>();
         assert!(names(true).contains(&"start_task".to_string()));
         assert!(!names(false).contains(&"start_task".to_string()));
         assert!(names(false).contains(&"update_task".to_string()));

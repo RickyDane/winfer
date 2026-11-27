@@ -37,7 +37,7 @@ fn provider_tint(c: Colors, id: &str) -> Hsla {
 }
 
 /// An agent's mark on a tile tinted in its color.
-fn mark_tile(c: Colors, id: &str, size: f32) -> Div {
+pub(super) fn mark_tile(c: Colors, id: &str, size: f32) -> Div {
     let tint = provider_tint(c, id);
     let neutral = tint == c.fg;
     div().size(px(size)).flex_shrink_0().flex().items_center().justify_center().rounded(px(size * 0.27))

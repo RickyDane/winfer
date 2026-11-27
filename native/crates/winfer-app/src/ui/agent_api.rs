@@ -149,7 +149,14 @@ impl Root {
             return Outcome::Done(result);
         }
         // "machine/workspace/N" → "machine:N", the address the other machine resolves.
-        let a = &self.normalize_pane_ref(a);
+        let mut a = self.normalize_pane_ref(a);
+        // A task's agents run as the agent set for it (Settings → Home, or the user's ask).
+        if tool == "spawn_agent"
+            && let Some(agent) = self.task_agent(pane_id)
+        {
+            a["provider"] = json!(agent);
+        }
+        let a = &a;
         let (ws, me) = match self.caller(pane_id, a, cx) {
             Ok(found) => found,
             Err(e) => return Outcome::Done(Err(e)),
@@ -390,6 +397,13 @@ impl Root {
                 let (ws, pane) = resolve_any(self.state.read(cx), ws, &a["pane"])?;
                 let (ws, pane) = (&ws, &pane);
                 let lines = a["lines"].as_f64().unwrap_or(80.0).clamp(1.0, 400.0) as usize;
+                // A WinferCode pane is a chat, not a terminal screen: its transcript.
+                if let Some(model) = self.code_models.get(&pane.id) {
+                    let md = model.read(cx).state.export_markdown();
+                    let all: Vec<&str> = md.lines().collect();
+                    let text = all[all.len().saturating_sub(lines)..].join("\n");
+                    return Ok(if text.trim().is_empty() { "(no messages yet)".to_string() } else { text });
+                }
                 let session = SESSIONS.get(&pane.id).ok_or_else(|| format!("{} hasn't started yet.", describe(self.state.read(cx), ws, pane)))?;
                 let text = session.read_text(lines);
                 Ok(if text.is_empty() { "(no output yet)".to_string() } else { text })

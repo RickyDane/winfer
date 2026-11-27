@@ -387,6 +387,38 @@ impl Root {
                 })))))
     }
 
+    /// Settings → Home → Task agent: the agent tasks' agents run as, or the orchestrators pick.
+    fn home_task_agent(&mut self, c: Colors, cx: &mut Context<Self>) -> Div {
+        let s = self.state.read(cx).clone();
+        let chosen = super::home::home_settings(&s).task_agent;
+        let mut grid = div().flex().flex_wrap().mx(px(-4.0));
+        let options = std::iter::once((None, "Orchestrator picks".to_string(), "per task".to_string(), true))
+            .chain(s.providers.iter().filter(|p| p.id != "shell").map(|p| (Some(p.id.clone()), p.name.clone(), if p.installed { "installed" } else { "not installed" }.to_string(), p.installed)));
+        for (id, name, status, installed) in options {
+            let on = id == chosen;
+            let key = id.clone().unwrap_or_else(|| "auto".into());
+            let lead = match &id {
+                Some(p) => super::settings_agents::mark_tile(c, p, 30.0),
+                None => div().size(px(30.0)).flex().items_center().justify_center().rounded(px(7.0)).bg(c.hover).text_color(c.accent).child(Icon::new(IconName::Sparkles).size(px(16.0))),
+            };
+            let tile = div().id(SharedString::from(format!("task-agent-{key}"))).flex().flex_col().items_center().gap_1p5().pt_3().pb_2p5().px_1p5().rounded(px(10.0)).bg(c.panel)
+                .when(on, |d| d.border_2().border_color(c.accent))
+                .when(!on, |d| d.border_1().border_color(c.edge))
+                .when(installed && !on, |d| d.cursor_pointer().hover(move |d| d.bg(c.hover)))
+                .when(!installed, |d| d.opacity(0.5))
+                .when(installed, |d| d.on_click(cx.listener(move |this, _, _, cx| this.set_rest("home", "taskAgent", json!(key.clone()), cx))))
+                .child(lead)
+                .child(div().max_w_full().truncate().text_size(px(12.0)).font_weight(FontWeight::MEDIUM).text_color(c.fg).child(name))
+                .child(div().text_size(px(10.5)).text_color(if on { c.accent } else { c.subtle }).child(status));
+            grid = grid.child(div().w(relative(0.2)).p(px(4.0)).child(tile));
+        }
+        let note = match &chosen {
+            Some(p) => format!("Tasks start {} agents, also on paired machines. Ask Home for another agent in a request (\"use Codex for this\") to override it once.", s.provider_name(p)),
+            None => "Home's orchestrators choose an agent for each task.".to_string(),
+        };
+        div().flex().flex_col().gap_2().child(grid).child(div().text_size(px(11.5)).text_color(c.subtle).child(note))
+    }
+
     /// Settings → Home: the orchestrator above every workspace.
     pub(super) fn page_home(&mut self, c: Colors, window: &mut Window, cx: &mut Context<Self>) -> Div {
         self.more_inputs(window, cx);
@@ -406,6 +438,8 @@ impl Root {
                 .child(card_row(c, "Conversation", Some(if running { "Running; it remembers what you asked, also after a restart.".into() } else { "Starts when you open Home.".into() }), btn(c, "home-fresh", Some(IconName::RotateCcw), "New chat", Btn::Plain, running).on_click(cx.listener(|this, _, _, cx| {
                     this.stop_conductor(cx);
                 }))).border_t_1().border_color(c.border)))
+            .child(section(c, "Task agent", Some("what tasks start".into())))
+            .child(self.home_task_agent(c, cx))
             .child(section(c, "Home", None))
             .child(panel(c).overflow_hidden()
                 .child(card_row(c, "Open on Home", Some("Start winfer on Home instead of the last workspace.".into()), launch_toggle))

@@ -1752,15 +1752,23 @@ impl Render for Root {
         }
         // Development aid: open a layer at launch, to look at it without driving the keyboard.
         #[cfg(debug_assertions)]
-        if self.state.read(cx).hydrated && !std::mem::replace(&mut self.dev_layer_opened, true) {
-            // Development aid: hand the orchestrator a request at launch, as if said to live voice.
-            if let Ok(request) = std::env::var("WINFER_NATIVE_ORCHESTRATE") {
+        // Development aid: hand the orchestrator a request at launch, as if said to live voice
+        // (once the agents are detected, so winfer code is known to be there).
+        #[cfg(debug_assertions)]
+        if self.state.read(cx).hydrated && !self.state.read(cx).providers.is_empty() {
+            static SENT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            if let Ok(request) = std::env::var("WINFER_NATIVE_ORCHESTRATE")
+                && !SENT.swap(true, std::sync::atomic::Ordering::Relaxed)
+            {
                 let result = self.orchestrate(&request, false, cx);
                 eprintln!("[orchestrate] {result:?}");
                 if let Err(e) = result {
                     self.toast(e, cx);
                 }
             }
+        }
+        #[cfg(debug_assertions)]
+        if self.state.read(cx).hydrated && !std::mem::replace(&mut self.dev_layer_opened, true) {
             match std::env::var("WINFER_NATIVE_LAYER").as_deref() {
                 Ok("palette") => self.execute(Command::Palette(None), window, cx),
                 Ok("new-pane") => self.update_state(cx, |s| s.overlay = crate::model::Overlay::NewPane),
