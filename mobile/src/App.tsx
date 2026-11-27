@@ -128,12 +128,12 @@ function Screens({ client, mock, onChanged }: { client: DesktopClient; mock: boo
     ) : paneId ? (
       <Thread key={paneId} client={client} paneId={paneId} />
     ) : (
-      <Inbox client={client} />
+      <Inbox key={route.name} client={client} home={route.name === "home"} />
     );
   return (
     <>
       {screen}
-      {(route.name === "inbox" || route.name === "settings" || route.name === "panel") && <TabBar client={client} active={route.name} />}
+      {(route.name === "inbox" || route.name === "home" || route.name === "settings" || route.name === "panel") && <TabBar client={client} active={route.name} />}
       <Island client={client} openPaneId={paneId} />
     </>
   );

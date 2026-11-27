@@ -538,13 +538,18 @@ export function Thread({ client, paneId }: { client: DesktopClient; paneId: stri
 
   const closePicker = useCallback(() => setPicker(null), []);
 
+  // Back leads to the tab that lists this pane, also after it's gone.
+  const fromHome = useRef(false);
+  if (pane) fromHome.current = !!pane.home;
+  const back = () => go(fromHome.current ? "/home" : "/");
+
   const closeSession = () => {
     if (!pane) return;
     if (pane.status === "working" && !confirm) return setConfirm(true);
     haptic([10, 30, 10]);
     setPicker(null);
     void client.request({ t: "pane.close", paneId: pane.id }).catch(() => {});
-    go("/");
+    back();
   };
 
   const pills = pane ? (
@@ -572,7 +577,7 @@ export function Thread({ client, paneId }: { client: DesktopClient; paneId: stri
     <div className="screen thread" data-empty={empty || undefined}>
       {empty && <Sky />}
       <header className="pane-head">
-        <button className="icon-btn" aria-label="Back" onClick={() => go("/")}>
+        <button className="icon-btn" aria-label="Back" onClick={back}>
           <Icon name="back" size={19} />
         </button>
         {pane && <Avatar pane={pane} small morph />}

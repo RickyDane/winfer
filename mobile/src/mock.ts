@@ -9,6 +9,19 @@ const min = 60_000;
 const LEVELS = ["default", "low", "medium", "high", "xhigh", "max"];
 const PANES: Pane[] = [
   {
+    id: "p-home",
+    workspaceId: "",
+    title: "Home",
+    workspace: "All workspaces",
+    provider: "winfer",
+    status: "needs-input",
+    message: "Which of the two open tasks should go first?",
+    updatedAt: now - 2 * min,
+    request: null,
+    reply: null,
+    home: true,
+  },
+  {
     id: "p-auth",
     workspaceId: "w-winfer",
     title: "claude · auth refactor",

@@ -324,7 +324,7 @@ impl Root {
         json!({ "panes": panes, "workspaces": workspaces, "providers": providers, "defaultProvider": s.default_provider_id(), "theme": theme_json(&s.theme), "compactTools": compact_tools, "showBgNotes": show_bg_notes })
     }
 
-    /// Home's orchestrator as the phones see it: a chat pinned at the top of the agents list.
+    /// Home's orchestrator as the phones see it: a chat in their Home tab.
     fn home_snapshot(&self, cx: &App) -> Option<Value> {
         let s = self.state.read(cx);
         if !s.providers.iter().any(|p| p.id == "winfer" && p.installed) {

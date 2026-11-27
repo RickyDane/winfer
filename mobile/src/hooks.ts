@@ -4,6 +4,7 @@ import type { ClientState, DesktopClient } from "./client";
 
 export type Route =
   | { name: "inbox" }
+  | { name: "home" }
   | { name: "pane"; id: string }
   | { name: "new"; workspaceId: string | null }
   | { name: "settings" }
@@ -21,6 +22,7 @@ export function parseRoute(hash: string): Route {
   if (pane) return { name: "pane", id: decodeURIComponent(pane[1]) };
   const fresh = h.match(/^\/new(?:\/(.+))?$/);
   if (fresh) return { name: "new", workspaceId: fresh[1] ? decodeURIComponent(fresh[1]) : null };
+  if (h === "/home") return { name: "home" };
   if (h === "/usage") return { name: "usage" };
   if (h === "/panel") return { name: "panel" };
   const android = h.match(/^\/panel\/android(?:\/([^/]+))?$/);
@@ -38,9 +40,9 @@ export function parseRoute(hash: string): Route {
 
 // One hash listener for the app; screen changes run inside a view transition so the old screen
 // slides out and shared elements (an agent's avatar and title) morph into the next screen.
-const DEPTH: Record<Route["name"], number> = { inbox: 0, pair: 0, pane: 1, new: 1, settings: 0, usage: 1, panel: 0, browser: 2, android: 2, terminal: 2, files: 2 };
+const DEPTH: Record<Route["name"], number> = { inbox: 0, home: 0, pair: 0, pane: 1, new: 1, settings: 0, usage: 1, panel: 0, browser: 2, android: 2, terminal: 2, files: 2 };
 /** Screens reached from the bottom tab bar: switching between them cross-fades. */
-export const TABS: Route["name"][] = ["inbox", "panel", "settings"];
+export const TABS: Route["name"][] = ["home", "inbox", "panel", "settings"];
 let current = location.hash;
 const routeListeners = new Set<() => void>();
 

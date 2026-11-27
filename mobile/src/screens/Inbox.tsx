@@ -30,14 +30,14 @@ function countStatuses(panes: Pane[]): Record<AgentStatus, number> {
 }
 
 /** One muted line under the title: what needs you first, then the rest. */
-function summary(counts: Record<AgentStatus, number>, total: number): string {
-  if (!total) return "No agents yet";
+function summary(counts: Record<AgentStatus, number>, total: number, noun: "agent" | "session"): string {
+  if (!total) return noun === "agent" ? "No agents yet" : "Nothing running";
   const parts = [
     counts["needs-input"] && `${counts["needs-input"]} ${counts["needs-input"] === 1 ? "needs" : "need"} you`,
     counts.error && `${counts.error} ${counts.error === 1 ? "error" : "errors"}`,
     counts.working && `${counts.working} working`,
   ].filter(Boolean);
-  return [...parts, `${total} ${total === 1 ? "agent" : "agents"}`].join(" · ");
+  return [...parts, `${total} ${noun}${total === 1 ? "" : "s"}`].join(" · ");
 }
 
 function preview(p: Pane): string | null {
@@ -47,7 +47,8 @@ function preview(p: Pane): string | null {
   return text ? text.replace(/[#*`_>]/g, "").trim() : null;
 }
 
-export function Inbox({ client }: { client: DesktopClient }) {
+/** The Agents tab, or with `home` the Home tab: Home's orchestrators, without search and filters. */
+export function Inbox({ client, home = false }: { client: DesktopClient; home?: boolean }) {
   const state = useClient(client);
   useTick(30_000);
   const [filter, setFilter] = useState<Filter>("all");
@@ -69,9 +70,8 @@ export function Inbox({ client }: { client: DesktopClient }) {
   const ptr = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLDivElement>(null);
 
-  // Home's orchestrators (one per desktop) sit above the agents, outside the counts and filters.
-  const homes = state.panes.filter((p) => p.home);
-  const agents = useMemo(() => state.panes.filter((p) => !p.home), [state.panes]);
+  // Home's orchestrators (one per desktop) have their own tab: neither tab counts or lists the other's.
+  const agents = useMemo(() => state.panes.filter((p) => !!p.home === home), [state.panes, home]);
   const found = sortPanes(agents).filter((p) => matchesPane(p, query, providerInfo(p.provider)?.name, state.threads[p.id]?.messages));
   const counts = useMemo(() => countStatuses(agents), [agents]);
   // The filters count what the search left; the headline keeps counting everything.
@@ -134,14 +134,19 @@ export function Inbox({ client }: { client: DesktopClient }) {
                 {p.status === "working" && <span className="orb" aria-hidden />}
                 {STATUS_LABEL[p.status]}
               </span>
-              <span className="sep">·</span>
               {p.machineName && (
                 <>
-                  <span className="machine">{p.machineName}</span>
                   <span className="sep">·</span>
+                  <span className="machine">{p.machineName}</span>
                 </>
               )}
-              <span className="ws">{p.workspace}</span>
+              {/* Home is above every workspace: the room goes to the machine that tells two apart. */}
+              {!p.home && (
+                <>
+                  <span className="sep">·</span>
+                  <span className="ws">{p.workspace}</span>
+                </>
+              )}
               {info && (
                 <>
                   <span className="sep">·</span>
@@ -201,23 +206,17 @@ export function Inbox({ client }: { client: DesktopClient }) {
           <b>{desktop}</b>
           <span>{multi && link === "online" ? `${state.machines.length - away.length} of ${state.machines.length} connected` : link === "online" ? "Connected" : link === "away" ? (state.welcome?.server ?? activeIsServer() ? "Server offline" : "Desktop offline") : link === "offline" ? "Offline" : "Connecting…"}</span>
         </div>
-        {agents.length > 0 && <span className="bar-chip num">{agents.length} active</span>}
+        {!home && agents.length > 0 && <span className="bar-chip num">{agents.length} active</span>}
       </header>
       <div className="ptr" ref={ptr} aria-hidden>
         <Icon name="refresh" size={16} />
       </div>
       <div className="scroll tabbed" ref={scroller}>
         <section className="hero">
-          <h1>Agents</h1>
-          <p>{summary(counts, agents.length)}</p>
+          <h1>{home ? "Home" : "Agents"}</h1>
+          <p>{summary(counts, agents.length, home ? "session" : "agent")}</p>
         </section>
-        {homes.length > 0 && !query && (
-          <section className="list-group home-group">
-            <h2 className="label">Home</h2>
-            {group(homes)}
-          </section>
-        )}
-        {agents.length > 0 && (
+        {!home && agents.length > 0 && (
           <form
             className="pick-search agent-search"
             role="search"
@@ -235,18 +234,20 @@ export function Inbox({ client }: { client: DesktopClient }) {
             )}
           </form>
         )}
-        <div className="filters">
-          <Segmented<Filter>
-            value={filter}
-            onChange={setFilter}
-            options={[
-              { value: "all", label: "All", count: found.length },
-              { value: "needs", label: "Needs you", count: foundCounts["needs-input"] + foundCounts.error, hot: true },
-              { value: "working", label: "Working", count: foundCounts.working },
-              { value: "done", label: "Done", count: foundCounts.done },
-            ]}
-          />
-        </div>
+        {!home && (
+          <div className="filters">
+            <Segmented<Filter>
+              value={filter}
+              onChange={setFilter}
+              options={[
+                { value: "all", label: "All", count: found.length },
+                { value: "needs", label: "Needs you", count: foundCounts["needs-input"] + foundCounts.error, hot: true },
+                { value: "working", label: "Working", count: foundCounts.working },
+                { value: "done", label: "Done", count: foundCounts.done },
+              ]}
+            />
+          </div>
+        )}
         <ConnNotice state={state} onRetry={() => client.reconnect()} />
         {multi &&
           link === "online" &&
@@ -292,8 +293,8 @@ export function Inbox({ client }: { client: DesktopClient }) {
               <span className="empty-mark">
                 <img src="./icons/logo.svg" alt="" />
               </span>
-              <h3>{!agents.length ? "No agents running" : found.length ? "Nothing here" : "No matches"}</h3>
-              <p className="sub">{agents.length ? (found.length ? "Try another filter." : "Try another search.") : canStart ? "Tap + below, or start one in winfer; it appears here live." : "Start one in winfer and it appears here, live."}</p>
+              <h3>{!agents.length ? (home ? "No Home yet" : "No agents running") : found.length ? "Nothing here" : "No matches"}</h3>
+              <p className="sub">{agents.length ? (found.length ? "Try another filter." : "Try another search.") : home ? "Set up WinferCode in winfer on your computer and Home appears here, live." : canStart ? "Tap + below, or start one in winfer; it appears here live." : "Start one in winfer and it appears here, live."}</p>
             </div>
           )}
         </div>

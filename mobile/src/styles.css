@@ -176,9 +176,6 @@ textarea, input, .md, .ask-code, .ask-q p, .turn-user p, .screen-text, .tool-bod
 .label { display: flex; align-items: baseline; gap: 6px; margin: 0; padding: 0 6px 7px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--subtle); }
 .label span { font-variant-numeric: tabular-nums; }
 .list > .group-list { margin-top: 14px; }
-/* Home sits above the search, outside .list: it takes the search field's inset. */
-.home-group { margin-inline: 12px; }
-.home-group + .agent-search { margin-top: 16px; }
 
 /* Rows sit in one raised card; requests stand alone, outlined in the warning color. */
 .group-list[data-kind="rows"] { border: 1px solid var(--edge); border-radius: var(--r-xl); background: var(--raised); overflow: hidden; box-shadow: var(--lift-sm); }
@@ -199,6 +196,8 @@ textarea, input, .md, .ask-code, .ask-q p, .turn-user p, .screen-text, .tool-bod
 .card { position: relative; padding: 11px 12px; background: var(--raised); touch-action: pan-y; transition: transform 0.28s var(--ease), background 0.15s; outline: none; }
 .card[data-dragging="true"] { transition: none; }
 .card:active:not([data-dragging="true"]) { background: var(--hover); }
+/* Standalone cards without a request (Home waiting on you) still get an outline. */
+:where(.group-list[data-kind="cards"]) .card { border: 1px solid var(--edge); border-radius: var(--r-xl); }
 .card.request { border: 1px solid color-mix(in srgb, var(--warn) 55%, transparent); border-radius: var(--r-xl); box-shadow: var(--lift); }
 .card.request:active:not([data-dragging="true"]) { background: var(--raised); }
 .card[data-status="error"] { border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent); border-radius: var(--r-xl); }
@@ -783,7 +782,7 @@ button.row:active { background: var(--hover); }
 .tabbar-pill {
   position: relative; pointer-events: auto;
   flex: 1; max-width: 330px; height: 58px; padding: 5px;
-  display: grid; grid-template-columns: repeat(3, 1fr); align-items: center;
+  display: grid; grid-template-columns: repeat(4, 1fr); align-items: center;
   border-radius: 999px;
   background: var(--glass-bg);
   backdrop-filter: blur(22px) saturate(1.75);
@@ -793,7 +792,7 @@ button.row:active { background: var(--hover); }
 }
 .tabbar-slider {
   position: absolute; top: 5px; bottom: 5px; left: 5px;
-  width: calc((100% - 10px) / 3); border-radius: 999px;
+  width: calc((100% - 10px) / 4); border-radius: 999px;
   background: color-mix(in srgb, var(--accent) 16%, var(--hover));
   border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
   box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.14), 0 2px 8px rgb(0 0 0 / 0.18);
@@ -804,12 +803,13 @@ button.row:active { background: var(--hover); }
   background: color-mix(in srgb, var(--accent) 12%, #ffffff);
   box-shadow: 0 2px 10px rgb(15 23 42 / 0.08), inset 0 1px 0 #ffffff;
 }
-.tabbar-pill[data-active="panel"] .tabbar-slider { transform: translateX(100%); }
-.tabbar-pill[data-active="settings"] .tabbar-slider { transform: translateX(200%); }
+.tabbar-pill[data-active="inbox"] .tabbar-slider { transform: translateX(100%); }
+.tabbar-pill[data-active="panel"] .tabbar-slider { transform: translateX(200%); }
+.tabbar-pill[data-active="settings"] .tabbar-slider { transform: translateX(300%); }
 .tab {
   position: relative; z-index: 1; height: 100%;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
-  padding: 2px 4px;
+  padding: 2px 0;
   border-radius: 999px; color: var(--subtle);
   font-size: 11px; font-weight: 500;
   transition: color 0.2s var(--ease);
@@ -839,6 +839,8 @@ button.row:active { background: var(--hover); }
   width: 58px; height: 58px; border-radius: 50%;
 }
 .tabbar-fab:active:not(:disabled) { transform: scale(0.91); }
+/* Four tabs beside the + button need the room on narrow phones. */
+@media (max-width: 359px) { .tabbar { gap: 8px; padding-inline: 10px; } }
 ::view-transition-group(tabbar) { animation: none; }
 ::view-transition-old(tabbar) { display: none; }
 ::view-transition-new(tabbar) { animation: none; }

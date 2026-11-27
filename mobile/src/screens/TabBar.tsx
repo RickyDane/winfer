@@ -3,6 +3,7 @@ import { go, haptic, useClient, type Route } from "../hooks";
 import { Icon, linkState, type IconName } from "./common";
 
 const TABS: { route: Route["name"]; path: string; label: string; icon: IconName }[] = [
+  { route: "home", path: "/home", label: "Home", icon: "home" },
   { route: "inbox", path: "/", label: "Agents", icon: "sparkle" },
   { route: "panel", path: "/panel", label: "Panel", icon: "panel" },
   { route: "settings", path: "/settings", label: "Settings", icon: "gear" },
@@ -11,8 +12,13 @@ const TABS: { route: Route["name"]; path: string; label: string; icon: IconName 
 /** Sculpted frosted-glass navigation pill paired with a detached Nebula `+` action button. */
 export function TabBar({ client, active }: { client: DesktopClient; active: Route["name"] }) {
   const state = useClient(client);
-  const waiting = state.panes.filter((p) => p.status === "needs-input" || p.status === "error").length;
-  const working = state.panes.some((p) => p.status === "working");
+  // Home and Agents each flag their own panes.
+  const badge = (home: boolean) => {
+    const panes = state.panes.filter((p) => !!p.home === home);
+    const waiting = panes.filter((p) => p.status === "needs-input" || p.status === "error").length;
+    if (waiting) return <span className="tab-badge">{waiting}</span>;
+    return panes.some((p) => p.status === "working") ? <span className="tab-workdot" aria-hidden /> : null;
+  };
   const canStart = state.workspaces.length > 0 && state.providers.length > 0;
   const online = linkState(state) === "online";
 
@@ -38,8 +44,7 @@ export function TabBar({ client, active }: { client: DesktopClient; active: Rout
             >
               <span className="tab-icon">
                 <Icon name={t.icon} size={19} />
-                {t.route === "inbox" &&
-                  (waiting > 0 ? <span className="tab-badge">{waiting}</span> : working ? <span className="tab-workdot" aria-hidden /> : null)}
+                {(t.route === "home" || t.route === "inbox") && badge(t.route === "home")}
               </span>
               <span className="tab-label">{t.label}</span>
             </button>
