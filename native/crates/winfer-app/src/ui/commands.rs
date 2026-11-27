@@ -485,6 +485,7 @@ impl Root {
                     this.record_merge_of(&pane, stats, cx);
                     this.set_review_status_for(&pane.id, review::ReviewStatus::Merged, cx);
                     this.update_state(cx, |s| s.log_activity(&workspace, format!("Merged {branch} into {base}"), None));
+                    this.home_worktree_merged(&pane, cx);
                 }
                 Ok(Err(err)) => this.toast(format!("Merge not possible: {err}"), cx),
                 Err(err) => this.toast(format!("Merge not possible: {err}"), cx),
@@ -508,10 +509,13 @@ impl Root {
                     winfer_backend::worktree::worktree_remove(info, true).await.map_err(|e| e.to_string())
                 })
                 .await;
-                let _ = this.update(cx, |this, cx| match result {
-                    Ok(Ok(_)) => this.toast(format!("Discarded {branch}"), cx),
-                    Ok(Err(err)) => this.toast(format!("Couldn't remove worktree: {err}"), cx),
-                    Err(err) => this.toast(format!("Couldn't remove worktree: {err}"), cx),
+                let _ = this.update(cx, |this, cx| {
+                    match result {
+                        Ok(Ok(_)) => this.toast(format!("Discarded {branch}"), cx),
+                        Ok(Err(err)) => this.toast(format!("Couldn't remove worktree: {err}"), cx),
+                        Err(err) => this.toast(format!("Couldn't remove worktree: {err}"), cx),
+                    }
+                    this.settle_home_tasks(cx);
                 });
             })
             .detach();

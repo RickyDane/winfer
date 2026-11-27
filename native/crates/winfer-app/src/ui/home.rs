@@ -10,13 +10,14 @@
 //! - fork: a task orchestrator here plans, runs and checks it in its workspace;
 //! - remote: a task orchestrator on the paired machine the workspace is on.
 
+use super::connect_ui::Mirror;
 use super::voice_tools;
 use super::*;
 use crate::code::protocol::{Cmd, Decision};
 use crate::code::session::{CodeEvent, CodeModel};
 use crate::code::mentions::{Mention, slug};
 use crate::code::state::Item;
-use crate::model::Workspace;
+use crate::model::{Pane, Workspace};
 use crate::voice::{CONDUCTOR, HomePane, home_pane, task_pane};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -121,6 +122,10 @@ pub struct HomeTask {
     pub stage: Stage,
     /// Agent panes working on it here.
     pub panes: Vec<String>,
+    /// The worktree folders its agents here had (kept after their panes close).
+    pub worktrees: Vec<String>,
+    /// Those of them merged back.
+    pub merged: Vec<String>,
     /// A remote task's orchestrator: its pane id on that machine.
     pub remote_pane: Option<String>,
     pub summary: String,
@@ -147,7 +152,50 @@ pub(super) fn now_secs() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
 
-/// The tasks Home's panel lists (and the phones): open ones first (newest first), then the recently done.
+/// Remembers the worktrees of the task's agent panes; true when one is new. A tile of another
+/// machine's pane is left out: its folder isn't here to check.
+fn note_worktrees(t: &mut HomeTask, s: &AppState) -> bool {
+    let mut new = false;
+    for pane in t.panes.iter().filter_map(|p| s.pane(p)).filter(|p| p.remote.is_none()) {
+        if let Some(w) = &pane.worktree
+            && !t.worktrees.contains(&w.path)
+        {
+            t.worktrees.push(w.path.clone());
+            new = true;
+        }
+    }
+    new
+}
+
+/// All of the task's work is in: something was merged, and every other worktree is merged or gone.
+pub fn all_merged(t: &HomeTask, exists: impl Fn(&str) -> bool) -> bool {
+    !t.merged.is_empty() && t.worktrees.iter().all(|w| t.merged.contains(w) || !exists(w))
+}
+
+/// A done task with nothing left to clean up: no agent pane and no worktree. `remote_open`: its
+/// orchestrator on another machine may still be there.
+pub fn finished(t: &HomeTask, pane_open: impl Fn(&str) -> bool, exists: impl Fn(&str) -> bool, remote_open: bool) -> bool {
+    !t.stage.open() && !remote_open && !t.panes.iter().any(|p| pane_open(p)) && !t.worktrees.iter().any(|w| exists(w))
+}
+
+/// Whether a remote task's orchestrator may still be open there. `mirror`: what its machine says
+/// now (None: offline or not heard from, so unknown); `starting`: it was only just asked for.
+pub fn remote_pane_open(t: &HomeTask, mirror: Option<&Mirror>, starting: bool) -> bool {
+    if t.mode != TaskMode::Remote {
+        return false;
+    }
+    let Some(mirror) = mirror else { return true };
+    match &t.remote_pane {
+        Some(id) => mirror.panes.iter().any(|p| p.id == *id),
+        None => {
+            let title = format!("{} ·", t.title());
+            starting || mirror.panes.iter().any(|p| p.title.starts_with(&title))
+        }
+    }
+}
+
+/// The tasks Home's panel lists (and the phones): open ones first (newest first), then the done
+/// ones that still have something to clean up.
 pub fn listed_tasks(tasks: &[HomeTask]) -> Vec<&HomeTask> {
     let mut list: Vec<&HomeTask> = tasks.iter().collect();
     list.sort_by_key(|t| (!t.stage.open(), std::cmp::Reverse(t.updated)));
@@ -416,13 +464,78 @@ impl Root {
         if s.view() == View::Home || home_settings(s).open_on_launch {
             self.home.left_at = None;
         }
+        self.settle_home_tasks(cx);
+    }
+
+    // ---- tasks: finishing ----
+
+    /// Remembers the tasks' worktrees, marks tasks Merged once all their work is in, and removes
+    /// done tasks that have no agent pane and no worktree left.
+    pub(super) fn settle_home_tasks(&mut self, cx: &mut Context<Self>) {
+        if !self.home.loaded {
+            return;
+        }
+        let s = self.state.read(cx);
+        let exists = |w: &str| std::path::Path::new(w).exists();
+        let mut changed = false;
+        let mut gone = Vec::new();
+        for t in &mut self.home.tasks {
+            changed |= note_worktrees(t, s);
+            // An agent still waiting for its worktree has work that isn't merged.
+            let unborn = t.panes.iter().filter_map(|p| s.pane(p)).any(|p| p.wants_worktree && p.worktree.is_none());
+            if t.stage != Stage::Merged && !unborn && all_merged(t, exists) {
+                t.stage = Stage::Merged;
+                t.updated = now_secs();
+                changed = true;
+            }
+            // Its orchestrator here finishes its turn (and reports) first.
+            if self.home.forks.get(&t.id).is_some_and(|o| o.model.read(cx).state.busy) {
+                continue;
+            }
+            let mirror = t.machine.as_ref().filter(|p| crate::connect::get().is_some_and(|c| c.is_up(p))).and_then(|p| self.connect.mirrors.get(p)).filter(|m| m.loaded);
+            let starting = self.home.pending_remote.get(&t.id).is_some_and(|at| at.elapsed() <= Duration::from_secs(120));
+            if finished(t, |p| s.pane(p).is_some(), exists, remote_pane_open(t, mirror, starting)) {
+                gone.push(t.id.clone());
+            }
+        }
+        for id in &gone {
+            self.home.tasks.retain(|t| t.id != *id);
+            self.home.remote_watch.remove(id);
+            self.home.pending_remote.remove(id);
+            self.home.remote_calls.retain(|_, task| task != id);
+            self.stop_fork(id, cx);
+        }
+        if changed || !gone.is_empty() {
+            self.save_home(cx);
+            cx.notify();
+        }
+    }
+
+    /// A pane's worktree was merged back: its task counts it (and is Merged once all are in).
+    pub(super) fn home_worktree_merged(&mut self, pane: &Pane, cx: &mut Context<Self>) {
+        let Some(path) = pane.worktree.as_ref().map(|w| w.path.clone()) else { return };
+        self.load_home(cx);
+        let mut changed = false;
+        for t in &mut self.home.tasks {
+            if !t.panes.contains(&pane.id) && !t.worktrees.contains(&path) {
+                continue;
+            }
+            for list in [&mut t.worktrees, &mut t.merged] {
+                if !list.contains(&path) {
+                    list.push(path.clone());
+                }
+            }
+            t.updated = now_secs();
+            changed = true;
+        }
+        if changed {
+            self.save_home(cx);
+            self.settle_home_tasks(cx);
+            cx.notify();
+        }
     }
 
     pub(super) fn save_home(&mut self, cx: &mut Context<Self>) {
-        // Done tasks stay a while (the card shows what landed), then go.
-        let week = 7 * 24 * 3600;
-        let now = now_secs();
-        self.home.tasks.retain(|t| t.stage.open() || now.saturating_sub(t.updated) < week);
         let tasks = serde_json::to_value(&self.home.tasks).unwrap_or_default();
         self.update_state(cx, |s| {
             let entry = s.rest.entry("home".to_string()).or_insert_with(|| json!({}));
@@ -452,6 +565,10 @@ impl Root {
         let Some(t) = self.task_mut(id) else { return false };
         let mut changed = false;
         if let Some(stage) = stage.filter(|s| *s != t.stage) {
+            // Taken up again: what was merged before doesn't finish it.
+            if !t.stage.open() && stage.open() {
+                t.merged.clear();
+            }
             t.stage = stage;
             changed = true;
         }
@@ -462,6 +579,7 @@ impl Root {
         if changed {
             t.updated = now_secs();
             self.save_home(cx);
+            self.settle_home_tasks(cx);
             cx.notify();
         }
         changed
@@ -851,16 +969,21 @@ impl Root {
         self.sync_home_mentions(cx);
         self.tick_models(cx);
         self.tick_follows(cx);
+        // Catches what closed or was removed by other ways (another machine, git, the folder).
+        self.settle_home_tasks(cx);
         if self.home.conductor.is_none() && self.home.forks.is_empty() && !self.home.tasks.iter().any(|t| t.stage.open()) {
             return;
         }
-        // Forks of tasks that are gone or done, and of workspaces that closed.
+        // Forks of tasks that are gone or done (once idle), and of workspaces that closed.
         let open: HashSet<String> = self.state.read(cx).workspaces.iter().map(|w| w.id.clone()).collect();
         let stale: Vec<String> = self
             .home
             .forks
             .keys()
-            .filter(|t| self.task(t).is_none_or(|x| !x.stage.open() || x.workspace_id.as_ref().is_none_or(|w| !open.contains(w))))
+            .filter(|t| {
+                let busy = self.home.forks.get(*t).is_some_and(|o| o.model.read(cx).state.busy);
+                self.task(t).is_none_or(|x| (!x.stage.open() && !busy) || x.workspace_id.as_ref().is_none_or(|w| !open.contains(w)))
+            })
             .cloned()
             .collect();
         for t in stale {
@@ -1285,7 +1408,11 @@ impl Root {
         if !t.panes.iter().any(|p| p == pane_id) {
             t.panes.push(pane_id.to_string());
             t.updated = now_secs();
-            if t.stage == Stage::Planning {
+            // A new agent for a done task: it's being worked on again.
+            if !t.stage.open() {
+                t.merged.clear();
+            }
+            if t.stage == Stage::Planning || !t.stage.open() {
                 t.stage = Stage::Running;
             }
             self.save_home(cx);
@@ -1408,6 +1535,9 @@ impl Root {
         let started: Vec<String> = panes(self.state.read(cx)).difference(&before).cloned().collect();
         for id in &started {
             self.home_owns(orch_pane, id, cx);
+            if let Some(HomePane::Task(t)) = home_pane(orch_pane) {
+                self.task_gets_pane(t, id, cx);
+            }
         }
         Some(Ok(if started.is_empty() { format!("Done{note}.") } else { format!("Done{note}: started {} pane(s); list_panes shows them.", started.len()) }))
     }
@@ -1460,16 +1590,17 @@ impl Root {
     }
 
     pub(super) fn close_task(&mut self, id: &str, stage: Stage, cx: &mut Context<Self>) {
+        // Read first: a task with nothing left is removed as soon as its stage is set.
+        let panes = self.task(id).map(|t| t.panes.clone()).unwrap_or_default();
         self.set_task(id, Some(stage), None, cx);
         self.stop_fork(id, cx);
-        if let Some(o) = self.home.conductor.as_mut()
-            && let Some(t) = self.home.tasks.iter().find(|t| t.id == id)
-        {
-            for p in &t.panes {
+        if let Some(o) = self.home.conductor.as_mut() {
+            for p in &panes {
                 o.owned.remove(p);
             }
         }
         self.home.remote_watch.remove(id);
+        self.settle_home_tasks(cx);
     }
 
     pub(super) fn tasks_text(&self, all: bool, cx: &App) -> String {
@@ -1804,7 +1935,7 @@ pub(super) fn home_dir() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{AgentStatus, HomeTask, Item, Stage, TaskMode, Watch, answer_of, current_step, find_task, fork_brief, home_tools, light_stage, listed_tasks, pane_event, ui_tools};
+    use super::{AgentStatus, HomeTask, Item, Mirror, Stage, TaskMode, Watch, all_merged, answer_of, finished, remote_pane_open, current_step, find_task, fork_brief, home_tools, light_stage, listed_tasks, pane_event, ui_tools};
     use serde_json::json;
 
     fn user(text: &str) -> Item {
@@ -1944,6 +2075,58 @@ mod tests {
         assert_eq!(Stage::parse(" ready"), Some(Stage::Ready));
         assert_eq!(Stage::parse("nope"), None);
         assert!(!Stage::Merged.open() && Stage::Ready.open());
+    }
+
+    #[test]
+    fn done_tasks_go_once_nothing_is_left() {
+        let mut t = task(1);
+        t.panes = vec!["p".into()];
+        t.worktrees = vec!["/w".into()];
+        let (yes, no) = (|_: &str| true, |_: &str| false);
+        // Open tasks stay, whatever is left of them.
+        assert!(!finished(&t, no, no, false));
+        for stage in [Stage::Merged, Stage::Cancelled] {
+            t.stage = stage;
+            assert!(finished(&t, no, no, false));
+            assert!(!finished(&t, yes, no, false), "an agent pane is open");
+            assert!(!finished(&t, no, yes, false), "a worktree is left");
+            assert!(!finished(&t, no, no, true), "its orchestrator elsewhere is open");
+        }
+        // However old, one with leftovers is still saved with its worktrees.
+        let saved: HomeTask = serde_json::from_value(serde_json::to_value(&t).unwrap()).unwrap();
+        assert_eq!(saved.worktrees, t.worktrees);
+    }
+
+    #[test]
+    fn tasks_are_merged_once_every_worktree_is_in_or_gone() {
+        let mut t = task(1);
+        t.worktrees = vec!["/a".into(), "/b".into()];
+        assert!(!all_merged(&t, |_| false), "nothing was merged");
+        t.merged = vec!["/a".into()];
+        assert!(!all_merged(&t, |_| true), "/b isn't in yet");
+        assert!(all_merged(&t, |w| w == "/a"), "/b was discarded");
+        t.merged.push("/b".into());
+        assert!(all_merged(&t, |_| true));
+    }
+
+    #[test]
+    fn remote_panes_are_open_until_their_machine_says_otherwise() {
+        let mut t = task(3);
+        assert!(!remote_pane_open(&t, None, false), "not a remote task");
+        t.mode = TaskMode::Remote;
+        t.remote_pane = Some("r".into());
+        assert!(remote_pane_open(&t, None, false), "offline: unknown");
+        let mut mirror = Mirror { loaded: true, ..Default::default() };
+        assert!(!remote_pane_open(&t, Some(&mirror), false));
+        let pane = super::super::connect_ui::RemotePane { id: "r".into(), title: "Task 3 · fix it".into(), workspace: "web".into(), workspace_id: "w".into(), archived: false, cwd: String::new(), provider: "winfer".into(), status: AgentStatus::Idle, message: None, request_kind: None, request_text: None, reply: None, branch: None };
+        mirror.panes.push(pane);
+        assert!(remote_pane_open(&t, Some(&mirror), false));
+        // Not seen yet: found by its title, or still starting.
+        t.remote_pane = None;
+        assert!(remote_pane_open(&t, Some(&mirror), false));
+        mirror.panes.clear();
+        assert!(!remote_pane_open(&t, Some(&mirror), false));
+        assert!(remote_pane_open(&t, Some(&mirror), true));
     }
 
     #[test]

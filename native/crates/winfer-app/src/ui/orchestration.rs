@@ -1005,6 +1005,7 @@ impl Root {
                     };
                     this.record_merge_of(&winner, diff.as_ref().map(review::diff_stats), cx);
                     this.set_review_status_for(&winner.id, ReviewStatus::Merged, cx);
+                    this.home_worktree_merged(&winner, cx);
                     for loser in &losers {
                         this.close_pane(&loser.id, cx);
                         this.set_review_status_for(&loser.id, ReviewStatus::Discarded, cx);

@@ -300,6 +300,7 @@ impl Root {
                         Err(e) => this.toast(format!("Couldn't remove worktree: {e}"), cx),
                     }
                     this.list_worktrees(&workspace, cx);
+                    this.settle_home_tasks(cx);
                 });
             })
             .detach();
@@ -348,6 +349,7 @@ impl Root {
                     }
                     this.worktrees.selecting = None;
                     this.list_worktrees(&workspace, cx);
+                    this.settle_home_tasks(cx);
                 });
             })
             .detach();

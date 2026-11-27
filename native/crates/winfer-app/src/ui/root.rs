@@ -948,6 +948,8 @@ impl Root {
     }
 
     fn close_pane(&mut self, id: &str, cx: &mut Context<Self>) {
+        // Home notes its worktree while the pane is still there.
+        self.settle_home_tasks(cx);
         terminal::close(id);
         self.terminals.remove(id);
         self.forget_code(id);
@@ -957,6 +959,7 @@ impl Root {
             s.remove_pane(&id);
             cx.notify();
         });
+        self.settle_home_tasks(cx);
     }
 
     fn open_link(&mut self, pane_id: String, link: terminal::Link, editor: bool, window: &mut Window, cx: &mut Context<Self>) {
