@@ -187,6 +187,8 @@ pub(super) struct Home {
     pending_remote: HashMap<String, Instant>,
     /// Tool calls sent to paired machines for remote tasks: request id → task id.
     remote_calls: HashMap<String, String>,
+    /// Panes on paired machines the conductor started or messaged.
+    pub follows: super::home_follow::Follows,
 }
 
 struct Orch {
@@ -215,6 +217,11 @@ pub(super) struct Watch {
 impl Watch {
     pub fn new(status: AgentStatus) -> Self {
         Self { seen: status, next: None, worked: status == AgentStatus::Working }
+    }
+
+    /// For a pane just started, first seen at `status`: whatever it did since then counts.
+    pub fn started(status: AgentStatus) -> Self {
+        Self { seen: AgentStatus::Idle, next: None, worked: matches!(status, AgentStatus::Working | AgentStatus::Done) }
     }
 
     /// One tick with the pane at `now`: what to tell the orchestrator, once a change has settled.
@@ -306,7 +313,7 @@ pub fn home_tools(conductor: bool, agent: Option<&str>) -> Vec<Value> {
     tools.push(json!({ "name": "list_tasks", "description": "List Home's tasks: number, stage, workspace, how it runs (light, fork, remote), its model, its agents and summary. Done ones (merged, cancelled) only with all: true.", "inputSchema": { "type": "object", "properties": { "all": { "type": "boolean" } } } }));
     if conductor {
         tools.extend([
-            json!({ "name": "start_task", "description": "Start a coding task in a workspace and get a card for it on Home. Light (default): one agent with your prompt, which you follow yourself; give a complete standalone prompt. fork: true: a task orchestrator plans, runs and checks it there and reports to you; give the goal and what you know. Workspaces on other machines always fork, on that machine.", "inputSchema": { "type": "object", "properties": {
+            json!({ "name": "start_task", "description": "Start a coding task in a workspace and get a card for it on Home (not for chores that change no project code, like running commands or updating an app). Light (default): one agent with your prompt, which you follow yourself; give a complete standalone prompt. fork: true: a task orchestrator plans, runs and checks it there and reports to you; give the goal and what you know. Workspaces on other machines always fork, on that machine.", "inputSchema": { "type": "object", "properties": {
                 "workspace": { "type": "string", "description": "Workspace name from list_workspaces; \"machine/name\" for another machine's" },
                 "goal": { "type": "string", "description": "One line: what the task achieves (the card's title)" },
                 "prompt": { "type": "string", "description": "Light: the agent's complete prompt. Fork: context for the task orchestrator (what you found, constraints)" },
@@ -557,6 +564,7 @@ impl Root {
             SESSIONS.remove(CONDUCTOR);
         }
         self.home.views.remove(CONDUCTOR);
+        self.home.follows = Default::default();
         self.update_state(cx, |s| {
             if let Some(h) = s.rest.get_mut("home").and_then(Value::as_object_mut) {
                 h.remove("conductorSession");
@@ -729,7 +737,7 @@ impl Root {
 
     /// Puts an event in an orchestrator's queue (starting the conductor if needed) and delivers it
     /// once it's free.
-    fn queue_for(&mut self, pane_id: &str, text: String, cx: &mut Context<Self>) {
+    pub(super) fn queue_for(&mut self, pane_id: &str, text: String, cx: &mut Context<Self>) {
         if pane_id == CONDUCTOR && self.home.conductor.is_none() && self.conductor(cx).is_err() {
             return;
         }
@@ -833,6 +841,7 @@ impl Root {
         self.load_home(cx);
         self.sync_home_mentions(cx);
         self.tick_models(cx);
+        self.tick_follows(cx);
         if self.home.conductor.is_none() && self.home.forks.is_empty() && !self.home.tasks.iter().any(|t| t.stage.open()) {
             return;
         }

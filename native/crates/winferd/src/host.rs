@@ -902,16 +902,7 @@ impl Host {
                 Ok(if running { "Sent.".into() } else { "Starting it; the text goes in once it's up (a few seconds).".into() })
             }
             "spawn_agent" => {
-                let ws = {
-                    let s = self.state.lock();
-                    // A workspace asked for by name is that one, or an error; without one, the first.
-                    match a["workspace"].as_str().filter(|n| !n.trim().is_empty()) {
-                        Some(n) => Some(s.workspaces.iter().find(|w| w.name.eq_ignore_ascii_case(n.trim())).map(|w| w.id.clone()).ok_or_else(|| {
-                            format!("No workspace “{n}” here. Workspaces: {}.", s.workspaces.iter().map(|w| w.name.clone()).collect::<Vec<_>>().join(", "))
-                        })?),
-                        None => s.workspaces.first().map(|w| w.id.clone()),
-                    }
-                };
+                let ws = spawn_workspace(&self.state.lock(), a["workspace"].as_str())?;
                 let req = json!({"workspaceId": ws, "provider": a["provider"], "text": a["prompt"], "worktree": a["worktree"], "model": a["model"], "effort": a["effort"], "role": a["role"], "title": a["title"]});
                 let r = self.new_pane(&req, "");
                 if r["ok"] != true {
@@ -1251,6 +1242,19 @@ pub(crate) fn write_chat(pane_id: &str, cmd: &Cmd) {
 }
 
 /// Tiled panes in layout order, then the rest; never other machines' (remote tiles).
+/// The workspace another machine's spawn_agent starts in (its id): the one named, else the
+/// first. Never a new one.
+fn spawn_workspace(s: &AppState, name: Option<&str>) -> Result<String, String> {
+    let found = match name.map(str::trim).filter(|n| !n.is_empty()) {
+        Some(n) => s.workspaces.iter().find(|w| w.name.eq_ignore_ascii_case(n)),
+        None => s.workspaces.first(),
+    };
+    found.map(|w| w.id.clone()).ok_or_else(|| match name {
+        _ if s.workspaces.is_empty() => "No workspace is open on this server: open one with new_remote_workspace.".to_string(),
+        n => format!("No workspace “{}” here. Workspaces: {}.", n.unwrap_or_default(), s.workspaces.iter().map(|w| w.name.clone()).collect::<Vec<_>>().join(", ")),
+    })
+}
+
 fn ordered(ws: &Workspace) -> Vec<&Pane> {
     let tiled = ws.layout.as_ref().map(leaves).unwrap_or_default();
     let mut panes: Vec<&Pane> = tiled.iter().filter_map(|id| ws.panes.iter().find(|p| p.id == *id)).collect();
@@ -1300,16 +1304,18 @@ fn server_tools() -> Vec<Value> {
     vec![
         json!({"name": "list_machines", "description": "List the winfer machines paired with this server (Winfer Connect): name, desktop or server, online or not. Their panes are reachable with list_remote_panes, read_pane and send_to_pane (pane \"<machine>:<number>\"), spawn_remote_agent and remote_pane_action. You run on this machine, not on any listed one: work on another machine only through these tools.", "inputSchema": {"type": "object", "properties": {}}}),
         json!({"name": "list_remote_panes", "description": "List a paired machine's workspaces and panes. Address panes as \"<machine>:<number>\" in read_pane, send_to_pane and remote_pane_action.", "inputSchema": {"type": "object", "properties": {"machine": machine}, "required": ["machine"]}}),
-        json!({"name": "spawn_remote_agent", "description": "Start an agent pane on a paired machine, optionally with a first prompt, in a workspace there and its own git worktree. To run more commands on a machine, first look for a pane of yours there (list_remote_panes) and send them to it with send_to_pane; start another only when you need one running alongside.", "inputSchema": {"type": "object", "properties": {
-            "machine": machine, "provider": {"type": "string", "description": "Agent id, e.g. claude, codex, winfer, or shell"},
-            "prompt": {"type": "string"}, "worktree": {"type": "boolean"}, "workspace": {"type": "string", "description": "Workspace name on that machine (default: its first)"}
+        json!({"name": "spawn_remote_agent", "description": "Start an agent pane on a paired machine, optionally with a first prompt, in an existing workspace there, in its own git worktree unless worktree: false. Running commands needs no new workspace. To run more commands on a machine, first look for a pane of yours there (list_remote_panes) and send them to it with send_to_pane; start another only when you need one running alongside.", "inputSchema": {"type": "object", "properties": {
+            "machine": machine, "provider": {"type": "string", "description": "Agent id, e.g. claude, codex, winfer, or shell (types the prompt as a command; never reports finished)"},
+            "prompt": {"type": "string"}, "model": {"type": "string", "description": "The agent's model (default: its own)"},
+            "worktree": {"type": "boolean", "description": "Its own git worktree (default: the workspace's setting); false for commands and chores"},
+            "workspace": {"type": "string", "description": "Workspace name on that machine (default: its first)"}
         }, "required": ["machine", "provider"]}}),
         json!({"name": "remote_pane_action", "description": "Act on an agent pane on a paired machine: approve or decline what it asks, interrupt it, or close the pane.", "inputSchema": {"type": "object", "properties": {
             "pane": pane, "action": {"type": "string", "enum": ["approve", "decline", "interrupt", "close"]}
         }, "required": ["pane", "action"]}}),
-        json!({"name": "add_workspace", "description": "Open a workspace on this machine: an existing folder (path), or a git repository it clones first (git_url, optional branch and parent folder).", "inputSchema": {"type": "object", "properties": workspace_props(None)}}),
+        json!({"name": "add_workspace", "description": "Open a workspace on this machine: an existing folder (path), or a git repository it clones first (git_url, optional branch and parent folder). Only for project work in a folder that isn't open yet; running commands needs no new workspace.", "inputSchema": {"type": "object", "properties": workspace_props(None)}}),
         json!({"name": "remove_workspace", "description": "Remove a workspace from this machine: its sessions close; the folder and worktrees stay. Not the one you run in.", "inputSchema": {"type": "object", "properties": {"workspace": {"type": "string", "description": "Workspace name"}}, "required": ["workspace"]}}),
-        json!({"name": "new_remote_workspace", "description": "Open a workspace on a paired machine: an existing folder there (path), or a git repository it clones first (git_url). Returns the workspace's name for spawn_remote_agent.", "inputSchema": {"type": "object", "properties": workspace_props(Some(&machine)), "required": ["machine"]}}),
+        json!({"name": "new_remote_workspace", "description": "Open a workspace on a paired machine: an existing folder there (path), or a git repository it clones first (git_url). Only for project work in a folder that isn't open there yet (or a machine with no workspace); running commands needs no new one. Returns the workspace's name for spawn_remote_agent.", "inputSchema": {"type": "object", "properties": workspace_props(Some(&machine)), "required": ["machine"]}}),
         json!({"name": "remove_remote_workspace", "description": "Remove a workspace from a paired machine: its sessions there close; the folder and worktrees stay.", "inputSchema": {"type": "object", "properties": {"machine": machine, "workspace": {"type": "string", "description": "Workspace name there (list_remote_panes)"}}, "required": ["machine", "workspace"]}}),
         json!({"name": "list_models", "description": "List the models WinferCode agents on this server can run (Claude, Codex/GPT, Gemini, …): spec, name, effort levels.", "inputSchema": {"type": "object", "properties": {}}}),
         json!({"name": "set_model", "description": "Switch a WinferCode agent here to another model and/or effort mid-run: from its next turn, its conversation is handed over to the new model.", "inputSchema": {"type": "object", "properties": {
@@ -1327,7 +1333,21 @@ fn server_tools() -> Vec<Value> {
 
 #[cfg(test)]
 mod tests {
-    use super::is_task_title;
+    use super::{AddPane, AppState, is_task_title, spawn_workspace};
+
+    #[test]
+    fn a_remote_spawn_uses_a_workspace_there_without_making_one() {
+        let mut s = AppState::default();
+        assert!(spawn_workspace(&s, None).unwrap_err().contains("new_remote_workspace"));
+        let (api, web) = (s.workspace_for_folder("/srv/api", "api"), s.workspace_for_folder("/srv/web", "web"));
+        assert_eq!(spawn_workspace(&s, None), Ok(api.clone()));
+        assert_eq!(spawn_workspace(&s, Some(" ")), Ok(api));
+        assert_eq!(spawn_workspace(&s, Some("WEB")), Ok(web.clone()));
+        assert_eq!(spawn_workspace(&s, Some("nope")).unwrap_err(), "No workspace “nope” here. Workspaces: api, web.");
+        let pane = s.add_pane("claude", AddPane { workspace_id: Some(web), worktree: Some(false), ..Default::default() });
+        assert!(!s.pane(&pane).unwrap().wants_worktree);
+        assert_eq!(s.workspaces.len(), 2);
+    }
 
     #[test]
     fn task_orchestrators_are_known_by_their_title() {
