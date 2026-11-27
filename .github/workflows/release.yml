@@ -44,7 +44,7 @@ env:
 jobs:
   # One job creates the release; the bundle jobs only upload to it.
   release:
-    runs-on: avrea-ubuntu-latest-8-vcpu
+    runs-on: ubuntu-latest
     outputs:
       id: ${{ steps.create.outputs.id }}
     steps:
@@ -87,16 +87,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: avrea-ubuntu-latest-8-vcpu
+          - platform: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             asset: linux-x86_64
           - platform: ubuntu-22.04-arm
             target: aarch64-unknown-linux-gnu
             asset: linux-aarch64
-          - platform: avrea-macos-latest-8-vcpu
+          - platform: macos-15
             target: aarch64-apple-darwin
             asset: macos-aarch64
-          - platform: avrea-macos-latest-8-vcpu
+          - platform: macos-15
             target: x86_64-apple-darwin
             asset: macos-x86_64
     runs-on: ${{ matrix.platform }}
@@ -135,7 +135,7 @@ jobs:
   # :<version>, and :latest (stable) or :nebula (Nebula builds).
   winferd-image:
     needs: winferd
-    runs-on: avrea-ubuntu-latest-8-vcpu
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
@@ -179,13 +179,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: avrea-macos-latest-8-vcpu
+          - platform: macos-15
             target: aarch64-apple-darwin
-          - platform: avrea-macos-latest-8-vcpu
+          - platform: macos-15
             target: x86_64-apple-darwin
-          - platform: avrea-windows-latest-8-vcpu
+          - platform: windows-latest
             target: x86_64-pc-windows-msvc
-          - platform: avrea-ubuntu-latest-8-vcpu
+          - platform: ubuntu-latest
             target: x86_64-unknown-linux-gnu
     runs-on: ${{ matrix.platform }}
     env:
@@ -338,7 +338,7 @@ jobs:
   native-updater-json:
     needs: [release, native-bundle]
     if: ${{ !inputs.winferd_only }}
-    runs-on: avrea-ubuntu-latest-8-vcpu
+    runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GH_REPO: ${{ github.repository }}
