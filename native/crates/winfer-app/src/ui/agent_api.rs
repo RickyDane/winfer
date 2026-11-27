@@ -148,7 +148,7 @@ impl Root {
         };
         let who = if orchestrator.is_some() { "Orchestrator".to_string() } else { describe(self.state.read(cx), &ws, &me) };
         // Winfer Connect: other machines and their panes (`machine:N`).
-        match self.connect_tool(call, tool, a, &who, pane_id, cx) {
+        match self.connect_tool(call, tool, a, &who, pane_id, window, cx) {
             Some(super::connect_ui::ToolOutcome::Done(result)) => return Outcome::Done(result),
             Some(super::connect_ui::ToolOutcome::Later) => return Outcome::Later,
             None => {}

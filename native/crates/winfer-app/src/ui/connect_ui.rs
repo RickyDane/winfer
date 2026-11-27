@@ -246,7 +246,7 @@ pub(super) fn agent_tools() -> Vec<Value> {
             "name": {"type": "string", "description": "For link: the server's name (default: its host name)"}
         }, "required": ["mode"]}}),
         json!({"name": "list_sign_ins", "description": "List this machine's agent sign-ins (Claude Code, Codex accounts): id, label, signed in or not, and the machines each is pushed to.", "inputSchema": {"type": "object", "properties": {}}}),
-        json!({"name": "push_sign_in", "description": "Sign a paired machine in with this machine's agent accounts (from list_sign_ins): one, several, or all signed-in ones (every provider, every account). Each copy stays in step with this one when either refreshes; an account already signed in there as the same person is reused, not duplicated.", "inputSchema": {"type": "object", "properties": {
+        json!({"name": "push_sign_in", "description": "Sign a paired machine in with this machine's agent accounts (from list_sign_ins): one, several, or all signed-in ones (every provider, every account). Each copy stays in step with this one when either refreshes; an account already signed in there as the same person is reused, not duplicated. The user approves each call in a dialog.", "inputSchema": {"type": "object", "properties": {
             "account": {"type": "string", "description": "Account id from list_sign_ins (e.g. claude:default), several comma-separated, or \"all\" (the default) for every signed-in account"},
             "machine": machine
         }, "required": ["machine"]}}),
@@ -977,7 +977,7 @@ impl Root {
     }
 
     /// Connect's agent tools, and read_pane/send_to_pane on `machine:N`; None when it isn't one.
-    pub(super) fn connect_tool(&mut self, call: &str, tool: &str, a: &Value, who: &str, pane: &str, cx: &mut Context<Self>) -> Option<ToolOutcome> {
+    pub(super) fn connect_tool(&mut self, call: &str, tool: &str, a: &Value, who: &str, pane: &str, window: &mut Window, cx: &mut Context<Self>) -> Option<ToolOutcome> {
         let me = crate::connect::get().map(|c| c.status().name).unwrap_or_default();
         let caller = format!("{who} on {me}");
         match tool {
@@ -1176,7 +1176,25 @@ impl Root {
                     v => v.as_str().unwrap_or_default().split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect(),
                 };
                 let all = accounts.is_empty() || accounts.iter().any(|x| x == "all");
-                self.push_accounts((!all).then_some(accounts), &peer, Some(call.to_string()), cx);
+                // Credentials leave this machine: the user says yes first, every time.
+                let list = winfer_backend::accounts::accounts_list();
+                let named: Vec<String> = list.iter().filter(|e| if all { e.signed_in } else { accounts.contains(&e.account.id) }).map(|e| format!("• {} ({})", e.account.label, self.state.read(cx).provider_name(&e.account.provider))).collect();
+                if !all && let Some(bad) = accounts.iter().find(|x| !list.iter().any(|e| e.account.id == **x)) {
+                    return Some(ToolOutcome::Done(Err(format!("No account {bad} here (list_sign_ins lists them)."))));
+                }
+                if named.is_empty() {
+                    return Some(ToolOutcome::Done(Err("No signed-in accounts here to send.".into())));
+                }
+                let detail = format!("{who} wants to sign {name} in with:\n{}\n\nThese sign-ins are copied there and kept in step with this machine. Only allow this for a machine you trust.", named.join("\n"));
+                let answer = window.prompt(PromptLevel::Warning, &format!("Send sign-ins to {name}?"), Some(&detail), &[PromptButton::Ok("Send".into()), PromptButton::Cancel("Don't send".into())], cx);
+                let call = call.to_string();
+                cx.spawn(async move |this, cx| {
+                    if answer.await != Ok(0) {
+                        return super::agent_api::respond(&call, false, "The user didn't allow sending the sign-ins.".into());
+                    }
+                    let _ = this.update(cx, |this, cx| this.push_accounts((!all).then_some(accounts), &peer, Some(call), cx));
+                })
+                .detach();
                 Some(ToolOutcome::Later)
             }
             _ => None,
