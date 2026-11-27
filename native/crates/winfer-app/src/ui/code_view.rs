@@ -1450,8 +1450,9 @@ fn user_row(env: &Env, text: &str, images: &[String], key: &str, first: bool) ->
         cache.entry(key.to_string()).or_insert_with(|| images.iter().filter_map(|u| data_image(u)).collect()).clone()
     };
     let top = if first { 0.0 } else if env.compact { 10.0 } else { 22.0 };
+    let full = list_wraps(text, 13.0 * env.scale, env.width * 0.82 - 30.0);
     enter(env, key, div().w_full().flex().flex_col().items_end().pt(px(top)).pb(px(6.0)).child(
-        div().max_w(relative(0.82)).flex().flex_col().gap_2().rounded_2xl().bg(alpha(c.accent, 0.13)).border_1().border_color(alpha(c.accent, 0.28)).px_3p5().py_2p5().text_size(env.text()).line_height(relative(1.5)).text_color(c.fg)
+        div().max_w(relative(0.82)).when(full, |d| d.w(relative(0.82))).flex().flex_col().gap_2().rounded_2xl().bg(alpha(c.accent, 0.13)).border_1().border_color(alpha(c.accent, 0.28)).px_3p5().py_2p5().text_size(env.text()).line_height(relative(1.5)).text_color(c.fg)
             // Only add the image row when there are images: an empty row still takes a flex gap and pushes the text down.
             .when(!decoded.is_empty(), |d| d.child(div().flex().flex_row().flex_wrap().items_start().gap_1p5().children(decoded.into_iter().enumerate().map(|(i, image)| {
                 let (view, full) = (env.view.clone(), image.clone());
@@ -1470,6 +1471,22 @@ fn user_row(env: &Env, text: &str, images: &[String], key: &str, first: bool) ->
                 TextView::markdown(SharedString::from(format!("cw-user-{key}")), SharedString::from(text.replace('\n', "  \n"))).selectable(true),
             )),
     ))
+}
+
+/// Whether a user message has a markdown list that will wrap in a bubble `inner` px wide (text `font` px).
+/// A shrink-to-fit bubble sizes a wrapping list without its bullet column, so the text runs past the
+/// bubble's edge; such a bubble takes its full width instead. Width is estimated generously per character.
+fn list_wraps(text: &str, font: f32, inner: f32) -> bool {
+    let is_item = |l: &str| {
+        let l = l.trim_start();
+        let digits = l.len() - l.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+        ["- ", "* ", "+ "].iter().any(|m| l.starts_with(m)) || (digits > 0 && (l[digits..].starts_with(". ") || l[digits..].starts_with(") ")))
+    };
+    if !text.lines().any(is_item) {
+        return false;
+    }
+    let longest = text.lines().map(|l| l.chars().count()).max().unwrap_or(0) as f32;
+    longest * font * 0.6 + font * 2.8 >= inner * 0.8
 }
 
 /// Markdown tables in the app's palette: no fill of their own, the card edge, and a header tinted like hovered rows.
@@ -4026,6 +4043,16 @@ mod tests {
         assert!(!inside_rounded_corners(w - 6.0, 6.0, w, h, r, 7.0));
         assert!(!inside_rounded_corners(6.0, h - 6.0, w, h, r, 7.0));
         assert!(!inside_rounded_corners(w - 6.0, h - 6.0, w, h, r, 7.0));
+    }
+
+    #[::core::prelude::v1::test]
+    fn user_bubble_takes_full_width_only_for_wrapping_lists() {
+        use super::list_wraps;
+        let long = "- Please create the trip yourself with the linde dev cosmos db connection.\n- No historical PDFs\n1. If local.TripReportURL is empty, don't show a QR-Code";
+        assert!(list_wraps(long, 13.0, 400.0), "a long list wraps");
+        assert!(!list_wraps("- a\n- b", 13.0, 400.0), "a short list keeps its own width");
+        assert!(!list_wraps(&"a long paragraph ".repeat(20), 13.0, 400.0), "paragraphs size themselves fine");
+        assert!(list_wraps("12) numbered item that is quite long and keeps on going past the edge", 13.0, 400.0));
     }
 
     #[::core::prelude::v1::test]
