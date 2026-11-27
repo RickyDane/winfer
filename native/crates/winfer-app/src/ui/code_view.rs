@@ -605,6 +605,11 @@ impl CodeView {
         cx.subscribe_in(&input, window, |this, input, event: &InputEvent, window, cx| match event {
             InputEvent::Focus => {
                 let pane_id = this.model.read(cx).pane_id.clone();
+                // Home's chats run under ids no workspace lists: claiming the pane focus for one
+                // would make Root's focus sync hand the keyboard to a terminal for that id.
+                if crate::voice::is_orchestrator(&pane_id) {
+                    return;
+                }
                 this.app.update(cx, |s, cx| {
                     if s.focused_pane_id.as_deref() != Some(pane_id.as_str())
                         || s.pane(&pane_id).is_some_and(|p| p.workspace_id != s.active_workspace_id)
@@ -5021,5 +5026,43 @@ mod tests {
         let (y_reopen, max_reopen) = scroll_state(vcx);
         assert!((y_reopen + max_reopen).abs() <= 1.0, "reopening task log must start at bottom: offset_y={y_reopen}, max_y={max_reopen}");
         assert!(vcx.debug_bounds("cw-task-log-jump").is_none(), "jump button must be hidden on reopen");
+    }
+
+    #[gpui_kit::test]
+    fn home_composer_focus_leaves_the_focused_pane_alone(cx: &mut gpui_kit::TestAppContext) {
+        use super::CodeView;
+        use crate::code::session::CodeModel;
+        use crate::model::AppState;
+        use gpui_kit::AppContext;
+
+        cx.update(gpui_kit::init);
+        for (pane_id, expect) in [(crate::voice::CONDUCTOR, "agent-pane"), ("chat-pane", "chat-pane")] {
+            let mut app_ref = None;
+            let (view, vcx) = cx.add_window_view(|window, cx| {
+                let app = cx.new(|_| {
+                    let mut s = AppState::new();
+                    s.focused_pane_id = Some("agent-pane".into());
+                    s
+                });
+                app_ref = Some(app.clone());
+                let model = cx.new(|_| {
+                    let mut m = CodeModel::for_test(app.clone());
+                    m.pane_id = pane_id.into();
+                    m
+                });
+                CodeView::new(model, app, window, cx)
+            });
+            let app = app_ref.unwrap();
+            // GPUI delivers focus events only for an active window.
+            vcx.update(|window, _| window.activate_window());
+            vcx.run_until_parked();
+            vcx.update(|window, cx| {
+                view.update(cx, |v, cx| v.focus_composer(window, cx));
+                let _ = window.draw(cx);
+            });
+            vcx.run_until_parked();
+            // Home's chats aren't panes: making one the focused pane would have Root focus a terminal for it.
+            assert_eq!(vcx.update(|_, cx| app.read(cx).focused_pane_id.clone()).as_deref(), Some(expect), "{pane_id}");
+        }
     }
 }
