@@ -115,6 +115,8 @@ pub fn build_digest(ctx: &HandoffContext<'_>) -> Option<String> {
             let mark = match t.status.as_str() {
                 "completed" => "[x]",
                 "in_progress" => "[~]",
+                "skipped" => "[skipped]",
+                "failed" => "[failed]",
                 _ => "[ ]",
             };
             header.push_str(&format!("- {mark} {}\n", t.content.trim()));

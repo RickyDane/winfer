@@ -750,7 +750,7 @@ impl App {
             Ev::Task(t) => self.on_task(t),
             Ev::Skills(s) => self.skills = s,
             Ev::Todos(t) => {
-                let done = !t.is_empty() && t.iter().all(|t| t.status == "completed");
+                let done = !t.is_empty() && t.iter().all(Todo::settled);
                 self.plan_done = if done { self.plan_done.or(Some(Instant::now())) } else { None };
                 self.todos = t;
             }

@@ -102,6 +102,13 @@ pub struct Todo {
     pub status: String,
 }
 
+impl Todo {
+    /// Nothing is left to do on it.
+    pub fn settled(&self) -> bool {
+        matches!(self.status.as_str(), "completed" | "skipped" | "failed")
+    }
+}
+
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct TaskEv {
     pub id: String,

@@ -534,7 +534,7 @@ impl CodeState {
                 }
             }
             Ev::Todos { todos } => {
-                let all_done = !todos.is_empty() && todos.iter().all(|t| t.status == "completed");
+                let all_done = !todos.is_empty() && todos.iter().all(Todo::settled);
                 self.plan_done_at = if all_done { self.plan_done_at.or(Some(now_ms())) } else { None };
                 self.todos = todos;
             }
@@ -814,9 +814,22 @@ impl CodeState {
     }
 }
 
-/// A plan task's glyph state for the strip above the composer.
+/// Completed and total tasks, for the strip above the composer.
 pub fn plan_counts(todos: &[Todo]) -> (usize, usize) {
     (todos.iter().filter(|t| t.status == "completed").count(), todos.len())
+}
+
+/// The strip's count: "2 of 5", plus any steps that were skipped or failed.
+pub fn plan_summary(todos: &[Todo]) -> String {
+    let (done, total) = plan_counts(todos);
+    let mut text = format!("{done} of {total}");
+    for status in ["skipped", "failed"] {
+        let n = todos.iter().filter(|t| t.status == status).count();
+        if n > 0 {
+            text.push_str(&format!(" · {n} {status}"));
+        }
+    }
+    text
 }
 
 #[cfg(test)]
@@ -1059,6 +1072,10 @@ mod tests {
         s.apply(ev(json!({ "type": "todos", "todos": [{ "content": "a", "status": "pending" }] })));
         assert_eq!(s.plan_done_at, None);
         assert_eq!(plan_counts(&s.todos), (0, 1));
+        // Skipped and failed steps leave nothing to do, but don't count as completed.
+        s.apply(ev(json!({ "type": "todos", "todos": [{ "content": "a", "status": "completed" }, { "content": "b", "status": "skipped" }, { "content": "c", "status": "failed" }] })));
+        assert!(s.plan_done_at.is_some());
+        assert_eq!(plan_summary(&s.todos), "1 of 3 · 1 skipped · 1 failed");
     }
 
     #[test]

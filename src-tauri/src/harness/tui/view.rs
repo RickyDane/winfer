@@ -356,7 +356,7 @@ const PLAN_LINGER: Duration = Duration::from_secs(10);
 /// Whether there's a plan to show: some of it is still open, or it was just finished.
 fn plan_visible(app: &App) -> bool {
     !app.todos.is_empty()
-        && (app.todos.iter().any(|t| t.status != "completed") || app.plan_done.is_some_and(|d| d.elapsed() < PLAN_LINGER))
+        && (app.todos.iter().any(|t| !t.settled()) || app.plan_done.is_some_and(|d| d.elapsed() < PLAN_LINGER))
 }
 
 /// Terminals at least this wide get the plan as a sidebar.
@@ -396,6 +396,8 @@ fn sidebar(f: &mut Frame, app: &App, area: Rect, t: Duration) {
         let (mark, mark_style, text_style) = match todo.status.as_str() {
             "completed" => ("●", theme::fg(theme::DIM()), theme::dim()),
             "in_progress" => (anim::dots_spin(t), anim::spin_style(), theme::bold(theme::FG())),
+            "skipped" => ("⊘", theme::fg(theme::DIM()), theme::dim()),
+            "failed" => ("✗", theme::fg(theme::RED()), theme::muted()),
             _ => ("○", theme::fg(theme::DIM()), theme::muted()),
         };
         if todo.status == "in_progress" && current.is_none() {
@@ -442,6 +444,8 @@ fn todo_lines(app: &App, width: usize, t: Duration) -> Vec<Line<'static>> {
     let step_style = |status: &str| match status {
         "completed" => ("●".to_string(), theme::fg(theme::DIM()), theme::dim()),
         "in_progress" => (anim::dots_spin(t).to_string(), anim::spin_style(), theme::bold(theme::FG())),
+        "skipped" => ("⊘".to_string(), theme::fg(theme::DIM()), theme::dim()),
+        "failed" => ("✗".to_string(), theme::fg(theme::RED()), theme::muted()),
         _ => ("○".to_string(), theme::fg(theme::DIM()), theme::muted()),
     };
     if app.plan_open {
@@ -463,7 +467,10 @@ fn todo_lines(app: &App, width: usize, t: Duration) -> Vec<Line<'static>> {
             (m, ms, c.content.clone(), ts)
         }
         (None, Some(n)) => ("○".into(), theme::fg(theme::DIM()), format!("next: {}", n.content), theme::muted()),
-        (None, None) => ("●".into(), theme::fg(theme::GREEN()), "all done".into(), theme::muted()),
+        (None, None) => match app.todos.iter().filter(|t| t.status == "failed").count() {
+            0 => ("●".into(), theme::fg(theme::GREEN()), "all done".into(), theme::muted()),
+            n => ("✗".into(), theme::fg(theme::RED()), format!("{n} failed"), theme::muted()),
+        },
     };
     spans.push(Span::styled(" · ", theme::dim()));
     spans.push(Span::styled(format!("{mark} "), mark_style));

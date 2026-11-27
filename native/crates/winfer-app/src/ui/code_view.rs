@@ -7,7 +7,7 @@ use crate::code::commands::{self, Effect};
 use crate::code::names::{backend_of, model_name};
 use crate::code::protocol::*;
 use crate::code::session::{CodeEvent, CodeModel};
-use crate::code::state::{Attachment, Item, Sheet, now_ms, plan_counts};
+use crate::code::state::{Attachment, Item, Sheet, now_ms, plan_counts, plan_summary};
 use crate::code::toolbody::{self, Section};
 use crate::fonts;
 use crate::model::AppState;
@@ -2673,14 +2673,17 @@ impl CodeView {
         let (done, total) = plan_counts(&st.todos);
         let open = !self.flipped.contains("plan");
         let mut list = div().flex().flex_col().gap_1p5().px_3().pb_2p5().pt_0p5();
-        for t in &st.todos {
+        // Several steps can be in progress at once, so each spinner is keyed by its place.
+        for (i, t) in st.todos.iter().enumerate() {
             let (icon, color) = match t.status.as_str() {
                 "completed" => (IconName::CircleCheck, c.success),
                 "in_progress" => (IconName::LoaderCircle, c.accent),
+                "skipped" => (IconName::CircleSlash, c.subtle),
+                "failed" => (IconName::CircleX, c.danger),
                 _ => (IconName::CircleDashed, c.subtle),
             };
-            let glyph: AnyElement = if t.status == "in_progress" { spinner(color, 13.0, SharedString::from(format!("plan-sp-{}", t.content.len()))).into_any_element() } else { Icon::new(icon).size(px(13.0)).text_color(color).into_any_element() };
-            list = list.child(div().flex().items_start().gap_2().text_size(px(12.5)).line_height(relative(1.45)).text_color(if t.status == "completed" { c.subtle } else { c.fg })
+            let glyph: AnyElement = if t.status == "in_progress" { spinner(color, 13.0, SharedString::from(format!("plan-sp-{i}"))).into_any_element() } else { Icon::new(icon).size(px(13.0)).text_color(color).into_any_element() };
+            list = list.child(div().flex().items_start().gap_2().text_size(px(12.5)).line_height(relative(1.45)).text_color(if matches!(t.status.as_str(), "completed" | "skipped") { c.subtle } else { c.fg })
                 .child(div().mt(px(2.0)).child(glyph))
                 .child(div().flex_1().whitespace_normal().child(t.content.clone())));
         }
@@ -2690,7 +2693,7 @@ impl CodeView {
             .child(Icon::new(IconName::ListTodo).size(px(13.0)).text_color(c.accent))
             .child(div().text_color(c.fg).child("Plan"))
             .child(div().w(px(56.0)).h(px(3.0)).rounded_full().bg(c.border).overflow_hidden().child(div().h_full().w(relative(frac)).rounded_full().bg(c.success)))
-            .child(div().flex_1().text_color(c.subtle).child(format!("{done} of {total}")))
+            .child(div().flex_1().text_color(c.subtle).child(plan_summary(&st.todos)))
             .child(Icon::new(if open { IconName::ChevronDown } else { IconName::ChevronUp }).size(px(12.0)).text_color(c.subtle));
         Some(dock_inset(div().mb_2().rounded_xl().bg(c.raised).overflow_hidden().child(head).when(open, |d| d.child(list)), false).into_any_element())
     }

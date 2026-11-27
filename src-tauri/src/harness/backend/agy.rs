@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 
 use super::{In, LineProcess, Opts};
 use crate::harness::diff;
-use crate::harness::event::{Cmd, Ev, Events, Mode, ModelInfo, TaskEv, TurnTokens, Usage, UserMsg};
+use crate::harness::event::{Cmd, Ev, Events, Mode, ModelInfo, TaskEv, Todo, TurnTokens, Usage, UserMsg};
 
 /// Effort suffixes `agy models` attaches to per-level model variants, lowest first.
 const EFFORT_SUFFIXES: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
@@ -401,9 +401,29 @@ fn display_name(name: &str, input: &Value) -> String {
         "post_message" => "Swarm post",
         "read_board" => "Swarm board",
         "swarm_wait" => "Swarm wait",
+        // The plan tool: named like the other backends' so it gets their card treatment.
+        "update_steps" => "Todos",
         other => other,
     }
     .to_string()
+}
+
+/// An `update_steps` call's checklist (the full list every time), as winfer's plan.
+fn todos_of(input: &Value) -> Option<Vec<Todo>> {
+    let todos: Vec<Todo> = input["steps"]
+        .as_array()?
+        .iter()
+        .filter_map(|step| {
+            let content = step["title"].as_str().map(str::trim).filter(|t| !t.is_empty())?.to_string();
+            let status = match step["status"].as_str() {
+                Some("done") => "completed",
+                Some(s @ ("in_progress" | "skipped" | "failed")) => s,
+                _ => "pending",
+            };
+            Some(Todo { content, status: status.into() })
+        })
+        .collect();
+    (!todos.is_empty()).then_some(todos)
 }
 
 /// A file a tool works on, from its parameters.
@@ -424,6 +444,7 @@ fn title(name: &str, input: &Value) -> String {
     }
     let first = |keys: &[&str]| keys.iter().find_map(|k| input[k].as_str()).map(str::to_string);
     let t = match name {
+        "update_steps" => Some("update plan".into()),
         "run_command" => first(&["CommandLine", "Command", "command"]),
         "list_dir" => first(&["DirectoryPath", "Path"]).map(|p| crate::harness::tools::short_path(&p)),
         "grep_search" => first(&["Query", "Pattern"]).map(|q| match first(&["SearchPath", "SearchDirectory", "Path"]) {
@@ -1691,6 +1712,9 @@ impl Bridge {
                     let before = path_of(&input).filter(|_| edits).map(|p| (p.to_string(), std::fs::read_to_string(p).unwrap_or_default()));
                     self.emit(Ev::ToolStart { id: id.clone(), name: shown, title: title(&name, &input), input: input.clone() });
                     self.calls.insert(id.clone(), Call { before });
+                    if name == "update_steps" && let Some(todos) = todos_of(&input) {
+                        self.emit(Ev::Todos(todos));
+                    }
                 }
                 if !running {
                     let call = self.calls.remove(&id);
@@ -2367,6 +2391,26 @@ mod tests {
         assert!(matches!(&evs[0], Ev::ToolStart { name, title, .. } if name == "Bash" && title == "ls"));
         assert!(matches!(&evs[1], Ev::ToolEnd { ok: true, output, .. } if output == "a.txt"));
         assert!(matches!(&evs[2], Ev::TurnDone));
+    }
+
+    #[test]
+    fn update_steps_becomes_the_plan() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut b = test_bridge(tx, "");
+        let step = |state: &str| json!({ "event": "step_update", "step_update": {
+            "step_index": 2, "state": state, "step_type": "tool", "tool_name": "update_steps",
+            "tool_info": { "name": "update_steps", "parameters": { "steps": [
+                { "status": "done", "title": "Alpha" }, { "status": "in_progress", "title": "Beta" },
+                { "status": "skipped", "title": "Gamma" }, { "status": "failed", "title": "Delta" },
+                { "status": "pending", "title": "Epsilon" } ] } } } });
+        b.on_line(&step("ACTIVE"));
+        b.on_line(&step("DONE"));
+        let evs: Vec<Ev> = rx.try_iter().collect();
+        let plans: Vec<&Vec<Todo>> = evs.iter().filter_map(|e| match e { Ev::Todos(t) => Some(t), _ => None }).collect();
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].iter().map(|t| t.content.as_str()).collect::<Vec<_>>(), ["Alpha", "Beta", "Gamma", "Delta", "Epsilon"]);
+        assert_eq!(plans[0].iter().map(|t| t.status.as_str()).collect::<Vec<_>>(), ["completed", "in_progress", "skipped", "failed", "pending"]);
+        assert!(evs.iter().any(|e| matches!(e, Ev::ToolStart { name, title, .. } if name == "Todos" && title == "update plan")));
     }
 
     #[test]

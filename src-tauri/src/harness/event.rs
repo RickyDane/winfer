@@ -864,8 +864,15 @@ mod tps_tests {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Todo {
     pub content: String,
-    /// "pending" | "in_progress" | "completed"
+    /// "pending" | "in_progress" | "completed" | "skipped" | "failed"
     pub status: String,
+}
+
+impl Todo {
+    /// Nothing is left to do on it.
+    pub fn settled(&self) -> bool {
+        matches!(self.status.as_str(), "completed" | "skipped" | "failed")
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
