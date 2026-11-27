@@ -32,6 +32,8 @@ pub struct CodeModel {
     pub attachments: Vec<Attachment>,
     pub plan_sidebar: bool,
     screen_at: u64,
+    /// Workspaces the user can @mention here (Home's chat); empty: `@` mentions files.
+    pub mentions: Vec<super::mentions::Mention>,
 }
 
 /// Text typed into a winfer code pane from outside it (the agent bar's broadcast, send_to_pane,
@@ -93,6 +95,7 @@ impl CodeModel {
             attachments: Vec::new(),
             plan_sidebar: false,
             screen_at: 0,
+            mentions: Vec::new(),
         }
     }
 
@@ -109,7 +112,7 @@ impl CodeModel {
         });
         let pane_id = pane.id.clone();
         let plan_sidebar = false;
-        let model = Self { pane_id: pane_id.clone(), state: CodeState::default(), session: session.clone(), app, lines: LineBuffer::default(), pending: Vec::new(), flushing: false, draft: String::new(), draft_rev: 0, attachments: Vec::new(), plan_sidebar, screen_at: 0 };
+        let model = Self { pane_id: pane_id.clone(), state: CodeState::default(), session: session.clone(), app, lines: LineBuffer::default(), pending: Vec::new(), flushing: false, draft: String::new(), draft_rev: 0, attachments: Vec::new(), plan_sidebar, screen_at: 0, mentions: Vec::new() };
         cx.spawn(async move |this, cx| {
             while let Ok(first) = rx.recv().await {
                 let mut batch = vec![first];
@@ -285,7 +288,8 @@ impl CodeModel {
     pub fn submit(&mut self, text: &str, skill: Option<&str>, cx: &mut Context<Self>) {
         let items = self.state.items.len();
         let attachments = std::mem::take(&mut self.attachments);
-        self.state.submit(text, &attachments, skill);
+        let note = super::mentions::note_for(text, &self.mentions);
+        self.state.submit_noted(text, note.as_deref(), &attachments, skill);
         self.note_new_user_messages(items, cx);
         self.flush(cx);
         cx.notify();

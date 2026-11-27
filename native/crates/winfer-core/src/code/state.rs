@@ -258,6 +258,17 @@ fn find_last(items: &[Item], f: impl Fn(&Item) -> bool) -> Option<usize> {
 }
 
 /// How a sent message shows in the transcript: the skill as `/name`, then attached files' names.
+/// How the note `submit_noted` adds starts; a restored transcript shows the text without it.
+pub const MENTION_NOTE: &str = "\n\n[winfer] The user mentioned these workspaces";
+
+/// A user message as the transcript shows it: without a mention note.
+pub fn without_note(text: String) -> String {
+    match text.find(MENTION_NOTE) {
+        Some(i) => text[..i].to_string(),
+        None => text,
+    }
+}
+
 pub fn shown_text<'a>(text: &str, skill: Option<&str>, files: impl Iterator<Item = &'a str>) -> String {
     let mut shown = match skill {
         Some(s) => format!("/{s}{}", if text.is_empty() { String::new() } else { format!(" {text}") }),
@@ -377,6 +388,12 @@ impl CodeState {
 
     /// Sends a message (or steers a running turn). `images` and `files` are the attachments.
     pub fn submit(&mut self, text: &str, attachments: &[Attachment], skill: Option<&str>) {
+        self.submit_noted(text, None, attachments, skill);
+    }
+
+    /// `submit`, with a note for the model after the text that the transcript doesn't show (what
+    /// the user's @mentions stand for).
+    pub fn submit_noted(&mut self, text: &str, note: Option<&str>, attachments: &[Attachment], skill: Option<&str>) {
         let t = text.trim();
         if t.is_empty() && attachments.is_empty() && skill.is_none() {
             return;
@@ -388,7 +405,11 @@ impl CodeState {
         let urls: Vec<String> = images.iter().map(|i| format!("data:{};base64,{}", i.mime, i.data)).collect();
         self.items.push(Item::User { key: key(), text: shown, at: now_ms(), images: urls });
         let steer = self.busy;
-        self.send(Cmd::Send { text: t.to_string(), images, files, skill: skill.map(str::to_string), steer });
+        let sent = match note.map(str::trim).filter(|n| !n.is_empty()) {
+            Some(n) => format!("{t}\n\n{n}"),
+            None => t.to_string(),
+        };
+        self.send(Cmd::Send { text: sent, images, files, skill: skill.map(str::to_string), steer });
     }
 
     pub fn apply(&mut self, ev: Ev) {
@@ -667,7 +688,7 @@ impl CodeState {
             }
             Ev::Models { models } => self.models = models,
             Ev::Files { files } => self.files = Some(files),
-            Ev::User { text, images } => self.items.push(Item::User { key: key(), text, at: now_ms(), images }),
+            Ev::User { text, images } => self.items.push(Item::User { key: key(), text: without_note(text), at: now_ms(), images }),
             Ev::Answered { id } => self.approvals.retain(|a| a.id != id),
             Ev::Cleared => {
                 self.items.clear();
@@ -686,7 +707,7 @@ impl CodeState {
             Ev::Restore { transcript } => {
                 for e in transcript {
                     self.items.push(match e.role.as_str() {
-                        "user" => Item::User { key: key(), text: e.text, at: 0, images: Vec::new() },
+                        "user" => Item::User { key: key(), text: without_note(e.text), at: 0, images: Vec::new() },
                         "assistant" => Item::Text { key: key(), text: e.text, streaming: false },
                         "tool" => {
                             let (name, title) = e.text.split_once('\t').unwrap_or((&e.text, ""));
@@ -934,6 +955,16 @@ mod tests {
         s.apply(ev(json!({ "type": "tool_end", "id": "t1", "ok": true, "output": "", "diff": null })));
         assert_eq!(s.items.len(), 1);
         assert!(matches!(&s.items[0], Item::Tool { output, ok: Some(true), ended: Some(_), .. } if output == "a\n"));
+    }
+
+    #[test]
+    fn a_note_goes_to_the_model_but_not_the_transcript() {
+        let mut s = CodeState::default();
+        s.submit_noted("fix @api", Some("[winfer] @api = workspace api"), &[], None);
+        assert!(matches!(&s.items[0], Item::User { text, .. } if text == "fix @api"));
+        assert_eq!(s.outbox.last().unwrap().json()["text"], "fix @api\n\n[winfer] @api = workspace api");
+        assert_eq!(without_note("fix @api\n\n[winfer] The user mentioned these workspaces (…):\n- @api = x".into()), "fix @api");
+        assert_eq!(without_note("plain".into()), "plain");
     }
 
     #[test]

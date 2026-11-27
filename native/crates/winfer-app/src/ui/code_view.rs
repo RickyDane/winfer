@@ -599,7 +599,9 @@ pub(super) fn attachment_from_clipboard_image(img: &Image, existing: usize) -> O
 
 impl CodeView {
     pub fn new(model: Entity<CodeModel>, app: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let input = cx.new(|cx| TextareaState::new(window, cx).auto_grow(1, 3).soft_wrap(true).submit_on_enter(true).placeholder("Message WinferCode…  (/ for commands, @ for files)"));
+        let home = crate::voice::home_pane(&model.read(cx).pane_id) == Some(crate::voice::HomePane::Conductor);
+        let placeholder = if home { "Ask Home…  (@ for workspaces, / for commands)" } else { "Message WinferCode…  (/ for commands, @ for files)" };
+        let input = cx.new(|cx| TextareaState::new(window, cx).auto_grow(1, 3).soft_wrap(true).submit_on_enter(true).placeholder(placeholder));
         cx.subscribe_in(&input, window, |this, input, event: &InputEvent, window, cx| match event {
             InputEvent::Focus => {
                 let pane_id = this.model.read(cx).pane_id.clone();
@@ -719,7 +721,7 @@ impl CodeView {
             }
         }
         let mentions = self.mention_matches(&text, cx);
-        if let Some(path) = mentions.get(self.popup.min(mentions.len().saturating_sub(1))) {
+        if let Some((path, _)) = mentions.get(self.popup.min(mentions.len().saturating_sub(1))) {
             let at = text.rfind('@').unwrap_or(0);
             self.set_input(&format!("{}@{path} ", &text[..at]), window, cx);
             return;
@@ -792,18 +794,21 @@ impl CodeView {
         Some((at, query))
     }
 
-    fn mention_matches(&self, text: &str, cx: &App) -> Vec<String> {
+    /// What `@` offers: the workspaces (Home's chat), else the project's files. `(token, detail)`.
+    fn mention_matches(&self, text: &str, cx: &App) -> Vec<(String, String)> {
         let Some((at, query)) = Self::mention_at(text) else { return Vec::new() };
         if self.popup_closed_at == Some(at) {
             return Vec::new();
         }
         let q = query.to_lowercase();
-        self.model
-            .read(cx)
-            .state
-            .files
-            .as_ref()
-            .map_or(Vec::new(), |f| f.iter().filter(|p| p.to_lowercase().contains(&q)).take(200).cloned().collect())
+        let m = self.model.read(cx);
+        if !m.mentions.is_empty() {
+            // Starts-with first, then the rest that contain it (e.g. "web" finds "mac-mini/web").
+            let (mut first, rest): (Vec<_>, Vec<_>) = m.mentions.iter().filter(|x| x.token.contains(&q)).partition(|x| x.token.starts_with(&q));
+            first.extend(rest);
+            return first.into_iter().map(|x| (x.token.clone(), x.detail.clone())).collect();
+        }
+        m.state.files.as_ref().map_or(Vec::new(), |f| f.iter().filter(|p| p.to_lowercase().contains(&q)).take(200).map(|p| (p.clone(), String::new())).collect())
     }
 
     fn popup_rows(&self, text: &str, cx: &App) -> Vec<(String, String, String)> {
@@ -823,9 +828,9 @@ impl CodeView {
             return self
                 .mention_matches(text, cx)
                 .into_iter()
-                .map(|f| {
+                .map(|(f, detail)| {
                     let insert = format!("{prefix}@{f} ");
-                    (f, String::new(), insert)
+                    (f, detail, insert)
                 })
                 .collect();
         }
@@ -900,7 +905,7 @@ impl CodeView {
             return false;
         }
         let mentions = self.mention_matches(&text, cx);
-        if let Some(path) = mentions.get(self.popup.min(mentions.len().saturating_sub(1))) {
+        if let Some((path, _)) = mentions.get(self.popup.min(mentions.len().saturating_sub(1))) {
             let at = text.rfind('@').unwrap_or(0);
             self.set_input(&format!("{}@{path} ", &text[..at]), window, cx);
             return true;

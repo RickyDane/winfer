@@ -14,6 +14,7 @@ use super::voice_tools;
 use super::*;
 use crate::code::protocol::{Cmd, Decision};
 use crate::code::session::{CodeEvent, CodeModel};
+use crate::code::mentions::{Mention, slug};
 use crate::code::state::Item;
 use crate::model::Workspace;
 use crate::voice::{CONDUCTOR, HomePane, home_pane, task_pane};
@@ -468,6 +469,7 @@ impl Root {
         let resume = s.rest.get("home").and_then(|h| h["conductorSession"].as_str()).filter(|v| !v.is_empty()).map(str::to_string);
         let cwd = home_dir();
         let model = self.start_orch(CONDUCTOR, cwd, String::new(), settings.conductor_model, CONDUCTOR_ROLE, resume, cx)?;
+        self.sync_home_mentions(cx);
         // Its light tasks' agents: it hears of them again.
         let panes: Vec<String> = self.home.tasks.iter().filter(|t| t.mode == TaskMode::Light && t.stage.open()).flat_map(|t| t.panes.clone()).collect();
         for p in panes {
@@ -779,6 +781,7 @@ impl Root {
     /// cards' stages current, and hands over what waited for the orchestrators to be free.
     pub(super) fn tick_home(&mut self, cx: &mut Context<Self>) {
         self.load_home(cx);
+        self.sync_home_mentions(cx);
         if self.home.conductor.is_none() && self.home.forks.is_empty() && !self.home.tasks.iter().any(|t| t.stage.open()) {
             return;
         }
@@ -920,6 +923,73 @@ impl Root {
         true
     }
 
+    /// Every workspace here and on the paired machines, as `@` mentions for Home's chat.
+    pub(super) fn workspace_mentions(&self, cx: &App) -> Vec<Mention> {
+        let s = self.state.read(cx);
+        let agents = |statuses: &mut dyn Iterator<Item = AgentStatus>| -> String {
+            let (mut n, mut working, mut waiting) = (0, 0, 0);
+            for st in statuses {
+                n += 1;
+                working += usize::from(st == AgentStatus::Working);
+                waiting += usize::from(st == AgentStatus::NeedsInput);
+            }
+            let mut text = match n {
+                0 => "no agents".to_string(),
+                1 => "1 agent".to_string(),
+                n => format!("{n} agents"),
+            };
+            if working > 0 {
+                text.push_str(&format!(", {working} working"));
+            }
+            if waiting > 0 {
+                text.push_str(&format!(", {waiting} need input"));
+            }
+            text
+        };
+        let mut out: Vec<Mention> = Vec::new();
+        for w in s.workspaces.iter().filter(|w| w.remote.is_none()) {
+            let count = agents(&mut w.panes.iter().filter(|p| !p.archived && p.provider != "shell").map(|p| p.status));
+            let open = self.home.tasks.iter().filter(|t| t.stage.open() && t.workspace_id.as_deref() == Some(w.id.as_str())).map(HomeTask::title).collect::<Vec<_>>();
+            let tasks = if open.is_empty() { String::new() } else { format!("; open: {}", open.join(", ")) };
+            out.push(Mention {
+                token: slug(&w.name),
+                detail: format!("this machine · {count}"),
+                note: format!("workspace \"{}\" on this machine, folder {} ({count}{tasks}). Pass workspace: \"{}\"; its panes are \"{}/N\".", w.name, w.root_dir, w.name, w.name),
+            });
+        }
+        if let Some(connect) = crate::connect::get() {
+            for p in connect.peers() {
+                let Some(m) = self.connect.mirrors.get(&p.peer_id) else { continue };
+                let up = if connect.is_up(&p.peer_id) { "online" } else { "offline" };
+                for (id, name) in &m.workspaces {
+                    let count = agents(&mut m.panes.iter().filter(|x| x.workspace_id == *id && !x.archived && x.provider != "shell").map(|x| x.status));
+                    let root = m.workspace_roots.get(id).map(|r| format!(", folder {r}")).unwrap_or_default();
+                    out.push(Mention {
+                        token: format!("{}/{}", slug(&p.name), slug(name)),
+                        detail: format!("{} ({up}) · {count}", p.name),
+                        note: format!("workspace \"{name}\" on the paired machine \"{}\" ({up}{root}; {count}). Pass workspace: \"{}/{name}\"; coding work there is a remote task (start_task forks it there).", p.name, p.name),
+                    });
+                }
+            }
+        }
+        // Two local workspaces with the same name: keep the first (the other by its full name).
+        let mut seen = HashSet::new();
+        out.retain(|m| !m.token.is_empty() && seen.insert(m.token.clone()));
+        out
+    }
+
+    /// Keeps the conductor's chat offering the current workspaces after `@`.
+    fn sync_home_mentions(&mut self, cx: &mut Context<Self>) {
+        let Some(model) = self.home.conductor.as_ref().map(|o| o.model.clone()) else { return };
+        let mentions = self.workspace_mentions(cx);
+        if model.read(cx).mentions != mentions {
+            model.update(cx, |m, cx| {
+                m.mentions = mentions;
+                cx.notify();
+            });
+        }
+    }
+
     /// Whether the conductor may ask with a picker: the user reads its chat (not voice).
     pub(super) fn home_can_ask(&self) -> bool {
         !self.home.voice_turn
@@ -1008,7 +1078,7 @@ impl Root {
         }
         self.home.last_brief = Some(Instant::now());
         let text = format!(
-            "[winfer] The user opened Home. Give a short brief (3-6 bullets) of what needs them and what happened: agents waiting ({waiting}), reviews ready ({reviews}), open tasks ({open_tasks}), usage left, failures. Look before you write (list_tasks, list_workspaces, list_reviews, usage_status). No preamble."
+            "[winfer] The user opened Home. Give a short brief (3-6 bullets) of what needs them and what happened: agents waiting ({waiting}), reviews ready ({reviews}), open tasks ({open_tasks}), usage left, failures. Look before you write (list_tasks, list_workspaces, usage_status; list_reviews if you have it). No preamble."
         );
         self.home.voice_turn = false;
         self.queue_for(CONDUCTOR, text, cx);
@@ -1335,8 +1405,23 @@ impl Root {
     /// A workspace by "name" (this machine, else a paired one's) or "machine/name".
     pub(super) fn find_workspace(&self, target: &str, cx: &App) -> Result<Place, String> {
         let s = self.state.read(cx);
+        let target = target.trim().trim_start_matches('@');
         if let Some(w) = s.workspace_named(target) {
             return Ok(Place::Local(w.id.clone(), w.name.clone()));
+        }
+        // An @mention token: "my-app", "mac-mini/web".
+        let wanted = target.to_lowercase();
+        if let Some(w) = s.workspaces.iter().filter(|w| w.remote.is_none()).find(|w| slug(&w.name) == wanted) {
+            return Ok(Place::Local(w.id.clone(), w.name.clone()));
+        }
+        if let Some((m, n)) = wanted.split_once('/')
+            && let Some(connect) = crate::connect::get()
+        {
+            for p in connect.peers().into_iter().filter(|p| slug(&p.name) == m) {
+                if let Some((_, wname)) = self.connect.mirrors.get(&p.peer_id).and_then(|x| x.workspaces.iter().find(|(_, w)| slug(w) == n)) {
+                    return Ok(Place::Remote { peer: p.peer_id.clone(), machine: p.name.clone(), workspace: wname.clone() });
+                }
+            }
         }
         let (machine, name) = match target.split_once('/') {
             Some((m, n)) if !m.trim().is_empty() && !n.trim().is_empty() => (Some(m.trim()), n.trim()),
