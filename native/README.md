@@ -66,7 +66,7 @@ Done:
   `list_reviews`/`review_action`, `machine_usage`, `update_server`, `pair_machine`, `list_sign_ins`/`push_sign_in`;
   a server's own agents reach paired machines the same way)
 - [x] Android mirror: live H.264 (openh264) with screenshot fallback, tap, swipe, scroll, keys, emulator start
-- [x] Limit handoff ("Continue in …") and Codex reset credits
+- [x] Limit handoff ("Continue in …"); banked resets (Codex: listed and redeemed from the usage popover and Limits page; Claude: opens Claude Code's `/limit-reset`)
 - [x] Settings → Voice (with native microphone test), AI, winfer code, Mobile, Plugins, Skills
 - [x] Viewer: PDFs (hayro, page and zoom), markdown comments per block
 - [x] Settings → winfer code → Local models (host, key, thinking levels and budgets, Test) and the local subagent model
@@ -104,7 +104,9 @@ bundles with the Tauri app's updater key and writes `latest-native.json`, the na
 app's `latest.json`: on the release itself (stable apps read the latest release's) and on the `nebula-channel` release
 (Nebula apps). `src/updates.rs` checks the channel's feed, verifies the bundle against `plugins.updater.pubkey` in
 `src-tauri/tauri.conf.json`, moves it in place of the running app (the `.app` on macOS, the executable elsewhere; it
-needs write access to that folder) and relaunches; the new copy waits for the old one to quit.
+needs write access to that folder) and relaunches; the new copy waits for the old one to quit. On Windows, installed
+and portable copies alike only replace the `.exe` after a UAC prompt: the app starts itself as administrator
+(`winfer apply-update`), which checks the signature again and does the swap, while the relaunched app stays unelevated.
 
 ## Development aids (debug builds)
 

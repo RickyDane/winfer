@@ -2,7 +2,8 @@
 //! Native builds ship in the Tauri app's GitHub releases (vX.Y.Z stable, vX.Y.Z-N Nebula; see
 //! .github/workflows/release.yml) with an update feed of their own, latest-native.json, and are
 //! signed with the Tauri app's updater key. Installing downloads this platform's bundle, checks its
-//! signature, puts it in place of the running app and relaunches into it.
+//! signature, puts it in place of the running app and relaunches into it. On Windows putting it in
+//! place needs administrator permission, which a UAC prompt asks for.
 
 use base64::Engine as _;
 use serde::Deserialize;
@@ -19,6 +20,9 @@ pub const FEED_FILE: &str = "latest-native.json";
 pub const RELAUNCH_ENV: &str = "WINFER_RELAUNCHED";
 /// Most an update bundle may weigh.
 const MAX_BUNDLE: u64 = 1 << 30;
+/// The argument that has a copy started as administrator apply a downloaded update (main.rs).
+#[cfg(windows)]
+pub const APPLY_ARG: &str = "apply-update";
 
 /// One release's changes, as the "What's new" dialog lists them.
 #[derive(Clone, Debug, PartialEq)]
@@ -250,7 +254,10 @@ pub fn install(bundle: &Bundle, progress: impl Fn(u64, Option<u64>)) -> Result<P
     std::fs::create_dir_all(&staging).map_err(|e| format!("can't write to {}: {e}", staging.parent().unwrap_or(&staging).display()))?;
     let result = download(&bundle.url, progress).and_then(|data| {
         verify(&data, &bundle.signature, &updater_pubkey())?;
-        swap_in(&target, &staging, &data)
+        #[cfg(not(windows))]
+        return swap_in(&target, &staging, &data);
+        #[cfg(windows)]
+        return swap_in_as_admin(&target, &staging, &data, &bundle.signature);
     });
     let _ = std::fs::remove_dir_all(&staging);
     result
@@ -314,31 +321,94 @@ fn swap_in(target: &Path, staging: &Path, archive: &[u8]) -> Result<PathBuf, Str
     }
 }
 
-/// The .old beside the .exe, where the replaced one waits to be deleted.
+/// A file beside the .exe: `.new` while it's being written, `.old` where the replaced one waits to
+/// be deleted.
 #[cfg(windows)]
-fn old_exe(exe: &Path) -> PathBuf {
+fn beside(exe: &Path, extension: &str) -> PathBuf {
     let mut name = exe.as_os_str().to_os_string();
-    name.push(".old");
+    name.push(extension);
     PathBuf::from(name)
 }
 
-/// The bundle is the new .exe. Windows can't delete or overwrite a running .exe but can rename it,
-/// so the old one moves to .old and is deleted on the next start (`cleanup`).
+/// The bundle is the new .exe. Replacing the installed one takes administrator permission: this
+/// starts the running .exe again through a UAC prompt (APPLY_ARG, `apply_update`) and waits for it.
 #[cfg(windows)]
-fn swap_in(target: &Path, staging: &Path, exe: &[u8]) -> Result<PathBuf, String> {
-    let new = staging.join("winfer.exe");
-    std::fs::write(&new, exe).map_err(|e| e.to_string())?;
-    let old = old_exe(target);
+fn swap_in_as_admin(target: &Path, staging: &Path, exe: &[u8], signature: &str) -> Result<PathBuf, String> {
+    let download = staging.join("download.exe");
+    std::fs::write(&download, exe).map_err(|e| e.to_string())?;
+    // Quoted for the path's spaces (a Windows path has no quotes); the signature is base64.
+    let args = format!("{APPLY_ARG} \"{}\" {}", download.display(), signature.trim());
+    match run_as_admin(target, &args)? {
+        0 => Ok(target.to_path_buf()),
+        _ => Err("couldn't replace winfer.exe, even as administrator".into()),
+    }
+}
+
+/// The administrator's side of an update: replaces this .exe, and only this one, with `download`.
+/// Other processes can write to the download's folder, so the signature is checked again, on the
+/// very bytes that get installed. Windows can't delete or overwrite a running .exe but can rename
+/// it, so the old one moves to .old and is deleted on the next start (`cleanup`).
+#[cfg(windows)]
+pub fn apply_update(download: &Path, signature: &str) -> Result<(), String> {
+    use std::io::Write as _;
+    let data = std::fs::read(download).map_err(|e| e.to_string())?;
+    verify(&data, signature, &updater_pubkey())?;
+    let target = install_target()?;
+    let (new, old) = (beside(&target, ".new"), beside(&target, ".old"));
+    let _ = std::fs::remove_file(&new);
+    // create_new: never writes through something already there.
+    std::fs::File::create_new(&new).and_then(|mut f| f.write_all(&data).and_then(|_| f.sync_all())).map_err(|e| e.to_string())?;
     let _ = std::fs::remove_file(&old);
-    replace(target, &new, &old)?;
-    Ok(target.to_path_buf())
+    replace(&target, &new, &old)
+}
+
+/// Runs `exe` with `args` as administrator and returns its exit code. Blocks while the UAC prompt
+/// is up and the process runs.
+#[cfg(windows)]
+fn run_as_admin(exe: &Path, args: &str) -> Result<u32, String> {
+    use std::os::windows::ffi::OsStrExt as _;
+    use windows::core::{w, PCWSTR};
+    use windows::Win32::Foundation::{CloseHandle, ERROR_CANCELLED, WAIT_OBJECT_0};
+    use windows::Win32::System::Threading::{GetExitCodeProcess, WaitForSingleObject, INFINITE};
+    use windows::Win32::UI::Shell::{ShellExecuteExW, SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW};
+    use windows::Win32::UI::WindowsAndMessaging::SW_HIDE;
+
+    let file: Vec<u16> = exe.as_os_str().encode_wide().chain([0]).collect();
+    let args: Vec<u16> = args.encode_utf16().chain([0]).collect();
+    let mut info = SHELLEXECUTEINFOW {
+        cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+        fMask: SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC,
+        lpVerb: w!("runas"),
+        lpFile: PCWSTR(file.as_ptr()),
+        lpParameters: PCWSTR(args.as_ptr()),
+        nShow: SW_HIDE.0,
+        ..Default::default()
+    };
+    // SAFETY: `info` and the strings it points to outlive the call.
+    unsafe { ShellExecuteExW(&mut info) }.map_err(|e| {
+        if e.code() == ERROR_CANCELLED.to_hresult() {
+            "the update needs administrator permission".to_string()
+        } else {
+            format!("can't ask for administrator permission: {e}")
+        }
+    })?;
+    let mut code = 0;
+    // SAFETY: SEE_MASK_NOCLOSEPROCESS hands us the process handle, closed once here.
+    let waited = unsafe {
+        let waited = if WaitForSingleObject(info.hProcess, INFINITE) == WAIT_OBJECT_0 { GetExitCodeProcess(info.hProcess, &mut code) } else { Err(windows::core::Error::from_thread()) };
+        let _ = CloseHandle(info.hProcess);
+        waited
+    };
+    waited.map(|_| code).map_err(|e| format!("lost track of the installer: {e}"))
 }
 
 /// Removes what an update left behind: an install that didn't finish, and the replaced .exe.
 pub fn cleanup() {
     let Ok(target) = install_target() else { return };
     #[cfg(windows)]
-    let _ = std::fs::remove_file(old_exe(&target));
+    for extension in [".new", ".old"] {
+        let _ = std::fs::remove_file(beside(&target, extension));
+    }
     if let Some(dir) = target.parent().and_then(|d| std::fs::read_dir(d).ok()) {
         for entry in dir.flatten() {
             if entry.file_name().to_string_lossy().starts_with(".winfer-update-") {

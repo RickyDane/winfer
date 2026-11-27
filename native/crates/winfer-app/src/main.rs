@@ -40,6 +40,12 @@ fn run_subcommand() -> bool {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let rest = args.get(1..).unwrap_or(&[]);
     match args.first().map(String::as_str) {
+        // Started as administrator by an update (updates.rs) to put the new .exe in place.
+        #[cfg(windows)]
+        Some(updates::APPLY_ARG) => match rest {
+            [download, signature] => std::process::exit(updates::apply_update(download.as_ref(), signature).is_err().into()),
+            _ => std::process::exit(2),
+        },
         Some("mcp-stdio") => mcp::run_stdio(),
         Some("mcp-filter") => std::process::exit(mcp::run_filter(rest)),
         Some("hook") => hooks::run_hook(rest),

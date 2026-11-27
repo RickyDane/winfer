@@ -235,7 +235,8 @@ impl Root {
         let progress = Arc::new(Progress::default());
         self.updates.installing = Some(progress.clone());
         self.updates.open = None;
-        self.toast(format!("Downloading winfer {}… it restarts once it's installed", a.version), cx);
+        let admin = if cfg!(windows) { "Windows asks for administrator permission, then " } else { "" };
+        self.toast(format!("Downloading winfer {}… {admin}it restarts once it's installed", a.version), cx);
         cx.notify();
         // Redraws the progress until the install ends.
         cx.spawn(async move |this, cx| loop {

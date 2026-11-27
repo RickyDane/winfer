@@ -1,7 +1,7 @@
 ; Inno Setup script for the native Windows installer, built by bundle-windows.sh:
 ;   iscc /DAppVersion=… /DSourceExe=<portable .exe> /DArch=<x64compatible|arm64> /DOutName=<file name> winfer.iss
-; Installs per user (no admin prompt) into %LOCALAPPDATA%\Programs\winfer, a folder the app can write
-; to, so "Install and restart" updates it in place (updates.rs).
+; Installs per user (no admin prompt) into %LOCALAPPDATA%\Programs\winfer. "Install and restart"
+; updates it in place there, asking for administrator permission first (updates.rs).
 #ifndef AppVersion
   #define AppVersion "0.0.0"
 #endif
