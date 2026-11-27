@@ -191,7 +191,7 @@ fn remote_peer(id: &str) -> Option<&str> {
 
 /// The panel's calls into a workspace's browser: this machine's backend, or for a paired
 /// server's `‹peer›|‹workspace›` ids, that server's over Connect (`winfer_core::connect_browser`).
-mod ops {
+pub(crate) mod ops {
     use super::{BrowserManager, PickHover, backend, browser};
     use serde_json::{Value, json};
     use tauri::Manager;
@@ -1865,6 +1865,47 @@ impl BrowserPanel {
             None => self.active_tab.get(workspace).and_then(|id| tabs.iter().find(|x| x.id == *id)).or(tabs.first()),
         };
         found.map(|x| (x.id.clone(), x.url.clone()))
+    }
+
+    // ---- the phone (mobile_panel.rs) ----
+
+    /// A workspace's browser as a phone shows it: its tabs (starting it), the one shown here, and
+    /// whether it's starting, failed or still has to be downloaded. `retry` starts a failed one again.
+    pub fn phone_state(&mut self, workspace: &str, retry: bool, cx: &mut Context<Self>) -> Value {
+        if retry {
+            self.failed.remove(workspace);
+        }
+        if !self.tabs.contains_key(workspace) && !self.needs_install {
+            self.open_workspace(workspace.to_string(), cx);
+        }
+        let tabs: Vec<Value> = self.tabs.get(workspace).into_iter().flatten().map(|t| {
+            // Favicons ride along when they're small (they're data URLs).
+            let icon = if t.favicon.len() <= 8 << 10 { t.favicon.as_str() } else { "" };
+            json!({ "id": t.id, "url": t.url, "title": t.title, "favicon": icon })
+        }).collect();
+        let failed = self.failed.contains(workspace);
+        json!({
+            "workspaceId": workspace,
+            "ready": self.tabs.contains_key(workspace),
+            "needsInstall": self.needs_install,
+            "installing": self.installing,
+            "error": if failed { self.message.as_ref().map(|m| m.to_string()) } else { None },
+            "tabs": tabs,
+            "active": self.active_tab.get(workspace),
+        })
+    }
+
+    /// A phone picked a tab: the panel shows it too (only the tab in front paints).
+    pub fn phone_select(&mut self, workspace: &str, tab: &str, cx: &mut Context<Self>) {
+        self.active_tab.insert(workspace.to_string(), tab.to_string());
+        cx.notify();
+    }
+
+    /// A phone asked to download the browser.
+    pub fn phone_install(&mut self, cx: &mut Context<Self>) {
+        if self.needs_install && !self.installing {
+            self.install(cx);
+        }
     }
 
     /// The URL shown in a workspace's active tab.

@@ -1,5 +1,6 @@
 // `?mock=1`: an in-memory desktop so the UI runs without relay or winfer.
 import { BaseClient } from "./client";
+import { MockPanel } from "./mockPanel";
 import type { DesktopMsg, Message, ModelOption, Pane, PhoneMsg, Provider, Workspace } from "./protocol";
 
 const now = Date.now();
@@ -206,6 +207,11 @@ export class MockClient extends BaseClient {
   private panes = PANES.map((p) => ({ ...p }));
   private threads: Record<string, Message[]> = structuredClone(THREADS);
   private n = 100;
+  private panel = new MockPanel((msg) => this.apply(msg));
+
+  fire(msg: PhoneMsg) {
+    this.panel.handle(msg);
+  }
 
   constructor() {
     super();
@@ -251,6 +257,8 @@ export class MockClient extends BaseClient {
   async request(msg: PhoneMsg): Promise<DesktopMsg> {
     await new Promise((r) => setTimeout(r, 120));
     const id = String(++this.n);
+    const panel = this.panel.handle(msg);
+    if (panel) return panel.error ? { t: "ack", id, ok: false, error: panel.error } : { t: "ack", id, ok: true, value: panel.value };
     switch (msg.t) {
       case "hello":
       case "panes.get":
@@ -439,6 +447,7 @@ export class MockClient extends BaseClient {
       case "push.unsubscribe":
         return { t: "ack", id, ok: true };
     }
+    return { t: "error", id, error: `unknown request ${msg.t}` };
   }
 
   reconnect() {}

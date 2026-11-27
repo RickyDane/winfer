@@ -2,7 +2,18 @@ import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { flushSync } from "react-dom";
 import type { ClientState, DesktopClient } from "./client";
 
-export type Route = { name: "inbox" } | { name: "pane"; id: string } | { name: "new"; workspaceId: string | null } | { name: "settings" } | { name: "usage" } | { name: "pair" };
+export type Route =
+  | { name: "inbox" }
+  | { name: "pane"; id: string }
+  | { name: "new"; workspaceId: string | null }
+  | { name: "settings" }
+  | { name: "usage" }
+  | { name: "pair" }
+  | { name: "panel" }
+  | { name: "browser"; workspaceId: string }
+  | { name: "android" }
+  | { name: "terminal"; workspaceId: string; paneId: string }
+  | { name: "files"; workspaceId: string };
 
 export function parseRoute(hash: string): Route {
   const h = hash.replace(/^#/, "");
@@ -11,6 +22,12 @@ export function parseRoute(hash: string): Route {
   const fresh = h.match(/^\/new(?:\/(.+))?$/);
   if (fresh) return { name: "new", workspaceId: fresh[1] ? decodeURIComponent(fresh[1]) : null };
   if (h === "/usage") return { name: "usage" };
+  if (h === "/panel") return { name: "panel" };
+  if (h === "/panel/android") return { name: "android" };
+  const mod = h.match(/^\/panel\/(browser|files)\/([^/]+)$/);
+  if (mod) return { name: mod[1] as "browser" | "files", workspaceId: decodeURIComponent(mod[2]) };
+  const term = h.match(/^\/panel\/terminal\/([^/]+)\/(.+)$/);
+  if (term) return { name: "terminal", workspaceId: decodeURIComponent(term[1]), paneId: decodeURIComponent(term[2]) };
   if (h === "/settings") return { name: "settings" };
   if (h === "/pair") return { name: "pair" };
   return { name: "inbox" };
@@ -18,9 +35,9 @@ export function parseRoute(hash: string): Route {
 
 // One hash listener for the app; screen changes run inside a view transition so the old screen
 // slides out and shared elements (an agent's avatar and title) morph into the next screen.
-const DEPTH: Record<Route["name"], number> = { inbox: 0, pair: 0, pane: 1, new: 1, settings: 0, usage: 1 };
+const DEPTH: Record<Route["name"], number> = { inbox: 0, pair: 0, pane: 1, new: 1, settings: 0, usage: 1, panel: 0, browser: 1, android: 1, terminal: 1, files: 1 };
 /** Screens reached from the bottom tab bar: switching between them cross-fades. */
-export const TABS: Route["name"][] = ["inbox", "settings"];
+export const TABS: Route["name"][] = ["inbox", "panel", "settings"];
 let current = location.hash;
 const routeListeners = new Set<() => void>();
 

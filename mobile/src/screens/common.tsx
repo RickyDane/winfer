@@ -3,6 +3,7 @@ import {
   ArrowDown, ArrowUp, Bell, Bot, Brain, Bug, Check, ChevronDown, ChevronLeft, ChevronRight, CircleAlert, CircleDashed, CircleQuestionMark, Compass, Copy, Ellipsis,
   FilePen, FileText, Gauge, FlaskConical, Folder, FolderSearch, Globe, GitBranch, Hand, Info, Laptop, Lightbulb, Link, Minus, Pencil, Plus, RefreshCw, Search, Settings,
   ShieldQuestionMark, Sparkles, Square, SquareTerminal, Wrench, X, Zap,
+  PanelRight, Smartphone, ArrowLeft, ArrowRight, Keyboard, House, Layers, Power, Delete, CornerDownLeft, Image, ExternalLink, MessageSquare, Save, Eye, Code,
 } from "lucide-react";
 import type { ClientState } from "../client";
 // Official marks, shared with the desktop's ProviderIcon.
@@ -63,6 +64,22 @@ const ICONS = {
   brain: Brain,
   dashed: CircleDashed,
   gauge: Gauge,
+  panel: PanelRight,
+  phone: Smartphone,
+  left: ArrowLeft,
+  forward: ArrowRight,
+  keyboard: Keyboard,
+  home: House,
+  layers: Layers,
+  power: Power,
+  del: Delete,
+  enter: CornerDownLeft,
+  image: Image,
+  open: ExternalLink,
+  comment: MessageSquare,
+  save: Save,
+  eye: Eye,
+  code: Code,
 } as const;
 export type IconName = keyof typeof ICONS;
 

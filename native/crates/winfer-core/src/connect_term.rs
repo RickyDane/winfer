@@ -16,6 +16,8 @@ use std::sync::{LazyLock, Mutex};
 const TERM_RING: usize = 1 << 20;
 /// Chat panes need more: their history is JSON lines.
 const CHAT_RING: usize = 8 << 20;
+/// What a phone gets of it (its relay frames are at most 1 MiB, sealed and base64'd twice).
+const PHONE_RING: usize = 256 << 10;
 
 #[derive(Default)]
 struct Tapped {
@@ -105,8 +107,21 @@ pub fn attach(pane: &str, peer: &str, chat: bool, provider: &str) {
     let mut host = HOST.lock().unwrap();
     let t = host.entry(pane.to_string()).or_default();
     t.watchers.insert(peer.to_string());
-    let snapshot: Vec<u8> = t.ring.iter().copied().collect();
+    let snapshot = past_for(peer, t.ring.iter().copied().collect());
     crate::connect::send(peer, json!({"t": "term.snapshot", "paneId": pane, "data": b64(&snapshot), "chat": chat, "provider": provider}));
+}
+
+/// What `peer` gets of a pane's past: a phone's relay carries frames up to 1 MiB (base64'd and
+/// sealed), so it gets less, from the start of a line.
+fn past_for(peer: &str, mut ring: Vec<u8>) -> Vec<u8> {
+    if crate::connect::is_phone(peer) && ring.len() > PHONE_RING {
+        let mut cut = ring.len() - PHONE_RING;
+        while cut < ring.len() && ring[cut - 1] != b'\n' {
+            cut += 1;
+        }
+        ring.drain(..cut);
+    }
+    ring
 }
 
 pub fn detach(pane: &str, peer: &str) {
@@ -253,6 +268,15 @@ mod tests {
         assert_eq!(lines[1]["text"], "also tests");
         assert!(matches!(crate::code::protocol::parse_line(echo.lines().next().unwrap()), Some(crate::code::protocol::Ev::User { images, .. }) if images.len() == 1));
         assert_eq!(user_echo("ls\r"), "");
+    }
+
+    #[test]
+    fn phones_get_a_shorter_past_from_a_line() {
+        let ring: Vec<u8> = b"0123456789\n".iter().copied().cycle().take(PHONE_RING * 2).collect();
+        assert_eq!(past_for("ABCDEFGHIJKLMNOPQRSTUV", ring.clone()).len(), ring.len());
+        let phone = past_for(&crate::connect::phone_peer("dev"), ring);
+        assert!(phone.len() <= PHONE_RING && phone.len() > PHONE_RING - 11);
+        assert!(phone.starts_with(b"0123"));
     }
 
     #[test]

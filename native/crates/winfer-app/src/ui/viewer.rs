@@ -353,7 +353,7 @@ pub fn viewer_projects(docs: &[String], workspaces: &[Workspace]) -> Vec<ViewerP
     groups
 }
 
-fn expand(path: &str) -> String {
+pub(crate) fn expand(path: &str) -> String {
     match (path, dirs::home_dir()) {
         ("~", Some(h)) => h.display().to_string(),
         (p, Some(h)) if p.starts_with("~/") => format!("{}{}", h.display(), &p[1..]),
@@ -758,7 +758,7 @@ impl ViewerPanel {
         }
     }
 
-    fn close(&mut self, path: &str, cx: &mut Context<Self>) {
+    pub fn close(&mut self, path: &str, cx: &mut Context<Self>) {
         self.state.update(cx, |s, cx| {
             let group = viewer_projects(&s.viewer.docs, &s.workspaces).into_iter().find(|g| g.docs.iter().any(|d| d == path));
             let siblings: Vec<String> = group.as_ref().map(|g| g.docs.iter().filter(|d| *d != path).cloned().collect()).unwrap_or_default();

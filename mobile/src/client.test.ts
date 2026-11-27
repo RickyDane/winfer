@@ -6,6 +6,7 @@ import type { DesktopMsg, Message } from "./protocol";
 class Client extends BaseClient {
   name = "test";
   request = vi.fn<(_: unknown) => Promise<DesktopMsg>>();
+  fire() {}
   reconnect() {}
   close() {}
   receive(messages: Message[]) { this.apply({ t: "thread", paneId: "p", source: "winfer", messages }); }

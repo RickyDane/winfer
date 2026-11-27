@@ -446,6 +446,16 @@ impl Root {
             msg["id"] = rid.clone();
             send(Some(reply_to.clone()), msg);
         };
+        // The side panel on a phone (mobile_panel.rs); not for paired machines.
+        if crate::connect::peer_of(&device).is_none() {
+            super::mobile_panel::seen(&device);
+            if kind.starts_with("term.") {
+                return self.on_phone_term(&device, &req, cx);
+            }
+            if matches!(kind.as_str(), "panel.get" | "panel.frameDone" | "browser.call" | "android.call" | "files.call") {
+                return self.on_phone_panel(&device, &kind, &req, reply, cx);
+            }
+        }
         if kind == "panes.get" {
             let mut all = self.mobile_mirror(cx);
             all["t"] = json!("panes");

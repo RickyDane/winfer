@@ -641,7 +641,7 @@ impl TerminalView {
             .bg(c.raised).border_1().border_color(c.edge).text_size(px(11.5)).text_color(c.muted).shadow_md().child(text);
         let button = |id: &'static str, label: &'static str| div().id(id).h(px(18.0)).px_2().flex().items_center().rounded_full().bg(c.accent).text_color(c.on_accent).cursor_pointer().hover(|d| d.opacity(0.9)).child(label);
         if let Some(peer) = crate::connect_term::sized_by(&pane) {
-            let name = crate::connect::peer_name(&peer).unwrap_or_else(|| "another machine".into());
+            let name = if crate::connect::is_phone(&peer) { "your phone".into() } else { crate::connect::peer_name(&peer).unwrap_or_else(|| "another machine".into()) };
             let session = self.session.clone();
             return Some(pill(format!("Viewed on {name}")).child(button("take-back", "Take back").on_click(cx.listener(move |_, _, _, cx| {
                 crate::connect_term::reclaim(&session.pane_id);

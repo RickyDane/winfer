@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import type { DesktopClient } from "./client";
 import { RelayClient } from "./connection";
 import { go, useRoute } from "./hooks";
@@ -12,6 +12,12 @@ import { Pair } from "./screens/Pair";
 import { Settings } from "./screens/Settings";
 import { Thread } from "./screens/Thread";
 import { Usage } from "./screens/Usage";
+import { Android } from "./screens/Android";
+import { Browser } from "./screens/Browser";
+import { Files } from "./screens/Files";
+import { Panel } from "./screens/Panel";
+// xterm is big: only loaded when a terminal opens.
+const Term = lazy(() => import("./screens/Term").then((m) => ({ default: m.Term })));
 
 const MOCK = new URLSearchParams(location.search).has("mock");
 
@@ -72,6 +78,18 @@ export function App() {
       <Settings client={client} mock={MOCK} onChanged={changed} />
     ) : route.name === "usage" ? (
       <Usage client={client} />
+    ) : route.name === "panel" ? (
+      <Panel client={client} />
+    ) : route.name === "browser" ? (
+      <Browser key={route.workspaceId} client={client} workspaceId={route.workspaceId} />
+    ) : route.name === "android" ? (
+      <Android client={client} />
+    ) : route.name === "terminal" ? (
+      <Suspense fallback={<div className="screen panel-screen" />}>
+        <Term key={route.paneId} client={client} workspaceId={route.workspaceId} paneId={route.paneId} />
+      </Suspense>
+    ) : route.name === "files" ? (
+      <Files key={route.workspaceId} client={client} workspaceId={route.workspaceId} />
     ) : route.name === "new" ? (
       <NewSession client={client} workspaceId={route.workspaceId} />
     ) : route.name === "pane" ? (
@@ -82,7 +100,7 @@ export function App() {
   return (
     <>
       {screen}
-      {route.name !== "pane" && route.name !== "new" && route.name !== "usage" && <TabBar client={client} active={route.name === "settings" ? "settings" : "inbox"} />}
+      {(route.name === "inbox" || route.name === "settings" || route.name === "panel") && <TabBar client={client} active={route.name} />}
       <Island client={client} openPaneId={route.name === "pane" ? route.id : null} />
     </>
   );

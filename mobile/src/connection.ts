@@ -171,6 +171,20 @@ export class RelayClient extends BaseClient {
     });
   }
 
+  /** Fired messages go out in order (a click's press before its release). */
+  private outbox: Promise<void> = Promise.resolve();
+
+  fire(msg: PhoneMsg) {
+    const ws = this.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN || this.state.desktopOnline === false) return;
+    this.outbox = this.outbox
+      .then(async () => {
+        const frame = await seal((await this.keys).encKey, msg);
+        if (ws.readyState === WebSocket.OPEN) ws.send(frame);
+      })
+      .catch(() => {});
+  }
+
   private failPending(reason: string) {
     for (const p of this.pending.values()) {
       clearTimeout(p.timer);
