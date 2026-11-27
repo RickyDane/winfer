@@ -70,7 +70,20 @@ where
                 },
                 out = rx.recv() => {
                     let Some(out) = out else { break None };
-                    if let Err(e) = sink.send(Message::text(out)).await { break Some(e.to_string()); }
+                    if let Err(e) = sink.feed(Message::text(out)).await { break Some(e.to_string()); }
+                    // Drain any already-queued frames (e.g. chunked video frames or bursts) in one flush.
+                    for _ in 0..16 {
+                        match rx.try_recv() {
+                            Ok(more) => {
+                                if let Err(e) = sink.feed(Message::text(more)).await {
+                                    let _ = events.send(TEvent::Closed { code: None, error: Some(e.to_string()) });
+                                    return;
+                                }
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                    if let Err(e) = sink.flush().await { break Some(e.to_string()); }
                 }
                 _ = stopped.changed() => {
                     let _ = sink.send(Message::Close(None)).await;
@@ -109,6 +122,8 @@ pub async fn listen(rt: tokio::runtime::Handle, on_incoming: Arc<dyn Fn(Incoming
             let handle = handle.clone();
             tokio::spawn(async move {
                 let _permit = permit;
+                // Disable Nagle so interactive input, frameDone acks and live video frames never stall 40 ms.
+                let _ = stream.set_nodelay(true);
                 let Ok(Ok(mut ws)) = tokio::time::timeout(Duration::from_secs(10), tokio_tungstenite::accept_async(stream)).await else { return };
                 let first = tokio::time::timeout(Duration::from_secs(10), ws.next()).await;
                 let Ok(Some(Ok(Message::Text(text)))) = first else { return };
@@ -124,7 +139,12 @@ pub async fn listen(rt: tokio::runtime::Handle, on_incoming: Arc<dyn Fn(Incoming
 /// Opens a connection to another instance and says hello.
 pub async fn dial(rt: &tokio::runtime::Handle, addr: SocketAddr, me: &str, want: Want) -> Result<(Transport, mpsc::UnboundedReceiver<TEvent>), String> {
     let url = format!("ws://{addr}/");
-    let (mut ws, _) = tokio::time::timeout(Duration::from_secs(5), tokio_tungstenite::connect_async(url.as_str()))
+    let stream = tokio::time::timeout(Duration::from_secs(5), tokio::net::TcpStream::connect(addr))
+        .await
+        .map_err(|_| "timed out".to_string())?
+        .map_err(|e| e.to_string())?;
+    let _ = stream.set_nodelay(true);
+    let (mut ws, _) = tokio::time::timeout(Duration::from_secs(5), tokio_tungstenite::client_async(url.as_str(), stream))
         .await
         .map_err(|_| "timed out".to_string())?
         .map_err(|e| e.to_string())?;

@@ -16,7 +16,7 @@ use std::net::{Shutdown, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Stdio};
 use std::sync::Arc;
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{self, Sender};
 use std::time::{Duration, Instant};
 use tauri::Manager;
 use winfer_backend::android;
@@ -211,9 +211,59 @@ fn text_msgs(text: &str) -> Vec<Vec<u8>> {
     out
 }
 
+/// Outbound control commands sent to the scrcpy control writer thread off the UI thread.
+#[derive(Debug, PartialEq)]
+enum ControlCmd {
+    Touch(Touch, (f32, f32)),
+    Scroll((f32, f32), f32, f32),
+    Raw(Vec<u8>),
+}
+
+/// Coalesces consecutive `Touch::Move` or `Scroll` commands at the head of a burst so drags and
+/// trackpad scrolls never pile up behind stale positions.
+fn coalesce_control(first: ControlCmd, rx: &mpsc::Receiver<ControlCmd>, stash: &mut Option<ControlCmd>) -> ControlCmd {
+    match first {
+        ControlCmd::Touch(Touch::Move, mut at) => {
+            while let Ok(more) = rx.try_recv() {
+                match more {
+                    ControlCmd::Touch(Touch::Move, next_at) => at = next_at,
+                    other => {
+                        *stash = Some(other);
+                        break;
+                    }
+                }
+            }
+            ControlCmd::Touch(Touch::Move, at)
+        }
+        ControlCmd::Scroll(mut at, mut h, mut v) => {
+            while let Ok(more) = rx.try_recv() {
+                match more {
+                    ControlCmd::Scroll(next_at, dh, dv) => {
+                        at = next_at;
+                        h += dh;
+                        v += dv;
+                    }
+                    other => {
+                        *stash = Some(other);
+                        break;
+                    }
+                }
+            }
+            ControlCmd::Scroll(at, h, v)
+        }
+        other => other,
+    }
+}
+
+fn device_has_jar(serial: &str, expected_len: u64) -> bool {
+    let check = format!("[ \"$(wc -c < {DEVICE_PATH} 2>/dev/null)\" -eq {expected_len} ]");
+    adb_run(serial, &["shell", &check]).is_ok()
+}
+
 /// A running mirror; stops the server when dropped.
 pub struct Session {
-    control: Mutex<TcpStream>,
+    control_tx: Sender<ControlCmd>,
+    control_sock: TcpStream,
     video: TcpStream,
     /// The current video size; touches are given in it.
     size: Arc<Mutex<(u32, u32)>>,
@@ -228,7 +278,11 @@ impl Session {
     }
 
     fn start_with(jar: PathBuf, serial: &str, options: Options, frames: Sender<Frame>) -> Result<Session, String> {
-        adb_run(serial, &["push", &jar.to_string_lossy(), DEVICE_PATH])?;
+        // Reuse the cached jar on the device when its byte size already matches (cleanup=false keeps it there).
+        let expected_len = std::fs::metadata(&jar).map(|m| m.len()).unwrap_or(0);
+        if expected_len == 0 || !device_has_jar(serial, expected_len) {
+            adb_run(serial, &["push", &jar.to_string_lossy(), DEVICE_PATH])?;
+        }
         let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
         listener.set_nonblocking(true).map_err(|e| e.to_string())?;
         let port = listener.local_addr().map_err(|e| e.to_string())?.port();
@@ -244,7 +298,14 @@ impl Session {
         let mut cmd = android::adb(Some(serial))?;
         cmd.args(["shell", &format!("CLASSPATH={DEVICE_PATH}"), "app_process", "/", "com.genymobile.scrcpy.Server", VERSION])
             .arg(format!("scid={scid:08x}"))
-            .args(["log_level=warn", "audio=false", "clipboard_autosync=false", "send_device_meta=false"])
+            .args([
+                "log_level=warn",
+                "audio=false",
+                "cleanup=false",
+                "clipboard_autosync=false",
+                "send_device_meta=false",
+                "video_codec_options=i-frame-interval=2",
+            ])
             .arg(format!("max_fps={}", options.max_fps))
             .arg(format!("video_bit_rate={}", options.bit_rate))
             .arg(format!("max_size={}", options.max_side))
@@ -310,47 +371,44 @@ impl Session {
                 while matches!(device.read(&mut sink), Ok(n) if n > 0) {}
             });
         }
-        Ok(Session { control: Mutex::new(control), video, size, server: Mutex::new(Some(server)) })
+        let control_writer = control.try_clone().map_err(|e| e.to_string())?;
+        let (control_tx, control_rx) = mpsc::channel();
+        let writer_size = size.clone();
+        std::thread::spawn(move || control_loop(control_writer, writer_size, control_rx));
+        Ok(Session { control_tx, control_sock: control, video, size, server: Mutex::new(Some(server)) })
     }
 
     pub fn size(&self) -> (u32, u32) {
         *self.size.lock()
     }
 
-    fn send(&self, msg: &[u8]) {
-        let _ = self.control.lock().write_all(msg);
-    }
-
-    fn point(&self, (x, y): (f32, f32)) -> ((i32, i32), (u32, u32)) {
-        let size = self.size();
-        (((x.clamp(0.0, 1.0) * size.0 as f32).round() as i32, (y.clamp(0.0, 1.0) * size.1 as f32).round() as i32), size)
+    fn send(&self, msg: Vec<u8>) {
+        let _ = self.control_tx.send(ControlCmd::Raw(msg));
     }
 
     /// A touch at a point given as a fraction of the screen (0..1 both ways).
     pub fn touch(&self, touch: Touch, at: (f32, f32)) {
-        let (at, size) = self.point(at);
-        self.send(&touch_msg(touch, at, size));
+        let _ = self.control_tx.send(ControlCmd::Touch(touch, at));
     }
 
     /// Scroll by `h`/`v` wheel notches (positive: right / up).
     pub fn scroll(&self, at: (f32, f32), h: f32, v: f32) {
-        let (at, size) = self.point(at);
-        self.send(&scroll_msg(at, size, h, v));
+        let _ = self.control_tx.send(ControlCmd::Scroll(at, h, v));
     }
 
     pub fn key(&self, code: u32) {
-        self.send(&[key_msg(true, code), key_msg(false, code)].concat());
+        self.send([key_msg(true, code), key_msg(false, code)].concat());
     }
 
     pub fn text(&self, text: &str) {
         for msg in text_msgs(text) {
-            self.send(&msg);
+            self.send(msg);
         }
     }
 
     /// Asks for a keyframe (after frames were dropped on the way to a slow link).
     pub fn reset_video(&self) {
-        self.send(&[RESET_VIDEO]);
+        self.send(vec![RESET_VIDEO]);
     }
 }
 
@@ -358,7 +416,7 @@ impl Drop for Session {
     fn drop(&mut self) {
         // Closing the sockets ends the server; the process is reaped off the UI thread.
         let _ = self.video.shutdown(Shutdown::Both);
-        let _ = self.control.lock().shutdown(Shutdown::Both);
+        let _ = self.control_sock.shutdown(Shutdown::Both);
         if let Some(mut server) = self.server.lock().take() {
             std::thread::spawn(move || {
                 let _ = server.kill();
@@ -368,8 +426,36 @@ impl Drop for Session {
     }
 }
 
+fn control_point(size: (u32, u32), (x, y): (f32, f32)) -> (i32, i32) {
+    ((x.clamp(0.0, 1.0) * size.0 as f32).round() as i32, (y.clamp(0.0, 1.0) * size.1 as f32).round() as i32)
+}
+
+/// Writes control packets off the UI thread, coalescing queued touch moves and scroll ticks.
+fn control_loop(mut control: TcpStream, size: Arc<Mutex<(u32, u32)>>, rx: mpsc::Receiver<ControlCmd>) {
+    let mut stash = None;
+    loop {
+        let Some(first) = stash.take().or_else(|| rx.recv().ok()) else { return };
+        let cmd = coalesce_control(first, &rx, &mut stash);
+        let bytes = match cmd {
+            ControlCmd::Touch(touch, at) => {
+                let sz = *size.lock();
+                touch_msg(touch, control_point(sz, at), sz)
+            }
+            ControlCmd::Scroll(at, h, v) => {
+                let sz = *size.lock();
+                scroll_msg(control_point(sz, at), sz, h, v)
+            }
+            ControlCmd::Raw(buf) => buf,
+        };
+        if control.write_all(&bytes).is_err() {
+            return;
+        }
+    }
+}
+
 /// Reads packets until the socket closes; the config packet (SPS/PPS) goes in front of the next frame.
-fn video_loop(mut video: TcpStream, size: Arc<Mutex<(u32, u32)>>, frames: Sender<Frame>) {
+fn video_loop(video: TcpStream, size: Arc<Mutex<(u32, u32)>>, frames: Sender<Frame>) {
+    let mut video = BufReader::with_capacity(64 * 1024, video);
     let mut config: Vec<u8> = Vec::new();
     let mut h = [0; 12];
     while video.read_exact(&mut h).is_ok() {
@@ -419,6 +505,23 @@ mod tests {
         assert_eq!(text_msgs("hello"), vec![vec![1, 0, 0, 0, 5, b'h', b'e', b'l', b'l', b'o']]);
         let long = "é".repeat(200);
         assert!(text_msgs(&long).iter().all(|m| m.len() <= 305 && std::str::from_utf8(&m[5..]).is_ok()));
+    }
+
+    #[test]
+    fn coalesces_queued_moves_and_scrolls_without_dropping_edges() {
+        let (tx, rx) = mpsc::channel();
+        tx.send(ControlCmd::Touch(Touch::Move, (0.2, 0.2))).unwrap();
+        tx.send(ControlCmd::Touch(Touch::Move, (0.3, 0.3))).unwrap();
+        tx.send(ControlCmd::Touch(Touch::Up, (0.4, 0.4))).unwrap();
+        let mut stash = None;
+        assert_eq!(coalesce_control(ControlCmd::Touch(Touch::Move, (0.1, 0.1)), &rx, &mut stash), ControlCmd::Touch(Touch::Move, (0.3, 0.3)));
+        assert_eq!(stash, Some(ControlCmd::Touch(Touch::Up, (0.4, 0.4))));
+
+        tx.send(ControlCmd::Scroll((0.5, 0.5), 0.2, -1.0)).unwrap();
+        tx.send(ControlCmd::Scroll((0.5, 0.6), 0.3, -2.0)).unwrap();
+        let mut stash = None;
+        assert_eq!(coalesce_control(ControlCmd::Scroll((0.5, 0.4), 0.1, -0.5), &rx, &mut stash), ControlCmd::Scroll((0.5, 0.6), 0.6, -3.5));
+        assert_eq!(stash, None);
     }
 
     /// Against the first adb device: `cargo test -p winfer-core live_session -- --ignored --nocapture`.

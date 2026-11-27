@@ -199,9 +199,13 @@ panel when it goes down.
 Any paired machine (desktop or server) answers for its Android devices and emulators (adb) and, on a Mac, its iOS
 Simulators (`xcrun simctl`). A desktop's device panel picks the machine, then one of its devices
 (`native/crates/winfer-core/src/devices.rs` hosts, `connect_devices.rs` watches). Android streams H.264 from scrcpy
-(lighter over the relay: 2 Mbit/s, 30 fps), else PNG screenshots; simulators stream JPEG screenshots. Each frame is
-acknowledged with `frameDone` once drawn: with 6 H.264 frames unacknowledged the next ones are dropped until the link
-catches up, then the encoder restarts at a keyframe (scrcpy's reset video); a screenshot waits for the last one's ack.
+(60 fps / 8 Mbit/s / 1280px on local & LAN, 30 fps / 2 Mbit/s / 1024px on relay, adapting in place when a link switches
+between relay and LAN), else PNG screenshots; iOS Simulators stream hardware-encoded H.264 from CoreSimulator's
+IOSurface via VideoToolbox (60 fps / 8 Mbit/s on local & LAN, 30 fps / 2 Mbit/s on relay) with live IndigoHID input,
+falling back to `simctl` JPEG screenshots and AXe/idb when native frameworks aren't available. Each frame is
+acknowledged with `frameDone` once drawn: when the in-flight window fills (8 on local/LAN, 4 on relay), further H.264
+frames are dropped until the link catches up, then the encoder emits a fresh keyframe; a screenshot waits for the last
+one's ack.
 
 | t | from | fields |
 |---|---|---|

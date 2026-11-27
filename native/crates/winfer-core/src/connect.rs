@@ -49,6 +49,7 @@ pub fn start(app: tauri::AppHandle, data_dir: &std::path::Path) {
                 app.emit("connect://changed", ())
             }
             Event::PeerUp(peer) => {
+                crate::devices::link_changed(&peer);
                 if !server {
                     crate::connect_browser::peer_up(&app, &peer);
                 }

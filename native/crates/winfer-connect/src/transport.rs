@@ -128,7 +128,25 @@ pub fn relay(rt: &tokio::runtime::Handle, base: &str, room: &RoomKeys, inst: &st
                             },
                             out = rx.recv() => {
                                 let Some(out) = out else { break None };
-                                if let Err(e) = sink.send(Message::text(out)).await {
+                                if let Err(e) = sink.feed(Message::text(out)).await {
+                                    break Some(e.to_string());
+                                }
+                                let mut err = None;
+                                for _ in 0..16 {
+                                    match rx.try_recv() {
+                                        Ok(more) => {
+                                            if let Err(e) = sink.feed(Message::text(more)).await {
+                                                err = Some(e.to_string());
+                                                break;
+                                            }
+                                        }
+                                        Err(_) => break,
+                                    }
+                                }
+                                if let Some(e) = err {
+                                    break Some(e);
+                                }
+                                if let Err(e) = sink.flush().await {
                                     break Some(e.to_string());
                                 }
                             }

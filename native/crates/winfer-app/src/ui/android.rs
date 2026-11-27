@@ -149,17 +149,23 @@ impl Drop for Hosted {
 }
 
 /// Decodes a hosted stream's frames (H.264, or JPEG/PNG screenshots) into `latest`, acknowledging
-/// each so the next comes.
+/// each so the next comes. When multiple H.264 frames are already queued in a burst, intermediate
+/// frames still update the decoder's reference state while skipping BGRA conversion & upload.
 fn hosted_decode(rx: mpsc::Receiver<Msg>, latest: Arc<Mutex<Option<Arc<RenderImage>>>>, frames: async_channel::Sender<Result<(), String>>, ack: impl Fn()) {
     let Some(mut h264) = frame_decoder(latest.clone(), frames.clone()) else { return };
-    while let Ok(msg) = rx.recv() {
+    let mut pending: Option<Msg> = None;
+    loop {
+        let Some(msg) = pending.take().or_else(|| rx.recv().ok()) else { return };
         match msg {
             Msg::End(e) => {
                 let _ = frames.try_send(Err(e));
                 return;
             }
             Msg::Frame { codec: "h264", data, .. } => {
-                let ok = h264(&data);
+                let next = rx.try_recv().ok();
+                let more_h264 = matches!(&next, Some(Msg::Frame { codec: "h264", .. }));
+                pending = next;
+                let ok = h264(&data, !more_h264);
                 ack();
                 if !ok {
                     return;
@@ -207,6 +213,11 @@ pub struct AndroidPanel {
     press: Option<(u32, u32, Instant)>,
     /// A finger is down on the scrcpy session.
     touching: bool,
+    /// Last live `Touch::Move` sent (throttles 120Hz trackpads).
+    last_move: Option<Instant>,
+    /// Accumulated hosted scroll delta waiting for the next 60Hz flush.
+    scroll_pending: Option<((f32, f32), f32, f32)>,
+    last_scroll: Option<Instant>,
     /// A phone shows the mirror (mobile_panel.rs): it runs while the panel or a phone shows it.
     phone: bool,
     /// Where the phone's finger went down, for a tap or swipe without scrcpy.
@@ -215,16 +226,67 @@ pub struct AndroidPanel {
     _poll: Task<()>,
 }
 
+fn render_bgra(bgra: Vec<u8>, w: u32, h: u32) -> Option<Arc<RenderImage>> {
+    let buffer = ::image::RgbaImage::from_raw(w, h, bgra)?;
+    Some(Arc::new(RenderImage::new(smallvec![::image::Frame::new(buffer)])))
+}
+
 fn render_image(mut rgba: Vec<u8>, w: u32, h: u32) -> Option<Arc<RenderImage>> {
     for p in rgba.chunks_exact_mut(4) {
         p.swap(0, 2);
     }
-    let buffer = ::image::RgbaImage::from_raw(w, h, rgba)?;
-    Some(Arc::new(RenderImage::new(smallvec![::image::Frame::new(buffer)])))
+    render_bgra(rgba, w, h)
+}
+
+/// Converts YUV420 directly to BGRA8 in one pass (avoiding zero-fill + a second R/B swap pass).
+fn yuv420_to_bgra(yuv: &impl YUVSource) -> Vec<u8> {
+    let (w, h) = yuv.dimensions();
+    let (y_stride, u_stride, v_stride) = yuv.strides();
+    let (y_plane, u_plane, v_plane) = (yuv.y(), yuv.u(), yuv.v());
+    let mut out = Vec::with_capacity(w * h * 4);
+    for row in 0..h {
+        let y_row = &y_plane[row * y_stride..row * y_stride + w];
+        let u_row = &u_plane[(row >> 1) * u_stride..];
+        let v_row = &v_plane[(row >> 1) * v_stride..];
+        let mut x = 0;
+        while x + 1 < w {
+            let cx = x >> 1;
+            let d = u_row[cx] as i32 - 128;
+            let e = v_row[cx] as i32 - 128;
+            let r_off = 409 * e + 128;
+            let g_off = -100 * d - 208 * e + 128;
+            let b_off = 516 * d + 128;
+
+            let c0 = 298 * (y_row[x] as i32 - 16);
+            let b0 = ((c0 + b_off) >> 8).clamp(0, 255) as u8;
+            let g0 = ((c0 + g_off) >> 8).clamp(0, 255) as u8;
+            let r0 = ((c0 + r_off) >> 8).clamp(0, 255) as u8;
+
+            let c1 = 298 * (y_row[x + 1] as i32 - 16);
+            let b1 = ((c1 + b_off) >> 8).clamp(0, 255) as u8;
+            let g1 = ((c1 + g_off) >> 8).clamp(0, 255) as u8;
+            let r1 = ((c1 + r_off) >> 8).clamp(0, 255) as u8;
+
+            out.extend_from_slice(&[b0, g0, r0, 255, b1, g1, r1, 255]);
+            x += 2;
+        }
+        if x < w {
+            let cx = x >> 1;
+            let c = 298 * (y_row[x] as i32 - 16);
+            let d = u_row[cx] as i32 - 128;
+            let e = v_row[cx] as i32 - 128;
+            let b = ((c + 516 * d + 128) >> 8).clamp(0, 255) as u8;
+            let g = ((c - 100 * d - 208 * e + 128) >> 8).clamp(0, 255) as u8;
+            let r = ((c + 409 * e + 128) >> 8).clamp(0, 255) as u8;
+            out.extend_from_slice(&[b, g, r, 255]);
+        }
+    }
+    out
 }
 
 /// Decodes NAL units or whole frames into `latest`; false once the stream can't be decoded.
-fn frame_decoder(latest: Arc<Mutex<Option<Arc<RenderImage>>>>, frames: async_channel::Sender<Result<(), String>>) -> Option<impl FnMut(&[u8]) -> bool> {
+/// When `render` is false, the H.264 decoder state advances without spending CPU on YUV → BGRA.
+fn frame_decoder(latest: Arc<Mutex<Option<Arc<RenderImage>>>>, frames: async_channel::Sender<Result<(), String>>) -> Option<impl FnMut(&[u8], bool) -> bool> {
     let mut decoder = match Decoder::new() {
         Ok(d) => d,
         Err(e) => {
@@ -233,17 +295,18 @@ fn frame_decoder(latest: Arc<Mutex<Option<Arc<RenderImage>>>>, frames: async_cha
         }
     };
     let mut errors = 0;
-    Some(move |data: &[u8]| -> bool {
+    Some(move |data: &[u8], render: bool| -> bool {
         match decoder.decode(data) {
             Ok(Some(yuv)) => {
                 errors = 0;
-                let (w, h) = yuv.dimensions();
-                let mut rgba = vec![0; w * h * 4];
-                yuv.write_rgba8(&mut rgba);
-                if let Some(image) = render_image(rgba, w as u32, h as u32) {
-                    super::capture::offer_image(super::capture::Source::Android, &image);
-                    *latest.lock() = Some(image);
-                    let _ = frames.try_send(Ok(()));
+                if render {
+                    let (w, h) = yuv.dimensions();
+                    let bgra = yuv420_to_bgra(&yuv);
+                    if let Some(image) = render_bgra(bgra, w as u32, h as u32) {
+                        super::capture::offer_image(super::capture::Source::Android, &image);
+                        *latest.lock() = Some(image);
+                        let _ = frames.try_send(Ok(()));
+                    }
                 }
                 true
             }
@@ -260,11 +323,16 @@ fn frame_decoder(latest: Arc<Mutex<Option<Arc<RenderImage>>>>, frames: async_cha
     })
 }
 
-/// Whole frames from the scrcpy server, decoded as they come.
+/// Whole frames from the scrcpy server, decoded as they come; queued bursts only render the newest.
 fn decode_frames(rx: mpsc::Receiver<scrcpy::Frame>, latest: Arc<Mutex<Option<Arc<RenderImage>>>>, frames: async_channel::Sender<Result<(), String>>) {
     let Some(mut feed) = frame_decoder(latest, frames.clone()) else { return };
-    while let Ok(frame) = rx.recv() {
-        if !feed(&frame.data) {
+    let mut pending: Option<scrcpy::Frame> = None;
+    loop {
+        let Some(frame) = pending.take().or_else(|| rx.recv().ok()) else { break };
+        let next = rx.try_recv().ok();
+        let has_more = next.is_some();
+        pending = next;
+        if !feed(&frame.data, !has_more) {
             return;
         }
     }
@@ -284,8 +352,9 @@ fn decode_loop(rx: mpsc::Receiver<Vec<u8>>, latest: Arc<Mutex<Option<Arc<RenderI
                     continue;
                 }
                 // Every NAL but the last is complete; the last one may still be arriving.
-                for pair in starts.windows(2) {
-                    if !feed(&pending[pair[0]..pair[1]]) {
+                let last_idx = starts.len() - 2;
+                for (i, pair) in starts.windows(2).enumerate() {
+                    if !feed(&pending[pair[0]..pair[1]], i == last_idx) {
                         return;
                     }
                 }
@@ -293,7 +362,7 @@ fn decode_loop(rx: mpsc::Receiver<Vec<u8>>, latest: Arc<Mutex<Option<Arc<RenderI
             }
             // The encoder only sends frames when the screen changes: the newest NAL may be the last for a while.
             Err(RecvTimeoutError::Timeout) => {
-                if pending.len() > 4 && !feed(&pending) {
+                if pending.len() > 4 && !feed(&pending, true) {
                     return;
                 }
                 pending.clear();
@@ -354,7 +423,7 @@ impl AndroidPanel {
             }
         });
         let machine = state.read(cx).rest.get("deviceMachine").and_then(Value::as_str).map(str::to_string);
-        Self { state, visible: false, status: None, starting: None, error: None, mirror: None, machine, lists: HashMap::new(), hosted: None, listing: HashSet::new(), restart: 0, latest: Default::default(), shown: None, area: Bounds::default(), press: None, touching: false, phone: false, phone_press: None, focus: cx.focus_handle(), _poll: poll }
+        Self { state, visible: false, status: None, starting: None, error: None, mirror: None, machine, lists: HashMap::new(), hosted: None, listing: HashSet::new(), restart: 0, latest: Default::default(), shown: None, area: Bounds::default(), press: None, touching: false, last_move: None, scroll_pending: None, last_scroll: None, phone: false, phone_press: None, focus: cx.focus_handle(), _poll: poll }
     }
 
     /// Reads the device list of `machine` (None: this machine's adb devices and simulators).
@@ -575,6 +644,9 @@ impl AndroidPanel {
         }
         *self.latest.lock() = None;
         self.touching = false;
+        self.last_move = None;
+        self.scroll_pending = None;
+        self.last_scroll = None;
     }
 
     fn start_mirror(&mut self, serial: String, mode: Mode, cx: &mut Context<Self>) {
@@ -719,6 +791,9 @@ impl AndroidPanel {
             if touch == Touch::Move && !h.live() {
                 return true;
             }
+            if touch == Touch::Move && self.last_move.is_some_and(|t| t.elapsed() < Duration::from_millis(12)) {
+                return true;
+            }
             let Some((x, y)) = self.picture_point(at) else { return false };
             let action = match touch {
                 Touch::Down => "down",
@@ -727,12 +802,24 @@ impl AndroidPanel {
             };
             self.hosted_input(json!({"kind": "touch", "action": action, "x": x, "y": y}));
             self.touching = touch != Touch::Up;
+            self.last_move = if touch == Touch::Up { None } else { Some(Instant::now()) };
+            return true;
+        }
+        if touch == Touch::Move && self.last_move.is_some_and(|t| t.elapsed() < Duration::from_millis(8)) {
             return true;
         }
         let (Some(session), Some(p)) = (self.session(), self.unit_point(at)) else { return false };
         session.touch(touch, p);
         self.touching = touch != Touch::Up;
+        self.last_move = if touch == Touch::Up { None } else { Some(Instant::now()) };
         true
+    }
+
+    fn flush_hosted_scroll(&mut self) {
+        if let Some(((x, y), h, v)) = self.scroll_pending.take() {
+            self.last_scroll = Some(Instant::now());
+            self.hosted_input(json!({"kind": "scroll", "x": x, "y": y, "h": h, "v": v}));
+        }
     }
 
     fn send(&self, input: Value) {
@@ -781,6 +868,10 @@ impl AndroidPanel {
         }
         if let Some(text) = k.key_char.clone().filter(|t| !t.chars().any(char::is_control)) {
             if let Some(h) = self.hosted.as_mut() {
+                if h.live() {
+                    self.hosted_input(json!({"kind": "text", "text": text}));
+                    return;
+                }
                 h.typed.push_str(&text);
             } else if let Some(s) = self.session() {
                 s.text(&text);
@@ -1045,11 +1136,27 @@ impl AndroidPanel {
                     this.send(json!({ "kind": "swipe", "x1": x1, "y1": y1, "x2": x2, "y2": y2, "ms": ms.max(60) }));
                 }
             }))
-            .on_scroll(cx.listener(|this, e: &ScrollEvent, _, _| {
+            .on_scroll(cx.listener(|this, e: &ScrollEvent, _, cx| {
                 if this.hosted.is_some() {
                     let d = e.delta.pixel_delta(px(20.0));
                     if let Some((x, y)) = this.picture_point(e.position) {
-                        this.hosted_input(json!({"kind": "scroll", "x": x, "y": y, "h": -(d.x / px(20.0)), "v": d.y / px(20.0)}));
+                        let (dh, dv) = (-(d.x / px(20.0)), d.y / px(20.0));
+                        let was_none = this.scroll_pending.is_none();
+                        let entry = this.scroll_pending.get_or_insert(((x, y), 0.0, 0.0));
+                        entry.0 = (x, y);
+                        entry.1 += dh;
+                        entry.2 += dv;
+                        let big = entry.1.abs() + entry.2.abs() >= 0.35;
+                        let due = this.last_scroll.is_none_or(|t| t.elapsed() >= Duration::from_millis(12));
+                        if due || big {
+                            this.flush_hosted_scroll();
+                        } else if was_none {
+                            cx.spawn(async move |this, cx| {
+                                cx.background_executor().timer(Duration::from_millis(16)).await;
+                                let _ = this.update(cx, |this, _| this.flush_hosted_scroll());
+                            })
+                            .detach();
+                        }
                     }
                     return;
                 }
@@ -1178,5 +1285,22 @@ mod tests {
     fn escape_is_back() {
         assert_eq!(keycode("escape"), Some(4));
         assert_eq!(keycode("f1"), None);
+    }
+
+    #[test]
+    fn yuv420_to_bgra_matches_bt601() {
+        use openh264::formats::{RgbSliceU8, YUVBuffer};
+        // Solid red (255, 0, 0), green (0, 255, 0), blue (0, 0, 255), white (255, 255, 255) in 4x2 blocks.
+        let rgb = [
+            255, 0, 0, 255, 0, 0, 0, 0, 255, 0, 0, 255,
+            255, 0, 0, 255, 0, 0, 0, 0, 255, 0, 0, 255,
+        ];
+        let yuv = YUVBuffer::from_rgb_source(RgbSliceU8::new(&rgb, (4, 2)));
+        let bgra = super::yuv420_to_bgra(&yuv);
+        assert_eq!(bgra.len(), 4 * 2 * 4);
+        // Pixel (0,0) is red -> BGRA = [low B, low G, high R, 255].
+        assert!(bgra[2] > 230 && bgra[0] < 30 && bgra[1] < 30 && bgra[3] == 255);
+        // Pixel (2,0) is blue -> BGRA = [high B, low G, low R, 255].
+        assert!(bgra[8] > 230 && bgra[9] < 30 && bgra[10] < 30 && bgra[11] == 255);
     }
 }
