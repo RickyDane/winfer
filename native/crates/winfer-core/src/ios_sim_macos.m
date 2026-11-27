@@ -511,12 +511,19 @@ void *winfer_ios_sim_start(
         id hidClient = nil;
         if (g_fw.hidClientCls && g_fw.mkMouse) {
             NSError *hidErr = nil;
-            hidClient = ((id(*)(id, SEL, id, NSError **))objc_msgSend)(
-                [g_fw.hidClientCls alloc],
-                sel_registerName("initWithDevice:error:"),
-                device,
-                &hidErr
-            );
+            for (int i = 0; i < 5 && !hidClient; i++) {
+                if (i > 0) usleep(100000);
+                hidErr = nil;
+                hidClient = ((id(*)(id, SEL, id, NSError **))objc_msgSend)(
+                    [g_fw.hidClientCls alloc],
+                    sel_registerName("initWithDevice:error:"),
+                    device,
+                    &hidErr
+                );
+            }
+            if (!hidClient && hidErr) {
+                fprintf(stderr, "ios_sim: SimDeviceLegacyHIDClient init failed: %s\n", hidErr.localizedDescription.UTF8String);
+            }
         }
 
         WinferIosSimSession *s = [[WinferIosSimSession alloc] init];
@@ -552,7 +559,9 @@ void *winfer_ios_sim_start(
             sel_registerName("registerCallbackWithUUID:damageRectanglesCallback:"),
             s->_damageUUID,
             ^(NSArray *rects) {
-                if (rects && rects.count == 0) return;
+                // CoreSimulator passes an empty NSArray (__NSArray0) to signal full-surface
+                // frame updates; never skip empty arrays or the live stream stays frozen.
+                (void)rects;
                 WinferIosSimSession *strong = weakSelf;
                 if (strong) scheduleEncode(strong);
             }
