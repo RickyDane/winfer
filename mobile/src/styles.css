@@ -90,7 +90,7 @@ textarea, input, .md, .ask-code, .ask-q p, .turn-user p, .screen-text, .tool-bod
 /* ---------- Screens: the app color, with floating panel-colored cards on it ---------- */
 .screen { position: relative; display: flex; flex-direction: column; height: 100dvh; overflow: hidden; background: var(--panel); }
 .scroll { flex: 1; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; overscroll-behavior-y: contain; -webkit-overflow-scrolling: touch; position: relative; z-index: 1; }
-.scroll.tabbed { padding-bottom: calc(var(--sb) + 96px); }
+.scroll.tabbed { padding-bottom: calc(var(--sb) + 96px); scroll-padding-bottom: calc(var(--sb) + 96px); }
 
 /* The top bar is a floating card, like a pane's header on the desktop. */
 .bar, .pane-head {
@@ -649,46 +649,59 @@ button.pill:active:not(:disabled) { background: var(--hover); color: var(--fg); 
 .pill > svg { flex: none; }
 .pill-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 
-/* The send button: a little nebula (`nebula_send`). */
+/* The send button: exact desktop procedural nebula (`nebula_send` in `code_view.rs`). */
 .nebula {
   position: relative; flex: none; display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%;
   color: #fff; isolation: isolate; transition: transform 0.2s var(--spring), opacity 0.2s, box-shadow 0.3s;
   box-shadow: inset 0 1px 1px rgb(255 255 255 / 0.14), 0 2px 8px rgb(168 85 247 / 0.18);
 }
+@media (hover: hover) {
+  .nebula:hover:not(:disabled) { opacity: 0.9; }
+}
 .nebula:active:not(:disabled) { transform: scale(0.9); }
 .nebula:disabled { opacity: 1; }
 .nebula-face {
   position: absolute; inset: 0; z-index: -1; border-radius: 50%; overflow: hidden;
-  background:
-    radial-gradient(circle at 30% 28%, rgb(255 255 255 / 0.9) 0 0.6px, transparent 1.2px),
-    radial-gradient(circle at 72% 64%, rgb(255 255 255 / 0.8) 0 0.5px, transparent 1px),
-    radial-gradient(circle at 58% 22%, rgb(220 230 255 / 0.7) 0 0.4px, transparent 1px),
-    radial-gradient(ellipse 70% 55% at 30% 35%, rgb(236 72 153 / 0.85), transparent 70%),
-    radial-gradient(ellipse 65% 60% at 70% 65%, rgb(99 102 241 / 0.95), transparent 72%),
-    radial-gradient(ellipse 60% 50% at 60% 25%, rgb(56 189 248 / 0.55), transparent 70%),
-    radial-gradient(circle, rgb(88 28 135) 40%, rgb(20 10 40) 100%);
-  background-size: 100% 100%, 100% 100%, 100% 100%, 160% 160%, 160% 160%, 160% 160%, 100% 100%;
-  box-shadow: inset 0 0 6px 1px rgb(0 0 0 / 0.55);
+  background-color: #07030f;
+  background-image: var(--nebula-send);
+  background-size: cover;
+  background-position: center;
 }
-.nebula[data-mode="idle"] { box-shadow: inset 0 1px 1px rgb(255 255 255 / 0.05); }
-.nebula[data-mode="idle"] .nebula-face { filter: saturate(0.35) brightness(0.55); }
-.nebula[data-mode="idle"] .nebula-icon { opacity: 0.55; }
-.nebula[data-mode="stop"] { box-shadow: inset 0 1px 1px rgb(255 255 255 / 0.14), 0 2px 8px rgb(251 113 133 / 0.22); }
+.nebula[data-mode="idle"] {
+  color: var(--subtle);
+  box-shadow: inset 0 1px 1px rgb(255 255 255 / 0.05);
+}
+.nebula[data-mode="idle"] .nebula-face {
+  background-color: #07050f;
+  background-image: var(--nebula-idle);
+}
+.nebula[data-mode="stop"] {
+  box-shadow: inset 0 1px 1px rgb(255 255 255 / 0.14), 0 2px 8px rgb(251 113 133 / 0.18);
+}
 .nebula[data-mode="stop"] .nebula-face {
-  background:
-    radial-gradient(circle at 30% 28%, rgb(255 255 255 / 0.9) 0 0.6px, transparent 1.2px),
-    radial-gradient(circle at 70% 70%, rgb(255 255 255 / 0.7) 0 0.5px, transparent 1px),
-    radial-gradient(ellipse 70% 55% at 30% 35%, rgb(251 113 133 / 0.9), transparent 70%),
-    radial-gradient(ellipse 65% 60% at 70% 65%, rgb(168 85 247 / 0.85), transparent 72%),
-    radial-gradient(ellipse 60% 50% at 60% 25%, rgb(251 146 60 / 0.5), transparent 70%),
-    radial-gradient(circle, rgb(110 20 60) 40%, rgb(30 8 20) 100%);
-  background-size: 100% 100%, 100% 100%, 160% 160%, 160% 160%, 160% 160%, 100% 100%;
+  background-color: #0f0403;
+  background-image: var(--nebula-stop);
+  background-size: 116% 116%;
   animation: nebula-drift 6s ease-in-out infinite alternate;
 }
 .nebula[data-mode="stop"] .nebula-icon { fill: currentColor; }
+:root[data-mode="light"] .nebula {
+  box-shadow: inset 0 1px 1px rgb(255 255 255 / 0.35), 0 2px 8px rgb(129 140 248 / 0.18);
+}
+:root[data-mode="light"] .nebula .nebula-face { background-color: #6366f1; }
+:root[data-mode="light"] .nebula[data-mode="idle"] {
+  color: var(--muted);
+  border: 1px solid color-mix(in srgb, var(--border-strong) 70%, transparent);
+  box-shadow: inset 0 1px 1px rgb(255 255 255 / 0.6);
+}
+:root[data-mode="light"] .nebula[data-mode="idle"] .nebula-face { background-color: #eef0f8; }
+:root[data-mode="light"] .nebula[data-mode="stop"] {
+  box-shadow: inset 0 1px 1px rgb(255 255 255 / 0.35), 0 2px 8px rgb(251 113 133 / 0.18);
+}
+:root[data-mode="light"] .nebula[data-mode="stop"] .nebula-face { background-color: #e11d48; }
 @keyframes nebula-drift {
-  from { background-position: center, center, 0% 0%, 100% 100%, 50% 0%, center; }
-  to { background-position: center, center, 100% 60%, 0% 30%, 20% 100%, center; }
+  from { background-position: 0% 0%; }
+  to { background-position: 100% 100%; }
 }
 
 .inline-error { padding: 8px 11px; border-radius: var(--r-lg); border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent); background: color-mix(in srgb, var(--danger) 8%, var(--raised)); color: var(--danger); font-size: 12.5px; animation: fade-in 0.2s both; }
@@ -792,35 +805,35 @@ button.row:active { background: var(--hover); }
 .tabbar-pill[data-active="settings"] .tabbar-slider { transform: translateX(200%); }
 .tab {
   position: relative; z-index: 1; height: 100%;
-  display: flex; align-items: center; justify-content: center; gap: 7px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+  padding: 2px 4px;
   border-radius: 999px; color: var(--subtle);
-  font-size: 13px; font-weight: 500;
+  font-size: 11px; font-weight: 500;
   transition: color 0.2s var(--ease);
 }
+.tab:focus-visible, .tabbar-fab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .tab:active { color: var(--muted); }
 .tab[aria-current="page"] { color: var(--fg); font-weight: 600; }
 .tab[aria-current="page"] .tab-icon { color: var(--accent); }
 .tab-icon { position: relative; display: grid; place-items: center; }
-.tab-label { font-size: 13px; line-height: 1; }
+.tab-label { font-size: 11px; line-height: 1.1; letter-spacing: 0.01em; }
 .tab-badge {
-  display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px;
+  position: absolute; top: -5px; right: -10px;
+  display: inline-grid; place-items: center; min-width: 16px; height: 16px; padding: 0 4px;
   border-radius: 999px; background: var(--warn); color: #111113;
-  font-size: 10.5px; font-weight: 700; font-variant-numeric: tabular-nums;
+  font-size: 10px; line-height: 1; font-weight: 700; font-variant-numeric: tabular-nums;
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--warn) 22%, transparent);
 }
 .tab-workdot {
-  width: 7px; height: 7px; border-radius: 50%; background: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 24%, transparent);
+  position: absolute; top: -2px; right: -5px;
+  width: 6px; height: 6px; border-radius: 50%; background: var(--accent);
+  box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--accent) 24%, transparent);
   animation: tab-pulse 1.8s ease-in-out infinite;
 }
 @keyframes tab-pulse { 50% { opacity: 0.4; transform: scale(0.85); } }
 .tabbar-fab {
   pointer-events: auto; flex: none;
   width: 58px; height: 58px; border-radius: 50%;
-  box-shadow:
-    inset 0 1px 1px rgb(255 255 255 / 0.28),
-    0 8px 22px -2px rgb(124 140 255 / 0.45),
-    0 2px 8px rgb(0 0 0 / 0.45);
 }
 .tabbar-fab:active:not(:disabled) { transform: scale(0.91); }
 ::view-transition-group(tabbar) { animation: none; }

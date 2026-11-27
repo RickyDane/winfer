@@ -579,7 +579,8 @@ impl Root {
                 let selected = !searching && pid == id;
                 let matches = hits.iter().filter(|h| h.0 == pid).count();
                 let changed_here = super::settings_resets::changed_on(self.state.read(cx), pid).len();
-                let dot = (pid == "updates" && self.updates.available.is_some()) || changed_here > 0;
+                let updating_active = pid == "updates" && (self.updates.is_installing() || self.updates.is_checking());
+                let dot = (pid == "updates" && self.updates.available.is_some()) || updating_active || changed_here > 0;
                 list = list.child(
                     div().id(pid).h(px(30.0)).flex_shrink_0().flex().items_center().gap_2p5().rounded_md().px_2p5().text_size(px(13.0)).cursor_pointer()
                         .text_color(if selected { c.fg } else { c.muted })
@@ -590,7 +591,16 @@ impl Root {
                         .child(Icon::new(picon).size(px(15.0)).when(selected, |i| i.text_color(c.accent)))
                         .child(div().flex_1().truncate().child(plabel))
                         .when(searching && matches > 0, |d| d.child(div().font_family(mono.clone()).text_size(px(10.5)).text_color(c.subtle).child(matches.to_string())))
-                        .when(dot && !searching, |d| d.child(div().size(px(6.0)).rounded_full().bg(c.accent))),
+                        .when(dot && !searching, |d| {
+                            let badge = div().size(px(6.0)).rounded_full().bg(c.accent);
+                            if updating_active {
+                                d.child(badge.with_animation("settings-nav-updates-pulse", Animation::new(Duration::from_millis(1200)).repeat().with_max_fps(30.0), |b, t| {
+                                    b.opacity(0.35 + 0.65 * (0.5 + 0.5 * (t * std::f32::consts::TAU).sin()))
+                                }))
+                            } else {
+                                d.child(badge)
+                            }
+                        }),
                 );
             }
         }
@@ -607,12 +617,30 @@ impl Root {
                 .child(Icon::new(IconName::X).size(px(12.0)))));
         let version = self.updates.version.clone();
         let update = self.updates.available.as_ref().map(|a| a.version.clone());
+        let installing = self.updates.is_installing();
+        let install_pct = self.updates.install_percent();
         let foot = div().flex().items_center().justify_between().gap_2().px_3p5().py_2p5().text_size(px(11.0)).text_color(c.subtle)
             .child(div().font_family(mono.clone()).child(format!("winfer {version}")))
-            .when_some(update, |d, v| d.child(div().id("settings-update-pill").flex().items_center().gap_1().rounded_full().px_2().py_0p5().bg(Hsla { a: 0.14, ..c.accent }).text_color(c.accent).cursor_pointer()
-                .tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(format!("winfer {v} is available")).build(window, cx))
-                .on_click(cx.listener(|this, _, window, cx| this.open_settings_page("updates", window, cx)))
-                .child(Icon::new(IconName::Download).size(px(11.0))).child("Update")));
+            .when_some(update, |d, v| {
+                let tip = if installing { format!("Installing winfer {v}…") } else { format!("winfer {v} is available") };
+                let label = if installing {
+                    match install_pct {
+                        Some(pct) => format!("Updating {pct}%"),
+                        None => "Updating…".to_string(),
+                    }
+                } else {
+                    "Update".to_string()
+                };
+                let icon: AnyElement = if installing {
+                    super::updates_ui::spinning_icon(IconName::LoaderCircle, 11.0, None, "settings-update-pill-spin").into_any_element()
+                } else {
+                    Icon::new(IconName::Download).size(px(11.0)).into_any_element()
+                };
+                d.child(div().id("settings-update-pill").flex().items_center().gap_1().rounded_full().px_2().py_0p5().bg(Hsla { a: 0.14, ..c.accent }).text_color(c.accent).cursor_pointer()
+                    .tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(window, cx))
+                    .on_click(cx.listener(|this, _, window, cx| this.open_settings_page("updates", window, cx)))
+                    .child(icon).child(label))
+            });
         // GPUI clips children to the window's rectangle, not its rounded shape, so the nav rounds its
         // own left corners (the window's radius less its border).
         let nav = div().w(px(232.0)).flex_shrink_0().flex().flex_col().rounded_tl(px(13.0)).rounded_bl(px(13.0)).bg(c.panel)

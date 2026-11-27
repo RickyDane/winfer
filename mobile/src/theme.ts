@@ -1,3 +1,4 @@
+import { applyNebulaVars } from "./nebula";
 import type { Theme } from "./protocol";
 
 /** themes.json keys → the CSS variables the PWA paints with. */
@@ -32,6 +33,7 @@ export function applyTheme(theme: Theme, save = true) {
   const light = theme.mode === "light";
   root.dataset.mode = light ? "light" : "dark";
   root.style.colorScheme = light ? "light" : "dark";
+  applyNebulaVars(light);
   document.querySelector('meta[name="theme-color"]')?.setAttribute("content", theme.ui.panel ?? "#111113");
   if (save) {
     try {
@@ -45,8 +47,12 @@ export function applyTheme(theme: Theme, save = true) {
 export function restoreTheme() {
   try {
     const saved = localStorage.getItem(KEY);
-    if (saved) applyTheme(JSON.parse(saved) as Theme, false);
+    if (saved) {
+      applyTheme(JSON.parse(saved) as Theme, false);
+      return;
+    }
   } catch {
     /* a broken entry: keep the default */
   }
+  applyNebulaVars(false);
 }

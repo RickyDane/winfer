@@ -676,15 +676,44 @@ impl Root {
         let pair = theme::theme_by_id(&def.pair).name.clone();
         let dark = def.mode == "dark";
         let update = self.updates.available.as_ref().map(|a| a.version.clone());
+        let installing = self.updates.is_installing();
+        let install_pct = self.updates.install_percent();
         let settings_tip = settings_tip.to_string();
         let icon_button = move |id: &'static str| div().id(id).size(px(26.0)).flex().items_center().justify_center().rounded_md().text_color(c.subtle).cursor_pointer().hover(move |d| d.bg(c.hover).text_color(c.fg));
         let update_button = update.map(|version| {
+            let tip = if installing {
+                match install_pct {
+                    Some(pct) => format!("Installing winfer {version} ({pct}%)…"),
+                    None => format!("Installing winfer {version}…"),
+                }
+            } else {
+                format!("Update to winfer {version}")
+            };
+            let icon: AnyElement = if installing {
+                super::updates_ui::spinning_icon(IconName::LoaderCircle, 12.0, None, "sidebar-update-spin").into_any_element()
+            } else {
+                Icon::new(IconName::Download).size(px(12.0)).into_any_element()
+            };
+            let dot = div().absolute().top(px(-2.0)).right(px(-2.0)).size(px(7.0)).rounded_full().bg(c.accent).border_2().border_color(c.panel);
+            let dot: AnyElement = if installing {
+                dot.with_animation("sidebar-update-dot", Animation::new(Duration::from_millis(1200)).repeat().with_max_fps(30.0), |d, t| {
+                    d.opacity(0.4 + 0.6 * (0.5 + 0.5 * (t * std::f32::consts::TAU).sin()))
+                }).into_any_element()
+            } else {
+                dot.into_any_element()
+            };
             div().id("sidebar-update").relative().size(px(24.0)).flex_shrink_0().flex().items_center().justify_center().rounded(px(7.0)).bg(Hsla { a: 0.14, ..c.accent }).text_color(c.accent).cursor_pointer()
                 .hover(move |d| d.bg(Hsla { a: 0.24, ..c.accent }))
-                .tooltip(move |window, cx| Tooltip::new(format!("Update to winfer {version}")).build(window, cx))
-                .on_click(cx.listener(|this, _, window, cx| this.execute(Command::ShowReleaseNotes(true), window, cx)))
-                .child(Icon::new(IconName::Download).size(px(12.0)))
-                .child(div().absolute().top(px(-2.0)).right(px(-2.0)).size(px(7.0)).rounded_full().bg(c.accent).border_2().border_color(c.panel))
+                .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    if this.updates.is_installing() {
+                        this.execute(Command::Settings(Some("updates".into())), window, cx);
+                    } else {
+                        this.execute(Command::ShowReleaseNotes(true), window, cx);
+                    }
+                }))
+                .child(icon)
+                .child(dot)
         });
         let theme_button = icon_button("theme-toggle")
             .tooltip(move |window, cx| Tooltip::new(format!("Switch to {pair} (more themes in Settings)")).build(window, cx))
@@ -803,7 +832,7 @@ impl Root {
         }
         let more = events.len() > 4;
         Some(
-            div().mx_2().pt_2().pb_1()
+            div().mx_2().pt_2().pb_1().border_t_1().border_color(c.border)
                 .child(div().flex().items_center().justify_between().pr_1().pl_2p5().pb_1()
                     .child(div().text_size(px(10.5)).text_color(c.subtle).child("LATEST"))
                     .when(more, |d| d.child(div().id("feed-toggle").text_size(px(11.0)).text_color(c.accent).cursor_pointer()

@@ -37,11 +37,11 @@ export function TabBar({ client, active }: { client: DesktopClient; active: Rout
               }}
             >
               <span className="tab-icon">
-                <Icon name={t.icon} size={18} />
+                <Icon name={t.icon} size={19} />
+                {t.route === "inbox" &&
+                  (waiting > 0 ? <span className="tab-badge">{waiting}</span> : working ? <span className="tab-workdot" aria-hidden /> : null)}
               </span>
               <span className="tab-label">{t.label}</span>
-              {t.route === "inbox" &&
-                (waiting > 0 ? <span className="tab-badge">{waiting}</span> : working ? <span className="tab-workdot" aria-hidden /> : null)}
             </button>
           ))}
         </div>
@@ -58,7 +58,7 @@ export function TabBar({ client, active }: { client: DesktopClient; active: Rout
             }}
           >
             <span className="nebula-face" aria-hidden />
-            <Icon name="plus" size={22} className="nebula-icon" />
+            <Icon name="plus" size={25} className="nebula-icon" />
           </button>
         )}
       </nav>

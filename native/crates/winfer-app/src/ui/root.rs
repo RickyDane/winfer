@@ -1775,6 +1775,14 @@ impl Render for Root {
                     self.update_state(cx, |s| s.overlay = crate::model::Overlay::History);
                 }
                 Ok("whats-new") => self.updates.preview(),
+                Ok("updates-checking") => {
+                    self.updates.preview_checking();
+                    self.execute(Command::Settings(Some("updates".into())), window, cx);
+                }
+                Ok("updates-installing") => {
+                    self.updates.preview_installing(28 * 1_048_576, 44 * 1_048_576);
+                    self.execute(Command::Settings(Some("updates".into())), window, cx);
+                }
                 Ok("undock") => self.execute(Command::BrowserUndock, window, cx),
                 Ok("browser") => self.execute(Command::SidePanel { panel: SidePanel::Browser, show: true }, window, cx),
                 Ok("side-terminal") => self.execute(Command::SidePanel { panel: SidePanel::Terminal, show: true }, window, cx),
