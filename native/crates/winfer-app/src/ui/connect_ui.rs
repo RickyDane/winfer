@@ -173,10 +173,27 @@ pub(super) struct ConnectClient {
     tool_calls: HashMap<String, String>,
     /// Agents' calls waiting on a request's reply (ack, usage): request id → (MCP call, what, machine).
     tool_waits: HashMap<String, (String, &'static str, String)>,
-    /// Sign-ins pushed and not yet answered: request id → (account here, its fingerprint, machine name).
-    pushes: HashMap<String, (String, String, String)>,
+    /// Sign-ins pushed and not yet answered: request id → (account here, its label, its fingerprint, batch).
+    pushes: HashMap<String, (String, String, String, String)>,
+    /// Sign-ins sent to a machine together, until the last one is answered.
+    push_batches: HashMap<String, PushBatch>,
     /// The "New workspace on ‹machine›" dialog.
     pub folder: Option<super::connect_folder::FolderDialog>,
+}
+
+/// An account's label and its `account.push` (with its id and the sign-in's fingerprint), or why not.
+type PushMessage = Result<(String, (Value, String)), String>;
+
+/// Sign-ins sent to one machine together (Settings → Accounts, `push_sign_in`).
+struct PushBatch {
+    machine: String,
+    left: usize,
+    /// Labels of the accounts signed in there.
+    signed: Vec<String>,
+    /// "‹label›: ‹why›" for the ones that weren't.
+    failed: Vec<String>,
+    /// The agent's MCP call waiting on it, if an agent sent them.
+    call: Option<String>,
 }
 
 /// What a Connect agent tool did: answered, or waits for the other machine.
@@ -229,10 +246,10 @@ pub(super) fn agent_tools() -> Vec<Value> {
             "name": {"type": "string", "description": "For link: the server's name (default: its host name)"}
         }, "required": ["mode"]}}),
         json!({"name": "list_sign_ins", "description": "List this machine's agent sign-ins (Claude Code, Codex accounts): id, label, signed in or not, and the machines each is pushed to.", "inputSchema": {"type": "object", "properties": {}}}),
-        json!({"name": "push_sign_in", "description": "Sign a paired machine in with one of this machine's agent accounts (from list_sign_ins). The two copies stay in step when either refreshes.", "inputSchema": {"type": "object", "properties": {
-            "account": {"type": "string", "description": "Account id from list_sign_ins, e.g. claude:default"},
+        json!({"name": "push_sign_in", "description": "Sign a paired machine in with this machine's agent accounts (from list_sign_ins): one, several, or all signed-in ones (every provider, every account). Each copy stays in step with this one when either refreshes; an account already signed in there as the same person is reused, not duplicated.", "inputSchema": {"type": "object", "properties": {
+            "account": {"type": "string", "description": "Account id from list_sign_ins (e.g. claude:default), several comma-separated, or \"all\" (the default) for every signed-in account"},
             "machine": machine
-        }, "required": ["account", "machine"]}}),
+        }, "required": ["machine"]}}),
     ]);
     tools
 }
@@ -626,11 +643,14 @@ impl Root {
                 if self.connect.dev_spawn_pane.as_deref() == Some(id) {
                     self.connect.dev_spawned = msg["paneId"].as_str().map(str::to_string);
                 }
-                if let Some((local, fp, name)) = self.connect.pushes.remove(id)
-                    && msg["ok"] == true
-                {
-                    winfer_core::accounts_sync::pushed(&peer, &local, msg["accountId"].as_str().unwrap_or_default(), &fp);
-                    self.toast(format!("Signed in on {name} as “{}”. The two stay in step when either refreshes.", msg["label"].as_str().unwrap_or("the account")), cx);
+                if let Some((local, label, fp, batch)) = self.connect.pushes.remove(id) {
+                    let outcome = if msg["ok"] == true && msg["t"] != "error" {
+                        winfer_core::accounts_sync::pushed(&peer, &local, msg["accountId"].as_str().unwrap_or_default(), &fp);
+                        Ok(msg["label"].as_str().unwrap_or(&label).to_string())
+                    } else {
+                        Err(format!("{label}: {}", msg["error"].as_str().unwrap_or("it didn't work")))
+                    };
+                    self.push_answered(&batch, outcome, cx);
                 }
                 if let Some(done) = self.connect.removing.remove(id)
                     && msg["ok"] == true
@@ -650,15 +670,85 @@ impl Root {
 
     /// Settings → Accounts → Push to ‹machine›: sends this account's sign-in there.
     pub(super) fn push_account(&mut self, account: &str, peer: &str, cx: &mut Context<Self>) {
+        self.push_accounts(Some(vec![account.to_string()]), peer, None, cx);
+    }
+
+    /// Sends sign-ins to `peer`: these accounts, or all of this machine's that are signed in
+    /// (`None`). Each is linked there and kept in step; the user (or the agent's `call`) hears
+    /// once all are answered.
+    pub(super) fn push_accounts(&mut self, accounts: Option<Vec<String>>, peer: &str, call: Option<String>, cx: &mut Context<Self>) {
         let name = crate::connect::peer_name(peer).unwrap_or_else(|| "the other machine".into());
-        match winfer_core::accounts_sync::push_message(account) {
-            Ok((msg, fp)) => {
-                let id = self.connect_request(peer, msg, Some(format!("Couldn't sign in on {name}")));
-                self.connect.pushes.insert(id, (account.to_string(), fp, name.clone()));
-                self.toast(format!("Sending the sign-in to {name}…"), cx);
-            }
-            Err(e) => self.toast(e, cx),
+        if call.is_none() {
+            let what = if accounts.as_ref().is_some_and(|a| a.len() == 1) { "the sign-in" } else { "sign-ins" };
+            self.toast(format!("Sending {what} to {name}…"), cx);
         }
+        let peer = peer.to_string();
+        cx.spawn(async move |this, cx| {
+            // Reading the sign-ins can touch the Keychain: off the UI thread.
+            let lookup = peer.clone();
+            let msgs = cx.background_executor().spawn(async move {
+                let ids = accounts.unwrap_or_else(|| winfer_core::accounts_sync::shareable(&lookup));
+                ids.into_iter().map(|id| (winfer_backend::accounts::label(&id), winfer_core::accounts_sync::push_message(&id).map(|m| (id, m)))).collect::<Vec<_>>()
+            }).await;
+            let _ = this.update(cx, |this, cx| this.send_push_batch(&peer, name, msgs, call, cx));
+        })
+        .detach();
+    }
+
+    fn send_push_batch(&mut self, peer: &str, machine: String, msgs: Vec<(String, PushMessage)>, call: Option<String>, cx: &mut Context<Self>) {
+        self.connect.seq += 1;
+        let batch = format!("b{}", self.connect.seq);
+        let mut entry = PushBatch { machine: machine.clone(), left: 0, signed: Vec::new(), failed: Vec::new(), call };
+        for (label, msg) in msgs {
+            match msg {
+                Ok((account, (msg, fp))) => {
+                    let id = self.connect_request(peer, msg, None);
+                    self.connect.pushes.insert(id, (account, label, fp, batch.clone()));
+                    entry.left += 1;
+                }
+                Err(e) => entry.failed.push(format!("{label}: {e}")),
+            }
+        }
+        let waiting = entry.left > 0;
+        self.connect.push_batches.insert(batch.clone(), entry);
+        if !waiting {
+            return self.finish_push_batch(&batch, cx);
+        }
+        // A machine that never answers (or doesn't know sign-ins): give up on what's left.
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(TOOL_TIMEOUT * 2).await;
+            let _ = this.update(cx, |this, cx| {
+                let left: Vec<String> = this.connect.pushes.iter().filter(|(_, p)| p.3 == batch).map(|(id, _)| id.clone()).collect();
+                for id in left {
+                    if let Some((_, label, _, _)) = this.connect.pushes.remove(&id) {
+                        this.push_answered(&batch, Err(format!("{label}: {machine} didn't answer in time")), cx);
+                    }
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn push_answered(&mut self, batch: &str, outcome: Result<String, String>, cx: &mut Context<Self>) {
+        let Some(b) = self.connect.push_batches.get_mut(batch) else { return };
+        match outcome {
+            Ok(label) => b.signed.push(label),
+            Err(e) => b.failed.push(e),
+        }
+        b.left = b.left.saturating_sub(1);
+        if b.left == 0 {
+            self.finish_push_batch(batch, cx);
+        }
+    }
+
+    fn finish_push_batch(&mut self, batch: &str, cx: &mut Context<Self>) {
+        let Some(b) = self.connect.push_batches.remove(batch) else { return };
+        let text = push_summary(&b);
+        match &b.call {
+            Some(call) => super::agent_api::respond(call, !b.signed.is_empty() || b.failed.is_empty(), text),
+            None => self.toast(text, cx),
+        }
+        self.reload_accounts(cx);
     }
 
     /// Native notification for a remote pane that finished, asks or failed.
@@ -1080,15 +1170,14 @@ impl Root {
                 if !up {
                     return Some(ToolOutcome::Done(Err(format!("{name} is offline."))));
                 }
-                let account = a["account"].as_str().unwrap_or_default().to_string();
-                match winfer_core::accounts_sync::push_message(&account) {
-                    Ok((msg, fp)) => {
-                        let id = self.connect_request(&peer, msg, None);
-                        self.connect.pushes.insert(id.clone(), (account, fp, name.clone()));
-                        Some(self.wait_for(call, id, &name, "push", cx))
-                    }
-                    Err(e) => Some(ToolOutcome::Done(Err(e))),
-                }
+                // One account, several (comma-separated or a list), or all of them.
+                let accounts: Vec<String> = match &a["account"] {
+                    Value::Array(v) => v.iter().filter_map(|x| x.as_str()).map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect(),
+                    v => v.as_str().unwrap_or_default().split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect(),
+                };
+                let all = accounts.is_empty() || accounts.iter().any(|x| x == "all");
+                self.push_accounts((!all).then_some(accounts), &peer, Some(call.to_string()), cx);
+                Some(ToolOutcome::Later)
             }
             _ => None,
         }
@@ -1160,7 +1249,6 @@ impl Root {
                 "update" => format!("{machine} is updating to {} and restarts; it's back in a few seconds.", msg["version"].as_str().unwrap_or("the newest release")),
                 "review-merge" => format!("Queued for merging on {machine}; list_reviews shows the merge queue."),
                 "review-tests" => format!("Running its tests on {machine}; list_reviews shows the result."),
-                "push" => format!("Signed in on {machine} as “{}”. The two stay in step when either refreshes.", msg["label"].as_str().unwrap_or("the account")),
                 _ => "Done.".to_string(),
             }
         };
@@ -1902,6 +1990,21 @@ fn now_ms() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
 }
 
+/// What came of sending sign-ins to a machine, in a sentence or two.
+fn push_summary(b: &PushBatch) -> String {
+    let quoted = |v: &[String]| v.iter().map(|l| format!("“{l}”")).collect::<Vec<_>>().join(", ");
+    let mut text = match b.signed.len() {
+        0 if b.failed.is_empty() => "No signed-in accounts here to send.".to_string(),
+        0 => format!("Couldn't sign in on {}", b.machine),
+        1 => format!("Signed in on {} as {}. The two stay in step when either refreshes.", b.machine, quoted(&b.signed)),
+        n => format!("Signed in on {} with {n} accounts: {}. They stay in step when either side refreshes.", b.machine, quoted(&b.signed)),
+    };
+    if !b.failed.is_empty() {
+        text += &format!("{}{}", if b.signed.is_empty() { ": " } else { " Not sent: " }, b.failed.join("; "));
+    }
+    text
+}
+
 #[cfg(test)]
 mod tests {
     use super::{AgentStatus, RemotePane, Value, parse_status};
@@ -1971,3 +2074,4 @@ fn usage_text(machine: &str, msg: &Value) -> String {
     }
     rows.join("\n")
 }
+

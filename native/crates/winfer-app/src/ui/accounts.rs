@@ -476,6 +476,26 @@ impl Root {
                 .child(note_tile(c, IconName::Route, "Runs out? Next account.", "Agents move down the list and continue their session. WinferCode chats switch right away; terminal panes when the agent stops."))
                 .child(note_tile(c, IconName::Link2, "Only the sign-in is separate.", "Every account shares sessions, settings and skills with the default sign-in.")),
         );
+        // Paired machines: sign them in with every account here at once.
+        let machines: Vec<(String, String)> = crate::connect::get().map(|c| c.status().peers.into_iter().map(|p| (p.peer_id, p.name)).collect()).unwrap_or_default();
+        if !machines.is_empty() {
+            let links = winfer_core::accounts_sync::links();
+            let synced: Vec<String> = machines.iter().filter(|(p, _)| links.iter().any(|l| l.peer == *p && !l.received)).map(|(_, n)| n.clone()).collect();
+            let sub = if synced.is_empty() { "Sign a paired machine in with every account here, Claude Code and Codex. Each copy stays in step when either side refreshes.".to_string() } else { format!("Kept in step on {}. Sync again to add accounts added here since.", synced.join(", ")) };
+            page = page.child(panel(c).flex().items_center().gap_3().px_3p5().py_2p5()
+                .child(Icon::new(IconName::Upload).size(px(14.0)).text_color(c.subtle))
+                .child(div().flex_1().min_w_0().flex().flex_col().gap_0p5()
+                    .child(div().text_size(px(13.0)).font_weight(FontWeight::MEDIUM).text_color(c.fg).child("Sign-ins on your other machines"))
+                    .child(div().text_size(px(11.5)).text_color(c.subtle).child(sub)))
+                .child(btn(c, "accounts-sync-all", Some(IconName::Upload), "Sync all to…", Btn::Plain, true)
+                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                        let items = machines.iter().map(|(peer, name)| {
+                            let peer = peer.clone();
+                            super::menu::MenuItem::run(name.clone(), move |this: &mut Self, _, cx| this.push_accounts(None, &peer, None, cx))
+                        }).collect();
+                        this.open_menu(e.position, Some("Sign in with every account here".into()), items, cx);
+                    }))));
+        }
         for (pi, provider) in ACCOUNT_PROVIDERS.into_iter().enumerate() {
             let list: Vec<Account> = self.usage.accounts.iter().filter(|a| a.provider == provider).cloned().collect();
             let ids: Vec<String> = list.iter().map(|a| a.id.clone()).collect();

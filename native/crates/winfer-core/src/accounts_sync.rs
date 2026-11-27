@@ -236,10 +236,60 @@ pub fn write(id: &str, parts: &Parts) -> Result<(), String> {
     Ok(())
 }
 
-/// The account a pushed sign-in goes to here: the agent's default one while it has no sign-in,
-/// else a new account (so failover can use both).
-fn target_for(provider: &str, label: &str) -> Result<String, String> {
+/// Who a sign-in belongs to, from its parts: Claude's account and organisation (one person can
+/// have a personal and a team plan), Codex's email and ChatGPT account. None when it doesn't say.
+pub fn identity(provider: &str, parts: &Parts) -> Option<String> {
+    match provider {
+        "claude" => claude_identity(&serde_json::from_str(parts.get("account")?).ok()?),
+        "codex" => codex_identity(&serde_json::from_str(parts.get("auth")?).ok()?),
+        _ => None,
+    }
+}
+
+fn claude_identity(account: &Value) -> Option<String> {
+    let s = |k: &str| account[k].as_str().map(str::trim).filter(|v| !v.is_empty());
+    let who = s("accountUuid").or_else(|| s("emailAddress"))?;
+    Some(format!("{who}/{}", s("organizationUuid").unwrap_or_default()))
+}
+
+fn codex_identity(auth: &Value) -> Option<String> {
+    use base64::Engine as _;
+    let email = auth["tokens"]["id_token"].as_str().and_then(|t| t.split('.').nth(1)).and_then(|p| base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(p.trim_end_matches('=')).ok()).and_then(|b| serde_json::from_slice::<Value>(&b).ok()).and_then(|c| c["email"].as_str().map(str::to_string));
+    let account = auth["tokens"]["account_id"].as_str().map(str::to_string);
+    if email.is_none() && account.is_none() {
+        return None;
+    }
+    Some(format!("{}/{}", email.unwrap_or_default(), account.unwrap_or_default()))
+}
+
+/// Who this machine's account is signed in as, from its files (no Keychain prompt).
+fn identity_here(id: &str) -> Option<String> {
+    match accounts::provider_of(id) {
+        "claude" => claude_identity(&serde_json::from_str::<Value>(&std::fs::read_to_string(claude_json(id)?).ok()?).ok()?["oauthAccount"]),
+        "codex" => codex_identity(&serde_json::from_str(&std::fs::read_to_string(accounts::dir(id)?.join("auth.json")).ok()?).ok()?),
+        _ => None,
+    }
+}
+
+/// This machine's accounts that can be pushed to `peer`, in failover order: signed in, and not
+/// a copy `peer` pushed here (that one is kept in step already).
+pub fn shareable(peer: &str) -> Vec<String> {
+    let received: Vec<String> = links().into_iter().filter(|l| l.peer == peer && l.received).map(|l| l.local).collect();
+    accounts::accounts_list().into_iter().filter(|e| e.signed_in && !received.contains(&e.account.id)).map(|e| e.account.id).filter(|id| read(id).is_ok()).collect()
+}
+
+/// The account a pushed sign-in goes to here: one already signed in as the same person (so
+/// pushing again, or to a machine signed in itself, doesn't add duplicates), else the agent's
+/// default one while it has no sign-in, else a new account (so failover can use both).
+fn target_for(peer: &str, provider: &str, label: &str, who: Option<&str>) -> Result<String, String> {
     let list = accounts::accounts_list();
+    // Not one that machine already links to another of its accounts (both the same person).
+    let linked: Vec<String> = links().into_iter().filter(|l| l.peer == peer).map(|l| l.local).collect();
+    if let Some(who) = who
+        && let Some(e) = list.iter().find(|e| e.account.provider == provider && !linked.contains(&e.account.id) && identity_here(&e.account.id).as_deref() == Some(who))
+    {
+        return Ok(e.account.id.clone());
+    }
     let default = accounts::default_id(provider);
     if !list.iter().any(|e| e.account.id == default && e.signed_in) && read(&default).is_err() {
         return Ok(default);
@@ -259,7 +309,8 @@ pub fn on_push(peer: &str, msg: &Value) -> Value {
     }
     // Pushed again: the same account here.
     let existing = with_links(|l| l.iter().find(|x| x.peer == peer && x.remote == remote).map(|x| x.local.clone()));
-    let local = match existing.map(Ok).unwrap_or_else(|| target_for(provider, &label)) {
+    let who = identity(provider, &parts);
+    let local = match existing.map(Ok).unwrap_or_else(|| target_for(peer, provider, &label, who.as_deref())) {
         Ok(id) => id,
         Err(e) => return json!({"t": "ack", "ok": false, "error": e}),
     };
@@ -357,5 +408,17 @@ mod tests {
         assert_eq!(fingerprint(&a), fingerprint(&b));
         b.insert("auth".into(), "{\"x\":2}".into());
         assert_ne!(fingerprint(&a), fingerprint(&b));
+    }
+
+    #[test]
+    fn identities_tell_people_and_plans_apart() {
+        use base64::Engine as _;
+        let claude = |org: &str| Parts::from([("account".into(), json!({"accountUuid": "u1", "emailAddress": "a@b.c", "organizationUuid": org}).to_string())]);
+        assert_eq!(identity("claude", &claude("o1")), identity("claude", &claude("o1")));
+        assert_ne!(identity("claude", &claude("o1")), identity("claude", &claude("o2")));
+        assert_eq!(identity("claude", &Parts::from([("credentials".into(), "{}".into())])), None);
+        let jwt = format!("h.{}.s", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(br#"{"email":"a@b.c"}"#));
+        let codex = Parts::from([("auth".into(), json!({"tokens": {"id_token": jwt, "account_id": "acc"}}).to_string())]);
+        assert_eq!(identity("codex", &codex).as_deref(), Some("a@b.c/acc"));
     }
 }
