@@ -176,6 +176,9 @@ textarea, input, .md, .ask-code, .ask-q p, .turn-user p, .screen-text, .tool-bod
 .label { display: flex; align-items: baseline; gap: 6px; margin: 0; padding: 0 6px 7px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--subtle); }
 .label span { font-variant-numeric: tabular-nums; }
 .list > .group-list { margin-top: 14px; }
+/* Home sits above the search, outside .list: it takes the search field's inset. */
+.home-group { margin-inline: 12px; }
+.home-group + .agent-search { margin-top: 16px; }
 
 /* Rows sit in one raised card; requests stand alone, outlined in the warning color. */
 .group-list[data-kind="rows"] { border: 1px solid var(--edge); border-radius: var(--r-xl); background: var(--raised); overflow: hidden; box-shadow: var(--lift-sm); }
