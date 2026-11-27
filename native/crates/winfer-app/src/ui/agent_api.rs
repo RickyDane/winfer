@@ -450,6 +450,15 @@ impl Root {
                 status::report(&self.state, &me.id, AgentStatus::NeedsInput, Some(message), cx);
                 Ok("The user has been notified.".to_string())
             }
+            // Home's orchestrators look after every account, not their own.
+            "usage_status" if crate::voice::is_orchestrator(&me.id) => {
+                let rows = self.usage_left_rows(cx);
+                Ok(if rows.is_empty() {
+                    "No usage known yet for the signed-in accounts.".to_string()
+                } else {
+                    rows.iter().map(|(label, left)| format!("{label}: {:.0}% left", left.round())).collect::<Vec<_>>().join("\n")
+                })
+            }
             "usage_status" => Ok(self.tool_usage_status(me, cx)),
             "wait_for_usage_reset" => self.tool_wait(me, a, cx),
             other => Err(format!("Unknown tool {other}")),

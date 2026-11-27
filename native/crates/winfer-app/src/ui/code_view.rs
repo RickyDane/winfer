@@ -2290,6 +2290,14 @@ pub(super) fn render_item(env: &Env, item: &Item, first: bool, prev: Option<&Ite
     }
 }
 
+/// Home's orchestrator starts from what's going on, not from a project.
+const HOME_SUGGESTIONS: [(IconName, &str, &str); 4] = [
+    (IconName::Bell, "What needs me?", "What needs me right now across my workspaces and machines: agents waiting, reviews ready, open tasks, usage left?"),
+    (IconName::GitMerge, "What changed today?", "Summarize what changed today in each workspace: commits, merged work and what the agents did."),
+    (IconName::Sparkles, "Build something", "I want to build something. Ask me what and where, then start it as a task."),
+    (IconName::ListTodo, "Status of my tasks", "Give me the status of every open task and what's next for each."),
+];
+
 const SUGGESTIONS: [(IconName, &str, &str); 4] = [
     (IconName::Compass, "Explore this codebase", "Give me a tour of this project: structure, entry points and how it fits together."),
     (IconName::Bug, "Find and fix a bug", "Look for a likely bug in this project and fix it, explaining what was wrong."),
@@ -2541,6 +2549,7 @@ impl CodeView {
     fn welcome(&self, c: Colors, cx: &mut Context<Self>) -> AnyElement {
         let lay = welcome_layout(self.pane_size.width / px(1.0), self.pane_size.height / px(1.0));
         let m = self.model.read(cx);
+        let home = crate::voice::home_pane(&m.pane_id) == Some(crate::voice::HomePane::Conductor);
         let st = &m.state;
         let spec = &st.model;
         let name = if spec.is_empty() { "…".to_string() } else { model_name(spec, st.actual_model.as_deref()) };
@@ -2576,7 +2585,7 @@ impl CodeView {
                 .flex()
                 .when(lay.two_col, |d| d.flex_wrap().justify_center().gap_2())
                 .when(!lay.two_col, |d| d.flex_col().items_center().gap_1p5());
-            for (i, (icon, title, prompt)) in SUGGESTIONS.into_iter().take(lay.suggestions).enumerate() {
+            for (i, (icon, title, prompt)) in (if home { HOME_SUGGESTIONS } else { SUGGESTIONS }).into_iter().take(lay.suggestions).enumerate() {
                 let icon_box = if lay.compact_cards { 20.0 } else { 24.0 };
                 let icon_sz = if lay.compact_cards { 11.5 } else { 13.0 };
                 let card = div()
@@ -2612,7 +2621,7 @@ impl CodeView {
             grid
         });
 
-        let cwd_pill = if lay.show_cwd {
+        let cwd_pill = if lay.show_cwd && !home {
             cwd_label.map(|label| {
                 let full_tip = cwd_full.clone().unwrap_or_else(|| label.clone());
                 div()
@@ -2641,7 +2650,7 @@ impl CodeView {
                 .flex_col()
                 .items_center()
                 .gap_1()
-                .child(div().w_full().text_center().text_size(px(if lay.compact { 16.0 } else { 22.0 })).font_weight(FontWeight::MEDIUM).text_color(c.fg).child("What should we build?"))
+                .child(div().w_full().text_center().text_size(px(if lay.compact { 16.0 } else { 22.0 })).font_weight(FontWeight::MEDIUM).text_color(c.fg).child(if home { "What's next?" } else { "What should we build?" }))
                 .child(div().w_full().min_w_0().text_center().truncate().text_size(px(if lay.compact { 11.5 } else { 12.5 })).child(status))
                 .children(cwd_pill),
             "wl-title",

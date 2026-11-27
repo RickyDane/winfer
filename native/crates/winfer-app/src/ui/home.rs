@@ -845,16 +845,7 @@ impl Root {
             .filter(|t| t.mode == TaskMode::Light && t.stage.open() && t.stage != Stage::Ready)
             .filter_map(|t| {
                 let statuses: Vec<AgentStatus> = t.panes.iter().filter_map(|p| s.pane(p)).map(|p| p.status).collect();
-                let next = if statuses.contains(&AgentStatus::NeedsInput) {
-                    Stage::NeedsYou
-                } else if statuses.contains(&AgentStatus::Working) {
-                    Stage::Running
-                } else if t.stage == Stage::NeedsYou || t.stage == Stage::Running && !statuses.is_empty() {
-                    Stage::Checking
-                } else {
-                    return None;
-                };
-                (next != t.stage).then(|| (t.id.clone(), next))
+                light_stage(t.stage, &statuses).map(|next| (t.id.clone(), next))
             })
             .collect();
         for (id, stage) in updates {
@@ -1374,6 +1365,24 @@ impl Root {
     }
 }
 
+/// A light task's stage from its agents' status: running while one works, needs-you while one
+/// asks, checking once they're done (the conductor then checks and sets ready or failed).
+pub fn light_stage(current: Stage, statuses: &[AgentStatus]) -> Option<Stage> {
+    let next = if statuses.contains(&AgentStatus::NeedsInput) {
+        Stage::NeedsYou
+    } else if statuses.contains(&AgentStatus::Working) {
+        Stage::Running
+    } else if matches!(current, Stage::Running | Stage::NeedsYou) && statuses.contains(&AgentStatus::Done) {
+        Stage::Checking
+    } else if current == Stage::NeedsYou && !statuses.is_empty() {
+        // Answered, and not working (yet): back to running.
+        Stage::Running
+    } else {
+        return None;
+    };
+    (next != current).then_some(next)
+}
+
 /// Where a task runs.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum Place {
@@ -1401,7 +1410,7 @@ pub(super) fn home_dir() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{AgentStatus, HomeTask, Item, Stage, TaskMode, Watch, answer_of, current_step, find_task, home_tools, pane_event, ui_tools};
+    use super::{AgentStatus, HomeTask, Item, Stage, TaskMode, Watch, answer_of, current_step, find_task, home_tools, light_stage, pane_event, ui_tools};
     use serde_json::json;
 
     fn user(text: &str) -> Item {
@@ -1469,6 +1478,21 @@ mod tests {
         assert_eq!(find_task(&tasks, &json!("Task 1")).map(|t| t.number), Some(1));
         assert_eq!(find_task(&tasks, &json!("t12")).map(|t| t.number), Some(12));
         assert_eq!(find_task(&tasks, &json!("task 3")), None);
+    }
+
+    #[test]
+    fn light_tasks_follow_their_agent() {
+        use AgentStatus::*;
+        // Started, not working yet (a shell, or before its first turn): stays running.
+        assert_eq!(light_stage(Stage::Running, &[Idle]), None);
+        assert_eq!(light_stage(Stage::Running, &[Working]), None);
+        assert_eq!(light_stage(Stage::Running, &[NeedsInput]), Some(Stage::NeedsYou));
+        assert_eq!(light_stage(Stage::NeedsYou, &[Working]), Some(Stage::Running));
+        assert_eq!(light_stage(Stage::Running, &[Done]), Some(Stage::Checking));
+        // The conductor's own calls (checking, ready) aren't undone by an idle agent.
+        assert_eq!(light_stage(Stage::Checking, &[Idle]), None);
+        assert_eq!(light_stage(Stage::Checking, &[Done]), None);
+        assert_eq!(light_stage(Stage::Checking, &[Working]), Some(Stage::Running));
     }
 
     #[test]
