@@ -1,8 +1,8 @@
-//! Rendered HTML files: a wry webview placed over the viewer's body. The page and the files next
-//! to it (styles, scripts, images) come from disk through the `winferfile` protocol, limited to the
-//! page's own folder; web links open in the system browser.
+//! Rendered HTML files and videos: a wry webview placed over the viewer's body. The page and the
+//! files next to it (styles, scripts, images, media) come from disk through the `winferfile`
+//! protocol, limited to the page's own folder; web links open in the system browser.
 
-use super::{Content, ViewerPanel, expand, extension};
+use super::{Content, ViewerPanel, expand, extension, video};
 use crate::theme::Colors;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
@@ -47,6 +47,8 @@ pub(super) struct HtmlView {
     /// The page and modification time the webview shows.
     pub(super) loaded: Option<(String, u64)>,
     bounds: Bounds<Pixels>,
+    /// The bounds the webview was last given.
+    placed: Option<Bounds<Pixels>>,
     /// Whether the viewer is on screen with nothing drawn over it (set by the root view).
     allowed: bool,
     visible: bool,
@@ -61,8 +63,10 @@ fn origin() -> String {
     if cfg!(any(target_os = "windows", target_os = "android")) { format!("http://{SCHEME}.localhost") } else { format!("{SCHEME}://localhost") }
 }
 
+/// A page's URL; a video's is that of its player page.
 fn page_url(path: &str) -> Option<String> {
-    url::Url::from_file_path(expand(path)).ok().map(|u| format!("{}{}", origin(), u.path()))
+    let query = if video::is_video(path) { format!("?{}", video::PLAYER) } else { String::new() };
+    url::Url::from_file_path(expand(path)).ok().map(|u| format!("{}{}{query}", origin(), u.path()))
 }
 
 /// The file a protocol URL path names (percent-decoded, drive letters kept on Windows).
@@ -89,7 +93,8 @@ fn mime_for(path: &Path) -> &'static str {
         Some("woff2") => "font/woff2",
         Some("ttf") => "font/ttf",
         Some("otf") => "font/otf",
-        Some("mp4") => "video/mp4",
+        Some("mp4" | "m4v") => "video/mp4",
+        Some("mov") => "video/quicktime",
         Some("webm") => "video/webm",
         Some("mp3") => "audio/mpeg",
         Some("wav") => "audio/wav",
@@ -106,26 +111,33 @@ fn respond(mime: &str, status: u16, body: Vec<u8>) -> wry::http::Response<Cow<'s
     wry::http::Response::builder().status(status).header("Content-Type", mime).header("Cache-Control", "no-store").body(Cow::Owned(body)).unwrap()
 }
 
-/// Serves a file under `root`; anything outside it (`..`, symlinks out) is refused.
-fn serve(root: &Path, uri_path: &str) -> wry::http::Response<Cow<'static, [u8]>> {
+/// Serves a file under `root`, or the part of it a `Range` header asks for; anything outside it
+/// (`..`, symlinks out) is refused.
+fn serve(root: &Path, uri_path: &str, query: Option<&str>, range: Option<&str>) -> wry::http::Response<Cow<'static, [u8]>> {
     let Some(file) = file_for(uri_path).and_then(|f| f.canonicalize().ok()) else {
         return respond("text/plain", 404, b"Not found".to_vec());
     };
     if !root.canonicalize().is_ok_and(|r| file.starts_with(r)) {
         return respond("text/plain", 403, b"Outside the page's folder".to_vec());
     }
-    match std::fs::read(&file) {
-        Ok(bytes) => respond(mime_for(&file), 200, bytes),
-        Err(e) => respond("text/plain", 404, e.to_string().into_bytes()),
+    if query == Some(video::PLAYER) && video::is_video(&file.to_string_lossy()) {
+        return respond("text/html; charset=utf-8", 200, video::player_page(uri_path).into_bytes());
     }
+    let served = match range {
+        Some(range) => video::serve_range(&file, mime_for(&file), range),
+        None => std::fs::read(&file).map(|bytes| respond(mime_for(&file), 200, bytes)),
+    };
+    served.unwrap_or_else(|e| respond("text/plain", 404, e.to_string().into_bytes()))
 }
 
 impl ViewerPanel {
-    /// The page the webview should show: an HTML file, rendered (not its source or editor).
+    /// The page the webview should show: a video, or an HTML file rendered (not its source or
+    /// editor).
     fn wanted_html(&self) -> Option<(String, u64)> {
-        let path = self.shown.as_ref().filter(|p| is_html(p))?;
+        let path = self.shown.as_ref()?;
         match &self.content {
-            Content::Text { modified, .. } if !self.editing && !self.source && !self.diff.on => Some((path.clone(), *modified)),
+            Content::Video { modified } if video::is_video(path) => Some((path.clone(), *modified)),
+            Content::Text { modified, .. } if is_html(path) && !self.editing && !self.source && !self.diff.on => Some((path.clone(), *modified)),
             _ => None,
         }
     }
@@ -165,7 +177,10 @@ impl ViewerPanel {
         let Some(webview) = &self.html.webview else { return };
         let b = self.html.bounds;
         let show = self.html.allowed && self.wanted_html().is_some() && b.size.width > px(1.0) && b.size.height > px(1.0);
-        if show {
+        // Only when they change: this runs every frame, and moving a video that plays full screen
+        // would pull it back to the panel's size.
+        if show && self.html.placed != Some(b) {
+            self.html.placed = Some(b);
             let _ = webview.set_bounds(Rect {
                 position: dpi::LogicalPosition::new(f64::from(b.origin.x / px(1.0)), f64::from(b.origin.y / px(1.0))).into(),
                 size: dpi::LogicalSize::new(f64::from(b.size.width / px(1.0)), f64::from(b.size.height / px(1.0))).into(),
@@ -173,6 +188,7 @@ impl ViewerPanel {
         }
         if self.html.visible != show {
             if !show {
+                let _ = webview.evaluate_script(video::PAUSE_JS);
                 // Hiding the webview while it's first responder would leave keys going nowhere.
                 let _ = webview.focus_parent();
             }
@@ -195,7 +211,8 @@ impl ViewerPanel {
                 WebViewBuilder::new()
                     .with_custom_protocol(SCHEME.into(), move |_, request| {
                         let root = root.lock().clone();
-                        serve(&root, request.uri().path())
+                        let range = request.headers().get("range").and_then(|v| v.to_str().ok());
+                        serve(&root, request.uri().path(), request.uri().query(), range)
                     })
                     .with_ipc_handler(move |request| {
                         let _ = tx.try_send(request.into_body());
@@ -216,9 +233,10 @@ impl ViewerPanel {
                 this.html.starting = false;
                 match built {
                     Ok(webview) => this.html.webview = Some(webview),
-                    Err(err) => this.html.failed = Some(format!("Can't show HTML pages: {err}")),
+                    Err(err) => this.html.failed = Some(format!("Can't show HTML pages or videos: {err}")),
                 }
                 this.html.visible = false;
+                this.html.placed = None;
                 this.html.loaded = None;
                 cx.notify();
                 this.html.failed.is_none()
@@ -294,11 +312,18 @@ mod tests {
         std::fs::write(site.join("style.css"), "body{}").unwrap();
         std::fs::write(dir.join("secret.txt"), "no").unwrap();
         let path_of = |p: &std::path::Path| url::Url::from_file_path(p).unwrap().path().to_string();
-        let ok = serve(&site, &path_of(&site.join("style.css")));
+        let get = |uri_path: &str| serve(&site, uri_path, None, None);
+        let ok = get(&path_of(&site.join("style.css")));
         assert_eq!(ok.status(), 200);
         assert_eq!(ok.headers()["Content-Type"], "text/css; charset=utf-8");
-        assert_eq!(serve(&site, &path_of(&dir.join("secret.txt"))).status(), 403);
-        assert_eq!(serve(&site, &format!("{}/../secret.txt", path_of(&site))).status(), 403);
+        assert_eq!(get(&path_of(&dir.join("secret.txt"))).status(), 403);
+        assert_eq!(get(&format!("{}/../secret.txt", path_of(&site))).status(), 403);
+        assert_eq!(serve(&site, &path_of(&dir.join("secret.txt")), None, Some("bytes=0-1")).status(), 403);
+        std::fs::write(site.join("demo.mp4"), "video").unwrap();
+        let video = path_of(&site.join("demo.mp4"));
+        assert_eq!(serve(&site, &video, Some("player"), None).headers()["Content-Type"], "text/html; charset=utf-8");
+        assert_eq!(get(&video).headers()["Content-Type"], "video/mp4");
+        assert_eq!(serve(&site, &video, None, Some("bytes=0-1")).status(), 206);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

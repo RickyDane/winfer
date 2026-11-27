@@ -1,5 +1,5 @@
-//! The side panel's file viewer: markdown and HTML rendered, images shown, other text files with
-//! line numbers, with live reload, editing and review comments
+//! The side panel's file viewer: markdown and HTML rendered, images shown, videos played, other
+//! text files with line numbers, with live reload, editing and review comments
 //! (port of `src/features/viewer/ViewerPanel.tsx`, `viewer.ts`, `projects.ts` and `comments.ts`).
 
 use crate::backend;
@@ -22,6 +22,7 @@ use winfer_backend::files;
 
 mod diff;
 mod html;
+mod video;
 
 const IMAGE: [&str; 8] = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "ico"];
 const POLL: Duration = Duration::from_millis(1500);
@@ -473,6 +474,7 @@ enum Content {
     Failed(String),
     Text { text: SharedString, modified: u64, line_count: usize, comments: Vec<DocComment> },
     Image(PathBuf),
+    Video { modified: u64 },
     Pdf { bytes: Arc<Vec<u8>>, pages: usize },
 }
 
@@ -604,6 +606,7 @@ impl ViewerPanel {
                 let stale = this.update(cx, |this, _| match &this.content {
                     Content::Text { modified: known, .. } => !this.editing && modified.is_some_and(|m| m != *known),
                     Content::Pdf { .. } => modified.is_some_and(|m| m != this.pdf.modified),
+                    Content::Video { modified: known } => modified.is_some_and(|m| m != *known),
                     _ => false,
                 });
                 match stale {
@@ -628,6 +631,14 @@ impl ViewerPanel {
         }
         if extension(&path) == "pdf" {
             return self.load_pdf(path, cx);
+        }
+        // The player reads the file itself, a part at a time.
+        if video::is_video(&path) {
+            self.content = match files::files_modified(expand(&path)) {
+                Some(modified) => Content::Video { modified },
+                None => Content::Failed(format!("can't open {path}")),
+            };
+            return cx.notify();
         }
         if matches!(self.content, Content::Failed(_)) {
             self.content = Content::Loading;
@@ -1458,6 +1469,7 @@ impl Render for ViewerPanel {
             Content::Loading => div().p_4().text_xs().text_color(c.subtle).child("Loading…").into_any_element(),
             Content::Failed(err) => div().p_4().text_xs().text_color(c.danger).child(err.clone()).into_any_element(),
             Content::Pdf { pages, .. } => self.render_pdf_view(*pages, c, cx),
+            Content::Video { .. } => self.render_html(c, cx),
             Content::Image(p) => div().size_full().p_2().child(img(p.clone()).size_full().object_fit(ObjectFit::Contain)).into_any_element(),
             Content::Text { .. } if self.diff_shown() => self.render_diff(font.clone(), c, cx),
             Content::Text { text, .. } if !self.editing && is_markdown && !self.source => {

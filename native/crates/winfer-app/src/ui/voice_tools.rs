@@ -39,7 +39,7 @@ pub fn agent_tools() -> Vec<Value> {
         tool("send_to_pane", "Type a message into a pane, e.g. an instruction for an agent or a command in a shell pane. Submits unless submit is false. Write the message as the agent should receive it.", json!({ "pane": pane_param(), "text": { "type": "string" }, "submit": { "type": "boolean" } }), &["pane", "text"]),
         tool("spawn_agent", "Start one new agent pane, optionally with a first prompt and its own git worktree. Providers: the installed agent ids, or shell.", json!({ "provider": { "type": "string" }, "prompt": { "type": "string" }, "worktree": { "type": "boolean" } }), &["provider"]),
         tool("open_url", "Open a URL in winfer's browser panel (reuses a tab already on that site unless new_tab).", json!({ "url": { "type": "string" }, "new_tab": { "type": "boolean" } }), &["url"]),
-        tool("open_file", "Show a file in winfer's file viewer (markdown and HTML rendered, images shown). Relative paths start at the workspace folder.", json!({ "path": { "type": "string" }, "line": { "type": "number" } }), &["path"]),
+        tool("open_file", "Show a file in winfer's file viewer (markdown and HTML rendered, images shown, videos played). Relative paths start at the workspace folder.", json!({ "path": { "type": "string" }, "line": { "type": "number" } }), &["path"]),
         tool("usage_status", "How much of an agent's plan usage is left (5-hour and weekly windows, resets). Defaults to the focused pane's agent.", json!({ "pane": pane_param() }), &[]),
     ]
 }
