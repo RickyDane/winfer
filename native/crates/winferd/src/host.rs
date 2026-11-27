@@ -1241,7 +1241,6 @@ pub(crate) fn write_chat(pane_id: &str, cmd: &Cmd) {
     });
 }
 
-/// Tiled panes in layout order, then the rest; never other machines' (remote tiles).
 /// The workspace another machine's spawn_agent starts in (its id): the one named, else the
 /// first. Never a new one.
 fn spawn_workspace(s: &AppState, name: Option<&str>) -> Result<String, String> {
@@ -1255,6 +1254,7 @@ fn spawn_workspace(s: &AppState, name: Option<&str>) -> Result<String, String> {
     })
 }
 
+/// Tiled panes in layout order, then the rest; never other machines' (remote tiles).
 fn ordered(ws: &Workspace) -> Vec<&Pane> {
     let tiled = ws.layout.as_ref().map(leaves).unwrap_or_default();
     let mut panes: Vec<&Pane> = tiled.iter().filter_map(|id| ws.panes.iter().find(|p| p.id == *id)).collect();

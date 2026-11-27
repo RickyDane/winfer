@@ -1482,10 +1482,10 @@ impl Root {
                 let result = self.run_remote_sync_tool(&tool, &ws, &me, &a, &caller, cx);
                 if tool == "spawn_agent" && result.is_ok() {
                     // Another machine asked: the user here stays where they were.
-                    let zoomed = view.zoomed();
+                    let hidden = view.hides_new_panes();
                     self.update_state(cx, |s| view.restore(s));
-                    // Behind a zoomed pane nothing draws it, which would start it.
-                    if zoomed && let Some(new) = all(self.state.read(cx)).into_iter().find(|id| !before.contains(id)) {
+                    // Nothing draws it then, which would start it.
+                    if hidden && let Some(new) = all(self.state.read(cx)).into_iter().find(|id| !before.contains(id)) {
                         self.start_detached(&new, cx);
                     }
                 }
@@ -2131,8 +2131,9 @@ impl KeptView {
         Self { ws: ws.to_string(), view: s.view.clone(), focused: s.focused_pane_id.clone(), zoomed, overview_zoomed: s.overview.zoomed_pane_id.clone() }
     }
 
-    fn zoomed(&self) -> bool {
-        self.zoomed.is_some()
+    /// Behind a zoomed pane or the archive, which `add_pane` leaves for the workspace.
+    fn hides_new_panes(&self) -> bool {
+        self.zoomed.is_some() || self.view == Some(View::Archive)
     }
 
     fn restore(&self, s: &mut AppState) {
