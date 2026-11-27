@@ -603,7 +603,7 @@ export function Thread({ client, paneId }: { client: DesktopClient; paneId: stri
         </div>
         {pane?.background?.length ? <BgChip items={pane.background} open={picker === "bg"} onOpen={() => setPicker("bg")} /> : null}
         {pane && hasPanel(state, pane) && (
-          <button className="icon-btn" aria-label="Side panel" title="Side panel" data-on={picker === "panel" || undefined} onClick={() => (haptic(5), setPicker("panel"))}>
+          <button className="icon-btn panel-btn" aria-label="Side panel" title="Side panel" data-on={picker === "panel" || undefined} onClick={() => (haptic(5), setPicker("panel"))}>
             <Icon name="panel" size={18} />
           </button>
         )}

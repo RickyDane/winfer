@@ -443,7 +443,8 @@ textarea, input, .md, .ask-code, .ask-q p, .turn-user p, .screen-text, .tool-bod
 .bg-chip-pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: bg-pulse 1.6s ease-in-out infinite; }
 @keyframes bg-pulse { 50% { opacity: 0.3; } }
 .bg-chip-dot { width: 3px; height: 3px; border-radius: 50%; background: color-mix(in srgb, var(--subtle) 60%, transparent); }
-@media (max-width: 520px) { .bg-chip-word { display: none; } }
+/* On phones the pill takes the side panel button's room; "More" still opens the panel. */
+@media (max-width: 520px) { .bg-chip-word, .bg-chip ~ .panel-btn { display: none; } }
 .bg-list { list-style: none; margin: 0; padding: 4px 8px 10px; display: flex; flex-direction: column; gap: 2px; max-height: 60vh; overflow-y: auto; }
 .bg-list li { display: flex; align-items: center; gap: 10px; padding: 9px 8px; border-radius: var(--r-lg); }
 .bg-list-icon { flex: none; display: grid; place-items: center; width: 26px; height: 26px; border-radius: var(--r-lg); --tone: var(--accent); background: color-mix(in srgb, var(--tone) 14%, transparent); color: var(--tone); }
