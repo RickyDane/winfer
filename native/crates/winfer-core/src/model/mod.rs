@@ -409,7 +409,7 @@ impl AppState {
     pub fn new() -> Self {
         Self {
             sidebar_open: true,
-            browser_open: true,
+            browser_open: false,
             settings_page: "general".into(),
             browser_width: DEFAULT_BROWSER_WIDTH,
             sidebar_width: DEFAULT_SIDEBAR_WIDTH,
@@ -474,7 +474,8 @@ impl AppState {
             Some(_) => list_of("expandedWorkspaces").into_iter().filter(|id| workspaces.iter().any(|w| &w.id == id)).collect(),
             None => vec![self.active_workspace_id.clone()],
         };
-        self.browser_open = bool_of("browserOpen", true);
+        // The side panel starts closed on every launch, whatever was saved.
+        self.browser_open = false;
         self.agent_models = map_of("agentModels");
         self.pane_notes = map_of("paneNotes");
         self.auto_approve = list_of("autoApprove");
