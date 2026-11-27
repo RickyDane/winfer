@@ -146,6 +146,8 @@ impl Root {
             Some(t) => self.fork_step(t, cx),
         };
         let on_conductor = self.home.thread.is_none();
+        // The thread's running subagents and background shells (e.g. a release it watches), as on agent panes.
+        let bg_chip = self.render_bg_chip(&pane, c, cx);
         let header = div()
             .flex()
             .items_center()
@@ -157,6 +159,7 @@ impl Root {
             .child(tabs)
             .child(div().flex_1())
             .children(step.map(|s| div().max_w(px(260.0)).truncate().text_size(px(11.5)).text_color(c.subtle).child(s)))
+            .children(bg_chip)
             .when(on_conductor, |d| {
                 d.child(
                     div()

@@ -603,11 +603,16 @@ impl Root {
         }
     }
 
+    /// The winfer code chat behind a pane: an agent pane's, or a Home orchestrator's (hidden, no pane of its own).
+    fn chat_model(&self, pane_id: &str) -> Option<Entity<crate::code::session::CodeModel>> {
+        self.code_models.get(pane_id).cloned().or_else(|| self.home_model(pane_id))
+    }
+
     /// Running subagents and background shells for a pane (from both `winfer code` and winfer's MCP `bg` tool).
     fn running_bg_items(&self, pane_id: &str, cx: &App) -> Vec<HeaderBgItem> {
         let mut out = Vec::new();
         let mut seen = std::collections::HashSet::new();
-        if let Some(model) = self.code_models.get(pane_id) {
+        if let Some(model) = self.chat_model(pane_id) {
             let st = &model.read(cx).state;
             for t in &st.tasks {
                 if t.ev.status.as_deref() != Some("running") {
@@ -654,7 +659,7 @@ impl Root {
     /// Stops a running subagent (`winfer code` task) or background shell (MCP `bg` task) of a pane.
     pub(super) fn stop_bg_item(&mut self, pane_id: &str, id: &str, from_code: bool, cx: &mut Context<Self>) {
         if from_code {
-            if let Some(model) = self.code_models.get(pane_id) {
+            if let Some(model) = self.chat_model(pane_id) {
                 let id = id.to_string();
                 model.update(cx, |m, cx| m.send(crate::code::protocol::Cmd::StopTask(id), cx));
             }
@@ -696,7 +701,7 @@ impl Root {
     }
 
     /// Compact pill on the pane header showing running subagents and background shells.
-    fn render_bg_chip(&self, pane_id: &str, c: Colors, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(super) fn render_bg_chip(&self, pane_id: &str, c: Colors, cx: &mut Context<Self>) -> Option<AnyElement> {
         let items = self.running_bg_items(pane_id, cx);
         if items.is_empty() {
             return None;
@@ -842,7 +847,7 @@ impl Root {
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.bg_popover = None;
                         if open_code {
-                            if let Some(model) = this.code_models.get(&open_pid) {
+                            if let Some(model) = this.chat_model(&open_pid) {
                                 let id = open_id.clone();
                                 model.update(cx, |m, cx| {
                                     m.state.open_task_log(&id);
