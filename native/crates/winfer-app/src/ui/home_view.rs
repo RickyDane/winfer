@@ -63,6 +63,11 @@ impl Root {
         let view = cx.new(|cx| CodeView::new(model, app, window, cx));
         let pane = pane_id.to_string();
         cx.subscribe_in(&view, window, move |this, _, OpenLink(href), window, cx| {
+            // winfer://task/3 and winfer://pane/api/2: the orchestrator's links to its tasks and agents.
+            if let Some(target) = href.strip_prefix("winfer://") {
+                this.open_home_link(target, window, cx);
+                return;
+            }
             if href.starts_with("http://") || href.starts_with("https://") {
                 this.open_link(pane.clone(), terminal::Link::Web(href.clone()), false, window, cx);
                 return;
@@ -357,6 +362,32 @@ impl Root {
             );
         }
         sec
+    }
+
+    /// A winfer:// link in a Home chat: "task/3", "pane/api/2", "workspace/api".
+    fn open_home_link(&mut self, target: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let target = crate::ui::viewer::percent_decode(target.trim_end_matches('/'));
+        if let Some(n) = target.strip_prefix("task/") {
+            match super::home::find_task(&self.home.tasks, &serde_json::json!(n)).cloned() {
+                Some(t) => self.open_task_card(&t, window, cx),
+                None => self.toast(format!("No task {n} anymore."), cx),
+            }
+        } else if let Some(rest) = target.strip_prefix("pane/") {
+            let found = rest.rsplit_once('/').and_then(|(ws, n)| {
+                let s = self.state.read(cx);
+                let w = s.workspace_named(ws)?;
+                let i: usize = n.parse().ok()?;
+                super::home::numbered(w).get(i.checked_sub(1)?).cloned()
+            });
+            match found {
+                Some(id) => self.home_focus_pane(&id, window, cx),
+                None => self.toast(format!("No pane {rest} here."), cx),
+            }
+        } else if let Some(name) = target.strip_prefix("workspace/") {
+            if let Some(id) = self.state.read(cx).workspace_named(name).map(|w| w.id.clone()) {
+                self.execute(Command::WorkspaceSwitch(id), window, cx);
+            }
+        }
     }
 
     /// A task card was clicked: a fork's thread opens; a light task's agent gets focus.

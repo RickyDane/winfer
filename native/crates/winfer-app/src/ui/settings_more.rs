@@ -109,7 +109,9 @@ struct Inputs {
     live_model: Entity<InputState>,
     live_prompt: Entity<TextareaState>,
     writer_model: Entity<InputState>,
-    orchestrator_model: Entity<InputState>,
+    /// Settings → Home: the conductor's and the task orchestrators' winfer code models.
+    conductor_model: Entity<InputState>,
+    task_model: Entity<InputState>,
 }
 
 #[derive(Default)]
@@ -150,14 +152,17 @@ impl Root {
         let live_model = cx.new(|cx| InputState::new(window, cx).placeholder(DEFAULT_LIVE_MODEL).default_value(live_model_value));
         let live_prompt = cx.new(|cx| TextareaState::new(window, cx).soft_wrap(true).default_value(prompt_value));
         let writer_model = cx.new(|cx| InputState::new(window, cx).placeholder("CLI default").default_value(writer_value));
-        let orchestrator_value = self.voice_str("orchestratorModel", cx).unwrap_or_default();
-        let orchestrator_model = cx.new(|cx| InputState::new(window, cx).placeholder("winfer code default").default_value(orchestrator_value));
-        cx.subscribe(&orchestrator_model, |this, input, event: &InputEvent, cx| {
-            if matches!(event, InputEvent::Blur | InputEvent::PressEnter { .. }) {
-                this.set_rest("voice", "orchestratorModel", json!(input.read(cx).value().trim()), cx);
-            }
-        })
-        .detach();
+        let home = super::home::home_settings(self.state.read(cx));
+        let conductor_model = cx.new(|cx| InputState::new(window, cx).placeholder("winfer code default").default_value(home.conductor_model.unwrap_or_default()));
+        let task_model = cx.new(|cx| InputState::new(window, cx).placeholder("winfer code default").default_value(home.task_model.unwrap_or_default()));
+        for (input, key) in [(&conductor_model, "conductorModel"), (&task_model, "taskModel")] {
+            cx.subscribe(input, move |this, input, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Blur | InputEvent::PressEnter { .. }) {
+                    this.set_rest("home", key, json!(input.read(cx).value().trim()), cx);
+                }
+            })
+            .detach();
+        }
         cx.subscribe(&api_key, |_, _, _: &InputEvent, cx| cx.notify()).detach();
         cx.subscribe(&live_model, |this, input, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Blur | InputEvent::PressEnter { .. }) {
@@ -178,7 +183,7 @@ impl Root {
             }
         })
         .detach();
-        self.more.inputs = Some(Inputs { api_key, live_model, live_prompt, writer_model, orchestrator_model });
+        self.more.inputs = Some(Inputs { api_key, live_model, live_prompt, writer_model, conductor_model, task_model });
         self.refresh_more(cx);
     }
 
@@ -375,15 +380,36 @@ impl Root {
                 .child(div().flex_1().min_w_0().child("The ChatGPT plan always uses its own voice model, on the Codex CLI's login (codex login)."))
                 .child(if ready { badge(c.success, "Codex is logged in") } else { badge(c.warning, "Codex isn't logged in yet") }));
         }
-        let orchestrator_model = self.more.inputs.as_ref().unwrap().orchestrator_model.clone();
-        let running = self.has_orchestrator(cx);
         page.child(section(c, "Orchestrator", Some("works for you in the background".into())))
             .child(panel(c).overflow_hidden()
-                .child(card_row(c, "What it does", Some("Voice hands it everything that needs looking into or several steps: what changed, planning work and giving it to agents, following them up and merging. It runs winfer code with full access, without asking, except to merge, discard or close.".into()), div()))
-                .child(card_row(c, "Model", Some("A winfer code model (e.g. claude/opus). Empty uses winfer code's default. Applies to the next orchestrator.".into()), div().w(px(190.0)).child(Input::new(&orchestrator_model))).border_t_1().border_color(c.border))
-                .child(card_row(c, "Conversation", Some(if running { "Running for this workspace; it remembers what you asked.".into() } else { "Starts with your first request.".into() }), btn(c, "orchestrator-fresh", Some(IconName::RotateCcw), "Start fresh", Btn::Plain, running).on_click(cx.listener(|this, _, _, cx| {
+                .child(card_row(c, "Home's orchestrator", Some("Voice hands it everything that needs looking into or several steps, in any workspace or on any machine. Its models and conversation are in Settings → Home.".into()), btn(c, "voice-home-settings", Some(IconName::LayoutDashboard), "Home settings", Btn::Plain, true).on_click(cx.listener(|this, _, window, cx| {
+                    this.execute(super::commands::Command::Settings(Some("home".into())), window, cx);
+                })))))
+    }
+
+    /// Settings → Home: the orchestrator above every workspace.
+    pub(super) fn page_home(&mut self, c: Colors, window: &mut Window, cx: &mut Context<Self>) -> Div {
+        self.more_inputs(window, cx);
+        let inputs = self.more.inputs.as_ref().unwrap();
+        let (conductor_model, task_model) = (inputs.conductor_model.clone(), inputs.task_model.clone());
+        let home = super::home::home_settings(self.state.read(cx));
+        let running = self.has_orchestrator(cx);
+        let (launch, brief) = (home.open_on_launch, home.brief);
+        let launch_toggle = self.toggle("home-launch", launch, c, cx, move |this, cx| this.set_rest("home", "openOnLaunch", json!(!launch), cx));
+        let brief_toggle = self.toggle("home-brief", brief, c, cx, move |this, cx| this.set_rest("home", "brief", json!(!brief), cx));
+        div().flex().flex_col().gap_3()
+            .child(section(c, "Orchestrators", Some("winfer code sessions with full access".into())))
+            .child(panel(c).overflow_hidden()
+                .child(card_row(c, "What they do", Some("Home's orchestrator answers questions about every workspace and machine and turns coding work into tasks. Small tasks get one agent it follows itself; bigger ones get their own task orchestrator, which plans, runs and checks the work. They act without asking, except to merge, discard or close.".into()), div()))
+                .child(card_row(c, "Home's model", Some("A winfer code model (e.g. claude/opus). Empty uses winfer code's default. Applies to the next conversation.".into()), div().w(px(190.0)).child(Input::new(&conductor_model))).border_t_1().border_color(c.border))
+                .child(card_row(c, "Task orchestrators' model", Some("For tasks with their own orchestrator, here and on paired machines. Empty uses winfer code's default.".into()), div().w(px(190.0)).child(Input::new(&task_model))).border_t_1().border_color(c.border))
+                .child(card_row(c, "Conversation", Some(if running { "Running; it remembers what you asked, also after a restart.".into() } else { "Starts when you open Home.".into() }), btn(c, "home-fresh", Some(IconName::RotateCcw), "New chat", Btn::Plain, running).on_click(cx.listener(|this, _, _, cx| {
                     this.stop_conductor(cx);
                 }))).border_t_1().border_color(c.border)))
+            .child(section(c, "Home", None))
+            .child(panel(c).overflow_hidden()
+                .child(card_row(c, "Open on Home", Some("Start winfer on Home instead of the last workspace.".into()), launch_toggle))
+                .child(card_row(c, "Brief when I'm back", Some("When you open Home after a while away and something happened, the orchestrator sums it up (uses a little of its model's usage).".into()), brief_toggle).border_t_1().border_color(c.border)))
     }
 
     fn voice_behaviour(&mut self, c: Colors, cx: &mut Context<Self>) -> Div {

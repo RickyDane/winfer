@@ -32,6 +32,14 @@ pub struct Host {
 
 static HOST: OnceLock<Arc<Host>> = OnceLock::new();
 
+/// The role of a task orchestrator a desktop's Home starts here (shared with the desktop's own).
+const TASK_ROLE: &str = include_str!("../../winfer-app/assets/task-role.txt");
+
+/// "Task 3 · goal": a pane Home started as a task orchestrator.
+fn is_task_title(title: &str) -> bool {
+    title.strip_prefix("Task ").is_some_and(|rest| rest.contains(" · ") || rest.starts_with("· "))
+}
+
 /// This server's agents' calls waiting on another machine: request id → MCP call id.
 static TOOL_WAITS: std::sync::LazyLock<Mutex<HashMap<String, String>>> = std::sync::LazyLock::new(Default::default);
 
@@ -730,15 +738,23 @@ impl Host {
             let model = req["model"].as_str().filter(|m| !m.is_empty()).map(str::to_string);
             let effort = req["effort"].as_str().filter(|e| !e.is_empty() && *e != "default").map(str::to_string);
             let worktree = req["worktree"].as_bool();
+            // A desktop's Home started a task orchestrator here: named "Task N · goal" (how Home
+            // finds it again, and how it's known as one after a restart).
+            let custom_title = req["title"].as_str().map(str::trim).filter(|t| !t.is_empty()).map(|t| t.chars().take(120).collect::<String>());
+            let custom_title = match (req["role"].as_str(), custom_title) {
+                (Some("task"), Some(t)) if is_task_title(&t) => Some(t),
+                (Some("task"), Some(t)) => Some(format!("Task · {t}")),
+                (_, t) => t,
+            };
             if wanted == "winfer"
                 && let Some(p) = &prompt
             {
                 // A chat takes its first message as a command once it's up.
-                let id = s.add_pane(&wanted, AddPane { workspace_id: Some(ws.clone()), model, effort, worktree, ..Default::default() });
+                let id = s.add_pane(&wanted, AddPane { workspace_id: Some(ws.clone()), model, effort, worktree, custom_title, ..Default::default() });
                 self.first_messages.lock().insert(id.clone(), p.clone());
                 (id, name, ws)
             } else {
-                (s.add_pane(&wanted, AddPane { workspace_id: Some(ws.clone()), prompt, model, effort, worktree, ..Default::default() }), name, ws)
+                (s.add_pane(&wanted, AddPane { workspace_id: Some(ws.clone()), prompt, model, effort, worktree, custom_title, ..Default::default() }), name, ws)
             }
         };
         let via = client_name(peer);
@@ -752,7 +768,12 @@ impl Host {
         let (pane, settings) = {
             let s = self.state.lock();
             let Some(pane) = s.pane(id).cloned() else { return };
-            let settings = SpawnSettings::of(&s, &pane);
+            let mut settings = SpawnSettings::of(&s, &pane);
+            // A task orchestrator for a desktop's Home: autonomous, with its role.
+            if pane.provider == "winfer" && pane.custom_title.as_deref().is_some_and(is_task_title) {
+                settings.auto_approve = true;
+                settings.system_prompt = [TASK_ROLE.trim(), settings.system_prompt.trim()].into_iter().filter(|p| !p.is_empty()).collect::<Vec<_>>().join("\n\n");
+            }
             (pane, settings)
         };
         let session = SESSIONS.get_or_create(id, &self.events);
@@ -889,7 +910,7 @@ impl Host {
                         None => s.workspaces.first().map(|w| w.id.clone()),
                     }
                 };
-                let req = json!({"workspaceId": ws, "provider": a["provider"], "text": a["prompt"], "worktree": a["worktree"], "model": a["model"], "effort": a["effort"]});
+                let req = json!({"workspaceId": ws, "provider": a["provider"], "text": a["prompt"], "worktree": a["worktree"], "model": a["model"], "effort": a["effort"], "role": a["role"], "title": a["title"]});
                 let r = self.new_pane(&req, "");
                 if r["ok"] != true {
                     return Err(r["error"].as_str().unwrap_or("Couldn't start it.").to_string());
@@ -1271,4 +1292,17 @@ fn server_tools() -> Vec<Value> {
             "tests": {"type": "boolean"}, "text": {"type": "string"}
         }, "required": ["review", "action"]}}),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_task_title;
+
+    #[test]
+    fn task_orchestrators_are_known_by_their_title() {
+        assert!(is_task_title("Task 3 · Fix the flaky relay test"));
+        assert!(is_task_title("Task · something"));
+        assert!(!is_task_title("Task list cleanup"));
+        assert!(!is_task_title("Claude Code"));
+    }
 }

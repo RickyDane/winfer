@@ -20,6 +20,7 @@ const GROUPS: [(&str, &[Page]); 5] = [
     ("Agents", &[
         ("agents", "Agents", IconName::Bot, "Your agents, new panes, the system prompt, tools and review."),
         ("winfer-code", "WinferCode", IconName::SquareTerminal, "winfer's own agent: interface, model and context."),
+        ("home", "Home", IconName::LayoutDashboard, "The orchestrator above every workspace: models, launch and brief."),
     ]),
     ("AI & voice", &[
         ("accounts", "Accounts", IconName::Users, "Sign-ins and the accounts winfer switches between."),
@@ -711,6 +712,7 @@ impl Root {
                 "diagnostics" => self.page_diagnostics(c, window, cx).into_any_element(),
                 "accounts" => self.page_accounts(c, window, cx).into_any_element(),
                 "voice" => self.page_voice(c, window, cx).into_any_element(),
+                "home" => self.page_home(c, window, cx).into_any_element(),
                 "ai" => self.page_ai(c, window, cx).into_any_element(),
                 "plugins" => self.page_plugins(c, window, cx).into_any_element(),
                 "skills" => self.page_skills(c, window, cx).into_any_element(),

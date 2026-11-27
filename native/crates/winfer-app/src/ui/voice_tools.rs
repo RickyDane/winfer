@@ -98,12 +98,12 @@ pub fn registry_tools(providers: &[(String, String)]) -> Vec<Value> {
     tools
 }
 
-/// Hands a request to the orchestrator (`voice_orchestrator.rs`), the agent that works for the
-/// user in the background.
+/// Hands a request to Home's orchestrator (`home.rs`), the agent that works for the user across
+/// every workspace and machine.
 pub fn orchestrate_tool() -> Value {
     tool(
         ORCHESTRATE,
-        "Hand a request to your orchestrator, an agent working for the user in the background with full access: git, files, shell, tests, panes, the browser, earlier chats. Use it for anything that needs looking into or several steps: what changed or what an agent did, planning work and giving it to agents, reviewing and merging their work. It answers later in a [winfer] Orchestrator message.",
+        "Hand a request to Home's orchestrator, an agent working for the user across every workspace and paired machine, with full access: git, files, shell, tests, panes, tasks, the browser, earlier chats. Use it for anything that needs looking into or several steps: what changed or what an agent did, planning work and giving it to agents as tasks, reviewing and merging their work. It answers later in a [winfer] Orchestrator message.",
         json!({ "request": { "type": "string", "description": "The user's request in their words, with the context that matters" }, "fresh": { "type": "boolean", "description": "Start a new orchestrator conversation first (the user wants to start over)" } }),
         &["request"],
     )

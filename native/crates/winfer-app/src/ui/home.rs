@@ -708,7 +708,8 @@ impl Root {
             Some(HomePane::Task(t)) => self.task(t).map_or_else(|| "Task".to_string(), |t| format!("{} · {}", t.title(), t.workspace)),
             _ => "Home".to_string(),
         };
-        if self.home.voice_turn && self.live_voice_on() {
+        // While live voice runs, it speaks what the user isn't reading on Home.
+        if self.live_voice_on() && (self.home.voice_turn || !self.home_thread_on_screen(pane_id, cx)) {
             self.voice_note(format!("Orchestrator: {text}"));
             return;
         }
