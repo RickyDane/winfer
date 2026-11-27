@@ -500,7 +500,8 @@ pub struct ViewerPanel {
     conflict: bool,
     composing: Option<Entity<EditorState>>,
     comment_line: usize,
-    jump: Option<usize>,
+    /// A file and the line to put the cursor on once its source shows.
+    jump: Option<(String, usize)>,
     send_open: bool,
     poll: Option<Task<()>>,
     pdf: PdfView,
@@ -540,8 +541,10 @@ impl ViewerPanel {
     }
 
     /// Shows `path` (absolute), opening its tab; `background` leaves the side panel as it is.
+    /// A file with a preview opens in it, whatever `line` says.
     pub fn open(&mut self, path: String, line: Option<usize>, background: bool, cx: &mut Context<Self>) {
-        self.jump = line;
+        self.jump = line.map(|line| (path.clone(), line));
+        self.source = false;
         self.state.update(cx, |s, cx| {
             let groups = viewer_projects(&s.viewer.docs, &s.workspaces);
             if !s.viewer.docs.contains(&path) {
@@ -562,9 +565,8 @@ impl ViewerPanel {
             }
             cx.notify();
         });
-        if self.shown.as_ref() == Some(&path) {
-            self.apply_jump(cx);
-        }
+        // `sync` only redraws when another file is picked.
+        cx.notify();
     }
 
     fn sync(&mut self, cx: &mut Context<Self>) {
@@ -653,7 +655,6 @@ impl ViewerPanel {
                     }
                     Err(err) => Content::Failed(err),
                 };
-                this.apply_jump(cx);
                 cx.notify();
             });
         })
@@ -755,15 +756,6 @@ impl ViewerPanel {
         div().size_full().flex().flex_col().child(controls)
             .child(div().id("pdf-scroll").flex_1().min_h_0().overflow_scroll().p_3().child(surface))
             .into_any_element()
-    }
-
-    fn apply_jump(&mut self, cx: &mut Context<Self>) {
-        if self.jump.is_some() && matches!(self.content, Content::Text { .. }) {
-            if matches!(extension(self.shown.as_deref().unwrap_or_default()).as_str(), "md" | "markdown" | "mdx" | "mmd" | "mermaid") {
-                self.source = true;
-            }
-            cx.notify();
-        }
     }
 
     pub fn close(&mut self, path: &str, cx: &mut Context<Self>) {
@@ -1310,7 +1302,7 @@ impl ViewerPanel {
 
     fn render_code(&mut self, path: &str, text: SharedString, modified: u64, line_count: usize, font: SharedString, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let editor = self.sync_editor(path, &text, modified, window, cx);
-        if let Some(line) = self.jump.take() {
+        if let Some((_, line)) = self.jump.take_if(|(file, _)| file == path) {
             let pos = Position::new(line.saturating_sub(1).min(line_count.saturating_sub(1)) as u32, 0);
             editor.update(cx, |state, cx| {
                 state.unfold_at(pos, cx);
