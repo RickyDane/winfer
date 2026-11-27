@@ -19,7 +19,7 @@ pub const CONTINUE_PROMPT: &str = "The previous request stopped because the acco
 
 /// What Claude Code and Codex print when the plan's limit is reached.
 static LIMIT_TEXT: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)(usage limit reached|you've hit your (usage )?limit|you have hit your (usage )?limit|5-hour limit reached|weekly limit reached|out of extra usage)").unwrap()
+    Regex::new(r"(?i)(usage limit reached|you'?ve hit your ([\w-]+ )?limit|you have hit your ([\w-]+ )?limit|5-hour limit reached|weekly limit reached|out of extra usage)").unwrap()
 });
 
 pub fn is_limit_message(text: &str) -> bool {
@@ -794,6 +794,8 @@ mod tests {
     #[test]
     fn limit_messages_from_both_clis() {
         assert!(is_limit_message("⎿ You've hit your limit · resets 5pm"));
+        assert!(is_limit_message("You've hit your 5-hour limit · resets 1:30am (Europe/Berlin)"));
+        assert!(is_limit_message("You've hit your weekly limit"));
         assert!(is_limit_message("■ Usage limit reached. Try again later."));
         assert!(is_limit_message("Weekly limit reached"));
         assert!(!is_limit_message("Checking the rate limiter code"));

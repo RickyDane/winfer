@@ -1004,7 +1004,9 @@ impl Bridge {
                 if v["is_error"].as_bool() == Some(true) && v["subtype"] != "error_during_execution" {
                     let text = v["result"].as_str().unwrap_or("Claude Code reported an error.");
                     // A usage limit is reported (or worked around) once the bridge picks the next account.
-                    match super::usage_limit(text) {
+                    // A rejecting rate limit event already told us, whatever the wording.
+                    let limit = super::usage_limit(text).or_else(|| self.limit.as_ref().map(|_| None));
+                    match limit {
                         Some(reset) => self.limit = Some((text.to_string(), reset.or(self.limit.as_ref().and_then(|l| l.1)))),
                         None => self.emit(Ev::Error(text.to_string())),
                     }

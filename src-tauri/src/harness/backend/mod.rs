@@ -207,11 +207,15 @@ pub fn mode_change_note(from: Mode, to: Mode) -> String {
 
 /// Whether a CLI's error is its plan's usage limit, with the reset time (unix ms) if it says.
 /// Claude Code: "Claude AI usage limit reached|<unix seconds>", "You've hit your limit · resets
-/// 3pm"; Codex: "You've hit your usage limit…".
+/// 3pm", "You've hit your 5-hour limit · resets 1:30am", "…weekly limit…"; Codex: "You've hit
+/// your usage limit…".
 pub fn usage_limit(text: &str) -> Option<Option<i64>> {
     let lower = text.to_lowercase();
-    let hit = ["usage limit", "hit your limit", "limit reached", "out of extra usage", "usagelimitexceeded", "usage_limit_reached"].iter().any(|p| lower.contains(p))
-        && !lower.contains("context");
+    // "hit your <a few words> limit": 5-hour, weekly, Opus, session…
+    let hit_your = lower.split("hit your ").skip(1).any(|rest| rest.split_whitespace().take(4).any(|w| w.trim_matches(|c: char| !c.is_alphanumeric()) == "limit"));
+    let hit = hit_your
+        || ["usage limit", "limit reached", "out of extra usage", "usagelimitexceeded", "usage_limit_reached"].iter().any(|p| lower.contains(p));
+    let hit = hit && !lower.contains("context");
     hit.then(|| {
         text.rsplit_once('|')
             .and_then(|(_, t)| t.trim().parse::<i64>().ok())
@@ -781,6 +785,10 @@ mod account_tests {
         assert_eq!(usage_limit("Claude AI usage limit reached|1730000000"), Some(Some(1_730_000_000_000)));
         assert_eq!(usage_limit("You've hit your limit · resets 3pm (Europe/Berlin)"), Some(None));
         assert_eq!(usage_limit("You've hit your usage limit. Upgrade to Pro or try again later."), Some(None));
+        assert_eq!(usage_limit("You've hit your 5-hour limit · resets 1:30am (Europe/Berlin)"), Some(None));
+        assert_eq!(usage_limit("You've hit your weekly limit · resets Mon 9am"), Some(None));
+        assert_eq!(usage_limit("You've hit your Opus limit."), Some(None));
+        assert_eq!(usage_limit("You hit your stride, no limits here"), None);
         assert_eq!(usage_limit("Prompt is too long"), None);
         assert_eq!(usage_limit("context limit reached"), None);
     }
