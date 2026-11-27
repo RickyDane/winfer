@@ -269,7 +269,14 @@ impl Root {
                             ),
                     )
                     .child(div().text_size(px(12.5)).text_color(c.fg).line_clamp(2).child(t.goal.clone()))
-                    .child(div().flex().items_center().gap_1p5().text_size(px(11.0)).text_color(c.subtle).child(monogram_tile(t.workspace.rsplit('/').next().unwrap_or(&t.workspace)).size(px(16.0)).text_size(px(9.0))).child(t.workspace.clone()).child("·").child(how))
+                    .child(div().flex().items_center().gap_1p5().text_size(px(11.0)).text_color(c.subtle).child(monogram_tile(t.workspace.rsplit('/').next().unwrap_or(&t.workspace)).size(px(16.0)).text_size(px(9.0))).child(t.workspace.clone()).child("·").child(how)
+                        .children(t.model.as_deref().map(|m| {
+                            let name = crate::code::names::model_name(m, None);
+                            let name = match &t.effort { Some(e) => format!("{name} · {e}"), None => name };
+                            let tip = if t.model_note.is_empty() { name.clone() } else { format!("{name}: {}", t.model_note) };
+                            div().id(SharedString::from(format!("home-task-model-{}", t.id))).flex().items_center().gap_1p5().child("·").child(div().text_color(c.muted).child(name))
+                                .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+                        })))
                     .when(!t.summary.is_empty(), |d| d.child(div().text_size(px(11.5)).text_color(c.muted).line_clamp(2).child(t.summary.clone())))
                     .children(step.map(|s| div().flex().items_center().gap_1().text_size(px(11.0)).text_color(c.accent).child(div().size(px(5.0)).rounded_full().bg(c.accent)).child(div().truncate().child(s)))),
             );

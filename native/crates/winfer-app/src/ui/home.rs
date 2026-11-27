@@ -21,10 +21,19 @@ use crate::voice::{CONDUCTOR, HomePane, home_pane, task_pane};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashSet;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 pub(super) const CONDUCTOR_ROLE: &str = include_str!("../../assets/conductor-role.txt");
 pub(super) const TASK_ROLE: &str = include_str!("../../assets/task-role.txt");
+/// How Home's orchestrators choose models for tasks (in their system prompt, not shown to the user).
+pub(super) const ROUTING: &str = include_str!("../../assets/model-routing.md");
+
+/// The model routing guide: `<data>/home/model-routing.md` when the user wrote their own, else
+/// the built-in one.
+pub(super) fn routing_guide() -> String {
+    let own = std::path::Path::new(&home_dir()).join("model-routing.md");
+    std::fs::read_to_string(own).ok().filter(|t| !t.trim().is_empty()).unwrap_or_else(|| ROUTING.to_string())
+}
 /// What an orchestrator replies when there's nothing to tell.
 const SILENT: &str = "[silent]";
 /// Seconds (ticks) a pane's new status must hold before an orchestrator hears of it: hooks fire
@@ -119,6 +128,11 @@ pub struct HomeTask {
     pub session: Option<String>,
     /// The agent (provider id) its agents run as; None: its orchestrator picks.
     pub agent: Option<String>,
+    /// The model its agents run on (a WinferCode spec, e.g. "codex/gpt-6.1-sol"); None: default.
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    /// Why its model was last chosen or switched (shown on the card).
+    pub model_note: String,
     pub created: u64,
     pub updated: u64,
 }
@@ -146,6 +160,10 @@ pub fn find_task<'a>(tasks: &'a [HomeTask], key: &Value) -> Option<&'a HomeTask>
 
 #[derive(Default)]
 pub(super) struct Home {
+    /// list_models calls waiting for WinferCode's first model list: (call, since).
+    waiting_models: Vec<(String, String, Instant)>,
+    /// The models WinferCode last reported (kept across restarts in `home.models`).
+    models: Vec<crate::code::protocol::ModelInfo>,
     conductor: Option<Orch>,
     /// Forked tasks' orchestrators on this machine, by task id.
     forks: HashMap<String, Orch>,
@@ -282,7 +300,10 @@ pub fn home_tools(conductor: bool, agent: Option<&str>) -> Vec<Value> {
     };
     let task = json!({ "type": "string", "description": "Task number (3, \"Task 3\") or id, from list_tasks" });
     let stage = json!({ "type": "string", "enum": ["planning", "running", "checking", "needs-you", "ready", "failed", "merged", "cancelled"] });
-    let mut tools = vec![json!({ "name": "list_tasks", "description": "List Home's tasks: number, stage, workspace, how it runs (light, fork, remote), its agents and summary. Done ones (merged, cancelled) only with all: true.", "inputSchema": { "type": "object", "properties": { "all": { "type": "boolean" } } } })];
+    let model = json!({ "type": "string", "description": "A model spec from list_models (e.g. claude/opus, codex/gpt-…, agy/gemini-…), chosen with your model guide" });
+    let effort = json!({ "type": "string", "description": "Reasoning effort the model offers (list_models): low, medium, high, …; default: the model's" });
+    let mut tools = vec![json!({ "name": "list_models", "description": "List the models task agents can run on (WinferCode runs Claude, Codex/GPT and Gemini models): spec, name, effort levels, and each provider's usage left.", "inputSchema": { "type": "object", "properties": {} } })];
+    tools.push(json!({ "name": "list_tasks", "description": "List Home's tasks: number, stage, workspace, how it runs (light, fork, remote), its model, its agents and summary. Done ones (merged, cancelled) only with all: true.", "inputSchema": { "type": "object", "properties": { "all": { "type": "boolean" } } } }));
     if conductor {
         tools.extend([
             json!({ "name": "start_task", "description": "Start a coding task in a workspace and get a card for it on Home. Light (default): one agent with your prompt, which you follow yourself; give a complete standalone prompt. fork: true: a task orchestrator plans, runs and checks it there and reports to you; give the goal and what you know. Workspaces on other machines always fork, on that machine.", "inputSchema": { "type": "object", "properties": {
@@ -292,8 +313,15 @@ pub fn home_tools(conductor: bool, agent: Option<&str>) -> Vec<Value> {
                 "provider": { "type": "string", "description": provider },
                 "fork": { "type": "boolean" },
                 "worktree": { "type": "boolean", "description": "Light: its own git worktree (default true)" },
-                "model": { "type": "string" }
+                "model": model.clone(),
+                "effort": effort.clone(),
+                "reason": { "type": "string", "description": "One line: why this model (shown on the task)" }
             }, "required": ["workspace", "goal"] } }),
+            json!({ "name": "set_task_model", "description": "Switch a task's agents to another model (any provider's, for WinferCode agents) mid-run: from their next turn, WinferCode hands their conversation over, so nothing is lost. For a remote task, its orchestrator there switches them.", "inputSchema": { "type": "object", "properties": {
+                "task": task.clone(), "model": model.clone(), "effort": effort.clone(),
+                "pane": { "type": "string", "description": "Only this agent of the task (\"workspace/N\"); default: all of them" },
+                "reason": { "type": "string", "description": "One line: why (shown on the task)" }
+            }, "required": ["task", "reason"] } }),
             json!({ "name": "fork_task", "description": "Promote a light task to a forked one: a task orchestrator takes over its agent(s) and history. Use when it grows: the agent failed twice, asks design questions, or the user added scope.", "inputSchema": { "type": "object", "properties": { "task": task, "context": { "type": "string", "description": "What happened so far and what's next" } }, "required": ["task", "context"] } }),
             json!({ "name": "task_say", "description": "Send a message to a forked or remote task's orchestrator (instructions, answers, the user's wishes).", "inputSchema": { "type": "object", "properties": { "task": task, "text": { "type": "string" } }, "required": ["task", "text"] } }),
             json!({ "name": "update_task", "description": "Set a task's stage and/or one-line summary on its card.", "inputSchema": { "type": "object", "properties": { "task": task, "stage": stage, "summary": { "type": "string" } }, "required": ["task"] } }),
@@ -301,6 +329,11 @@ pub fn home_tools(conductor: bool, agent: Option<&str>) -> Vec<Value> {
         ]);
     } else {
         tools.push(json!({ "name": "update_task", "description": "Set your task's stage and/or one-line summary on its card on Home.", "inputSchema": { "type": "object", "properties": { "stage": stage, "summary": { "type": "string" } } } }));
+        tools.push(json!({ "name": "set_task_model", "description": "Switch your task's agents to another model mid-run (any provider's, for WinferCode agents): from their next turn, WinferCode hands their conversation over. New agents: pass model to spawn_agent.", "inputSchema": { "type": "object", "properties": {
+            "model": model, "effort": effort,
+            "pane": { "type": "string", "description": "Only this agent (its number in list_panes); default: all of the task's" },
+            "reason": { "type": "string", "description": "One line: why (shown on the task)" }
+        }, "required": ["reason"] } }));
     }
     tools
 }
@@ -358,6 +391,7 @@ impl Root {
         self.home.loaded = true;
         let s = self.state.read(cx);
         self.home.tasks = s.rest.get("home").and_then(|h| serde_json::from_value(h["tasks"].clone()).ok()).unwrap_or_default();
+        self.home.models = s.rest.get("home").and_then(|h| serde_json::from_value(h["models"].clone()).ok()).unwrap_or_default();
         // Panes that closed while winfer was off.
         let live: HashSet<String> = s.workspaces.iter().flat_map(|w| w.panes.iter().map(|p| p.id.clone())).collect();
         for t in &mut self.home.tasks {
@@ -451,7 +485,8 @@ impl Root {
             let mut settings = terminal::SpawnSettings::of(s, &pane);
             // Autonomous: merges, discards and closing still need the user's yes (see `orchestrator_action`).
             settings.auto_approve = true;
-            settings.system_prompt = [role.trim(), settings.system_prompt.trim()].into_iter().filter(|p| !p.is_empty()).collect::<Vec<_>>().join("\n\n");
+            let guide = routing_guide();
+            settings.system_prompt = [role.trim(), guide.trim(), settings.system_prompt.trim()].into_iter().filter(|p| !p.is_empty()).collect::<Vec<_>>().join("\n\n");
             (pane, settings)
         };
         let session = SESSIONS.get_or_create(&pane.id, &self.events);
@@ -797,6 +832,7 @@ impl Root {
     pub(super) fn tick_home(&mut self, cx: &mut Context<Self>) {
         self.load_home(cx);
         self.sync_home_mentions(cx);
+        self.tick_models(cx);
         if self.home.conductor.is_none() && self.home.forks.is_empty() && !self.home.tasks.iter().any(|t| t.stage.open()) {
             return;
         }
@@ -1010,6 +1046,213 @@ impl Root {
         !self.home.voice_turn
     }
 
+    // ---- models ----
+
+    /// The models WinferCode offers (every session lists the same ones); else the last known.
+    pub(super) fn known_models(&self, pane_id: &str, cx: &App) -> Vec<crate::code::protocol::ModelInfo> {
+        self.live_models(pane_id, cx).unwrap_or_else(|| self.home.models.clone())
+    }
+
+    fn live_models(&self, pane_id: &str, cx: &App) -> Option<Vec<crate::code::protocol::ModelInfo>> {
+        [pane_id, CONDUCTOR].iter().filter_map(|p| self.home_model(p)).chain(self.code_models.values().cloned()).map(|m| m.read(cx).state.models.clone()).find(|m| !m.is_empty())
+    }
+
+    /// A list_models call before WinferCode reported any models: answered once they arrive.
+    pub(super) fn wait_for_models(&mut self, call: &str, pane_id: &str) {
+        self.home.waiting_models.push((call.to_string(), pane_id.to_string(), Instant::now()));
+    }
+
+    /// Keeps the last model list (for the next start) and answers list_models calls waiting for it.
+    fn tick_models(&mut self, cx: &mut Context<Self>) {
+        if let Some(live) = self.live_models(CONDUCTOR, cx)
+            && live.iter().map(|m| &m.spec).ne(self.home.models.iter().map(|m| &m.spec))
+        {
+            let saved: Vec<Value> = live.iter().map(|m| json!({ "spec": m.spec, "label": m.label, "detail": m.detail, "efforts": m.efforts })).collect();
+            self.home.models = live;
+            self.update_state(cx, |s| {
+                let entry = s.rest.entry("home".to_string()).or_insert_with(|| json!({}));
+                if entry.is_object() {
+                    entry["models"] = Value::Array(saved);
+                }
+            });
+        }
+        if self.home.waiting_models.is_empty() {
+            return;
+        }
+        let ready = !self.home.models.is_empty();
+        let waiting = std::mem::take(&mut self.home.waiting_models);
+        for (call, pane, since) in waiting {
+            if ready {
+                super::agent_api::respond(&call, true, self.models_text(&pane, cx));
+            } else if since.elapsed() > Duration::from_secs(45) {
+                super::agent_api::respond(&call, false, "WinferCode hasn't reported its models. Start the task without model (the agent's default).".into());
+            } else {
+                self.home.waiting_models.push((call, pane, since));
+            }
+        }
+    }
+
+    /// A model (and effort) a WinferCode agent can run; the matching spec.
+    fn check_model(&self, model: &str, effort: Option<&str>, cx: &App) -> Result<String, String> {
+        let models = self.known_models(CONDUCTOR, cx);
+        if models.is_empty() {
+            return Ok(model.to_string());
+        }
+        let info = crate::code::names::match_model(&models, model).ok_or_else(|| format!("No model “{model}”. list_models lists them."))?;
+        if let Some(e) = effort
+            && !crate::code::names::effort_levels(info.efforts.clone()).iter().any(|l| l == e)
+        {
+            return Err(format!("{} doesn't take effort “{e}”. It offers: {}.", info.spec, crate::code::names::effort_levels(info.efforts.clone()).join(", ")));
+        }
+        Ok(info.spec.clone())
+    }
+
+    /// list_models: what task agents can run on, by provider, with each provider's usage left.
+    pub(super) fn models_text(&self, pane_id: &str, cx: &App) -> String {
+        let models = self.known_models(pane_id, cx);
+        let s = self.state.read(cx);
+        let agent = home_settings(s).task_agent;
+        let mut out = Vec::new();
+        match agent.as_deref() {
+            Some("winfer") => out.push("Task agents: WinferCode (runs any model below, and switches between them keeping context).".to_string()),
+            Some(a) => out.push(format!("Task agents: {} (the user's setting): it can only use its own provider's models; the WinferCode list below is for WinferCode agents.", s.provider_name(a))),
+            None => out.push("Task agents: your pick; WinferCode runs any model below.".to_string()),
+        }
+        if models.is_empty() {
+            out.push("WinferCode hasn't reported its models yet: try again in a moment.".into());
+            return out.join("\n");
+        }
+        let left = self.usage_by_provider(cx);
+        let mut groups: Vec<(String, Vec<&crate::code::protocol::ModelInfo>)> = Vec::new();
+        for m in &models {
+            let provider = m.spec.split('/').next().unwrap_or_default().to_string();
+            match groups.iter_mut().find(|(p, _)| *p == provider) {
+                Some((_, list)) => list.push(m),
+                None => groups.push((provider, vec![m])),
+            }
+        }
+        for (provider, list) in groups {
+            let usage = left.get(&provider).map(|l| format!(" · {:.0}% usage left", l.round())).unwrap_or_default();
+            out.push(format!("\n{}{usage}:", s.provider_name(&provider)));
+            for m in list {
+                let name = if m.label.is_empty() { crate::code::names::model_name(&m.spec, None) } else { m.label.clone() };
+                let detail = if m.detail.is_empty() { String::new() } else { format!(" · {}", m.detail) };
+                let efforts = m.efforts.as_ref().filter(|e| !e.is_empty()).map(|e| format!(" · effort: {}", e.join("/"))).unwrap_or_default();
+                out.push(format!("- {} · {name}{detail}{efforts}", m.spec));
+            }
+        }
+        out.join("\n")
+    }
+
+    /// set_task_model: switches a task's agents (all, or `pane`) to another model mid-run.
+    fn set_task_model(&mut self, task: &HomeTask, a: &Value, conductor: bool, cx: &mut Context<Self>) -> Result<String, String> {
+        let text = |k: &str| a[k].as_str().map(str::trim).filter(|v| !v.is_empty()).map(str::to_string);
+        let (model, effort, reason) = (text("model"), text("effort"), text("reason").unwrap_or_default());
+        if model.is_none() && effort.is_none() {
+            return Err("Give model and/or effort.".into());
+        }
+        let label = |m: &str| crate::code::names::model_name(m, None);
+        let target = match (&model, &effort) {
+            (Some(m), Some(e)) => format!("{} ({e})", label(m)),
+            (Some(m), None) => label(m),
+            (None, Some(e)) => format!("effort {e}"),
+            (None, None) => unreachable!(),
+        };
+        if task.mode == TaskMode::Remote {
+            // Its orchestrator runs on the other machine: it switches them there (set_model).
+            let spec = model.clone().unwrap_or_default();
+            let ask = format!("[Home] Switch this task's agents to {}{}: {reason}. Use set_model for each (their context carries over).", if spec.is_empty() { String::new() } else { format!("model {spec}") }, effort.as_ref().map(|e| format!(" effort {e}")).unwrap_or_default());
+            self.task_say(task, &ask, cx)?;
+            self.note_model(&task.id, model.as_deref(), effort.as_deref(), &reason, cx);
+            return Ok(format!("Asked {}'s orchestrator to switch its agents to {target}.", task.title()));
+        }
+        let spec = match &model {
+            Some(m) => Some(self.check_model(m, effort.as_deref(), cx)?),
+            None => None,
+        };
+        let ws = task.workspace_id.as_ref().and_then(|w| self.state.read(cx).workspaces.iter().find(|x| x.id == *w).cloned());
+        let panes: Vec<String> = match a["pane"].as_str().or_else(|| a["pane"].as_u64().map(|_| "")).map(str::trim) {
+            Some(_) => {
+                let ws = ws.as_ref().ok_or("The task's workspace isn't open anymore.")?;
+                let reference = if a["pane"].is_u64() { a["pane"].clone() } else { json!(a["pane"].as_str().unwrap_or_default().rsplit('/').next().unwrap_or_default()) };
+                let n = reference.as_u64().or_else(|| reference.as_str().and_then(|r| r.parse().ok())).ok_or("pane: an agent's number, e.g. \"api/2\".")?;
+                vec![numbered(ws).get((n as usize).wrapping_sub(1)).cloned().ok_or("No such pane. list_panes shows them.")?]
+            }
+            None => task.panes.clone(),
+        };
+        if panes.is_empty() {
+            return Err(format!("{} has no agents yet: give spawn_agent (or start_task) the model instead.", task.title()));
+        }
+        let mut done = Vec::new();
+        let mut errors = Vec::new();
+        for id in &panes {
+            let at = ws.as_ref().map_or_else(|| id.clone(), |w| address(w, id));
+            match self.code_models.get(id).cloned() {
+                Some(chat) => {
+                    chat.update(cx, |c, cx| {
+                        if let Some(m) = &spec {
+                            c.send(Cmd::SetModel(m.clone()), cx);
+                        }
+                        if let Some(e) = &effort {
+                            c.send(Cmd::SetEffort((e != "default").then(|| e.clone())), cx);
+                        }
+                    });
+                    if let Some(m) = &spec {
+                        self.update_state(cx, |s| {
+                            if let Some(p) = s.pane_mut(id) {
+                                p.model = Some(m.clone());
+                            }
+                        });
+                    }
+                    done.push(at);
+                }
+                None => {
+                    let provider = self.state.read(cx).pane(id).map(|p| self.state.read(cx).provider_name(&p.provider)).unwrap_or_default();
+                    errors.push(format!("{at} is {provider}, not WinferCode: change_model restarts it on another of {provider}'s own models"));
+                }
+            }
+        }
+        if done.is_empty() {
+            return Err(errors.join("; "));
+        }
+        self.note_model(&task.id, spec.as_deref(), effort.as_deref(), &reason, cx);
+        let ws_id = task.workspace_id.clone().unwrap_or_default();
+        let who = if conductor { "Home".to_string() } else { format!("{}'s orchestrator", task.title()) };
+        self.update_state(cx, |s| s.log_activity(&ws_id, format!("{who} switched {} to {target}: {reason}", done.join(", ")), None));
+        // A forked task's orchestrator should know its agents changed under it.
+        if conductor && task.mode == TaskMode::Fork {
+            self.queue_for(&task_pane(&task.id), format!("[winfer] Home switched your agents ({}) to {target}: {reason}", done.join(", ")), cx);
+        }
+        let mut reply = format!("{} switches to {target} from its next turn; WinferCode hands its conversation over.", done.join(", "));
+        if !errors.is_empty() {
+            reply.push_str(&format!(" Not switched: {}.", errors.join("; ")));
+        }
+        Ok(reply)
+    }
+
+    /// Remembers a task's model on its card.
+    fn note_model(&mut self, task_id: &str, model: Option<&str>, effort: Option<&str>, reason: &str, cx: &mut Context<Self>) {
+        let Some(t) = self.task_mut(task_id) else { return };
+        if let Some(m) = model {
+            t.model = Some(m.to_string());
+        }
+        if let Some(e) = effort {
+            t.effort = (e != "default").then(|| e.to_string());
+        }
+        t.model_note = reason.to_string();
+        t.updated = now_secs();
+        self.save_home(cx);
+        cx.notify();
+    }
+
+    /// The model a task's new agents start on, when it has one.
+    pub(super) fn task_model(&self, pane_id: &str) -> Option<(String, Option<String>)> {
+        match crate::voice::home_pane(pane_id) {
+            Some(crate::voice::HomePane::Task(t)) => self.task(t).and_then(|t| t.model.clone().map(|m| (m, t.effort.clone()))),
+            _ => None,
+        }
+    }
+
     /// The agent a task's orchestrator must start, when the task has one set.
     pub(super) fn task_agent(&self, pane_id: &str) -> Option<String> {
         match crate::voice::home_pane(pane_id) {
@@ -1185,6 +1428,8 @@ impl Root {
                 Ok(format!("{} updated.", t.title()))
             }),
             "start_task" if conductor => self.start_task(a, cx),
+            "list_models" => Ok(self.models_text(pane_id, cx)),
+            "set_task_model" => pick(self).and_then(|t| self.set_task_model(&t, a, conductor, cx)),
             "fork_task" if conductor => pick(self).and_then(|t| self.fork_task(&t.id, a["context"].as_str().unwrap_or_default(), cx)),
             "task_say" if conductor => pick(self).and_then(|t| self.task_say(&t, a["text"].as_str().unwrap_or_default(), cx)),
             "close_task" if conductor => pick(self).map(|t| {
@@ -1232,6 +1477,9 @@ impl Root {
                     })
                     .collect();
                 let mut line = format!("{} · {} · {} · {how} · {}", t.title(), t.stage.label(), t.workspace, t.goal);
+                if let Some(m) = &t.model {
+                    line.push_str(&format!(" · model {m}{}", t.effort.as_ref().map(|e| format!(" ({e})")).unwrap_or_default()));
+                }
                 if !agents.is_empty() {
                     line.push_str(&format!(" · agents: {}", agents.join(", ")));
                 }
@@ -1255,7 +1503,14 @@ impl Root {
         let number = self.next_task_number(cx);
         // The agent: one the user asked for in this request, else Settings → Home's.
         let agent = a["provider"].as_str().map(str::trim).filter(|p| !p.is_empty()).map(str::to_string).or_else(|| home_settings(self.state.read(cx)).task_agent);
-        let mut task = HomeTask { id: format!("t{number}"), number, goal: goal.clone(), agent: agent.clone(), created: now_secs(), updated: now_secs(), ..Default::default() };
+        let text = |k: &str| a[k].as_str().map(str::trim).filter(|v| !v.is_empty() && *v != "default").map(str::to_string);
+        let (model, effort) = (text("model"), text("effort"));
+        if let Some(m) = &model
+            && agent.as_deref() == Some("winfer")
+        {
+            self.check_model(m, effort.as_deref(), cx)?;
+        }
+        let mut task = HomeTask { id: format!("t{number}"), number, goal: goal.clone(), agent: agent.clone(), model: model.clone(), effort: effort.clone(), model_note: text("reason").unwrap_or_default(), created: now_secs(), updated: now_secs(), ..Default::default() };
         let place = self.find_workspace(target, cx)?;
         let reply = match place {
             Place::Local(ws_id, name) => {
@@ -1275,7 +1530,7 @@ impl Root {
                     }
                     task.mode = TaskMode::Light;
                     task.stage = Stage::Running;
-                    let pane = self.spawn_for_task(&ws_id, provider, &prompt, a["worktree"].as_bool().or(Some(true)), a["model"].as_str(), &task, cx)?;
+                    let pane = self.spawn_for_task(&ws_id, provider, &prompt, a["worktree"].as_bool().or(Some(true)), model.as_deref(), effort.as_deref(), &task, cx)?;
                     task.panes.push(pane.clone());
                     self.add_task(task.clone(), cx);
                     self.home_owns(CONDUCTOR, &pane, cx);
@@ -1288,7 +1543,8 @@ impl Root {
                 task.workspace = format!("{machine}/{workspace}");
                 task.machine = Some(peer.clone());
                 task.mode = TaskMode::Remote;
-                let model = a["model"].as_str().map(str::to_string).or_else(|| home_settings(self.state.read(cx)).task_model);
+                // The orchestrator there runs on the task orchestrators' model; the agents' model is in its brief.
+                let model = home_settings(self.state.read(cx)).task_model;
                 let args = json!({ "provider": "winfer", "prompt": fork_brief(&task, &prompt), "worktree": false, "workspace": workspace, "role": "task", "title": format!("{} · {goal}", task.title()), "model": model });
                 let me = crate::connect::get().map(|c| c.status().name).unwrap_or_default();
                 if !crate::connect::get().is_some_and(|c| c.is_up(&peer)) {
@@ -1325,13 +1581,13 @@ impl Root {
 
     /// Starts an agent pane for a task in a workspace here; its id.
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn spawn_for_task(&mut self, ws_id: &str, provider: &str, prompt: &str, worktree: Option<bool>, model: Option<&str>, task: &HomeTask, cx: &mut Context<Self>) -> Result<String, String> {
+    pub(super) fn spawn_for_task(&mut self, ws_id: &str, provider: &str, prompt: &str, worktree: Option<bool>, model: Option<&str>, effort: Option<&str>, task: &HomeTask, cx: &mut Context<Self>) -> Result<String, String> {
         let s = self.state.read(cx);
         let Some(p) = s.providers.iter().find(|p| p.id == provider && p.installed).cloned() else {
             let available: Vec<&str> = s.providers.iter().filter(|p| p.installed).map(|p| p.id.as_str()).collect();
             return Err(format!("Unknown or uninstalled provider “{provider}”. Available: {}.", available.join(", ")));
         };
-        let opts = AddPane { workspace_id: Some(ws_id.to_string()), prompt: Some(prompt.to_string()), worktree, model: model.map(str::to_string).filter(|m| !m.is_empty()), ..Default::default() };
+        let opts = AddPane { workspace_id: Some(ws_id.to_string()), prompt: Some(prompt.to_string()), worktree, model: model.map(str::to_string).filter(|m| !m.is_empty()), effort: effort.map(str::to_string), ..Default::default() };
         let title = task.title();
         let id = self.state.update(cx, |s, cx| {
             let id = s.add_pane(&p.id, opts);
@@ -1510,6 +1766,11 @@ fn fork_brief(task: &HomeTask, context: &str) -> String {
     if let Some(agent) = &task.agent {
         text.push_str(&format!("\n\nStart this task's agents with provider \"{agent}\" (the user's choice)."));
     }
+    if let Some(model) = &task.model {
+        let effort = task.effort.as_ref().map(|e| format!(", effort {e}")).unwrap_or_default();
+        let why = if task.model_note.is_empty() { String::new() } else { format!(" ({})", task.model_note) };
+        text.push_str(&format!("\nRun its agents on model {model}{effort}{why}; switch them mid-run when your model guide says so."));
+    }
     if !context.is_empty() {
         text.push_str(&format!("\n\n{context}"));
     }
@@ -1633,6 +1894,19 @@ mod tests {
         assert!(!fork_brief(&t, "").contains("provider"));
         t.agent = Some("codex".into());
         assert!(fork_brief(&t, "ctx").contains("provider \"codex\""));
+        assert!(!fork_brief(&t, "").contains("model"));
+        t.model = Some("agy/gemini-4-neon".into());
+        t.effort = Some("low".into());
+        t.model_note = "lots of logs to read".into();
+        assert!(fork_brief(&t, "").contains("model agy/gemini-4-neon, effort low (lots of logs to read)"));
+    }
+
+    #[test]
+    fn the_routing_guide_covers_the_families() {
+        // Hidden from the user, but every orchestrator's system prompt carries it.
+        for needle in ["claude/", "codex/", "agy/", "set_task_model", "list_models", "usage"] {
+            assert!(super::ROUTING.contains(needle), "{needle}");
+        }
     }
 
     #[test]
@@ -1662,6 +1936,13 @@ mod tests {
         assert!(names(true).contains(&"start_task".to_string()));
         assert!(!names(false).contains(&"start_task".to_string()));
         assert!(names(false).contains(&"update_task".to_string()));
+        // Both pick and switch models; only the conductor names the task.
+        for c in [true, false] {
+            assert!(names(c).contains(&"list_models".to_string()) && names(c).contains(&"set_task_model".to_string()));
+        }
+        let required = |c: bool| home_tools(c, None).into_iter().find(|t| t["name"] == "set_task_model").unwrap()["inputSchema"]["required"].clone();
+        assert_eq!(required(true), json!(["task", "reason"]));
+        assert_eq!(required(false), json!(["reason"]));
         let ui = ui_tools(&[("claude".into(), "Claude Code".into())]);
         assert!(ui.iter().find(|t| t["name"] == "merge_worktree").unwrap()["inputSchema"]["properties"]["confirmed"].is_object());
     }

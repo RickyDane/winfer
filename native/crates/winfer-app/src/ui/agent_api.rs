@@ -143,6 +143,11 @@ impl Root {
             }
             return Outcome::Done(Ok(list.to_string()));
         }
+        // WinferCode reports its models a few seconds after it starts: answer once they're in.
+        if home.is_some() && tool == "list_models" && self.known_models(pane_id, cx).is_empty() {
+            self.wait_for_models(call, pane_id);
+            return Outcome::Later;
+        }
         if home.is_some()
             && let Some(result) = self.home_task_tool(pane_id, tool, a, cx)
         {
@@ -155,6 +160,16 @@ impl Root {
             && let Some(agent) = self.task_agent(pane_id)
         {
             a["provider"] = json!(agent);
+        }
+        // ...on the task's model, unless the orchestrator chose one for this agent.
+        if tool == "spawn_agent"
+            && a["model"].as_str().is_none_or(|m| m.trim().is_empty())
+            && let Some((model, effort)) = self.task_model(pane_id)
+        {
+            a["model"] = json!(model);
+            if a["effort"].is_null() {
+                a["effort"] = json!(effort);
+            }
         }
         let a = &a;
         let (ws, me) = match self.caller(pane_id, a, cx) {
@@ -437,6 +452,8 @@ impl Root {
                     workspace_id: Some(ws.id.clone()),
                     prompt: a["prompt"].as_str().map(str::to_string),
                     worktree: a["worktree"].as_bool(),
+                    model: a["model"].as_str().map(str::trim).filter(|m| !m.is_empty() && *m != "default").map(str::to_string),
+                    effort: a["effort"].as_str().map(str::trim).filter(|e| !e.is_empty() && *e != "default").map(str::to_string),
                     split_from: Some(me.id.clone()).filter(|id| ws.panes.iter().any(|p| p.id == *id)),
                     ..Default::default()
                 };

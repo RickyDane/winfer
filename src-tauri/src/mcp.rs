@@ -67,7 +67,9 @@ fn tools() -> Value {
                 "provider": { "type": "string" },
                 "prompt": { "type": "string" },
                 "worktree": { "type": "boolean" },
-                "workspace": { "type": "string", "description": "Another workspace's name (\"machine/name\" on a paired machine); default: yours" }
+                "workspace": { "type": "string", "description": "Another workspace's name (\"machine/name\" on a paired machine); default: yours" },
+                "model": { "type": "string", "description": "The agent's model (default: its own default). WinferCode takes any provider's model spec, e.g. codex/gpt-…" },
+                "effort": { "type": "string", "description": "Reasoning effort, e.g. low, medium, high" }
             }, "required": ["provider"] }
         },
         {

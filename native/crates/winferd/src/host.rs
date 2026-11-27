@@ -34,6 +34,8 @@ static HOST: OnceLock<Arc<Host>> = OnceLock::new();
 
 /// The role of a task orchestrator a desktop's Home starts here (shared with the desktop's own).
 const TASK_ROLE: &str = include_str!("../../winfer-app/assets/task-role.txt");
+/// How it picks and switches its agents' models (the desktop's orchestrators get the same).
+const ROUTING: &str = include_str!("../../winfer-app/assets/model-routing.md");
 
 /// "Task 3 · goal": a pane Home started as a task orchestrator.
 fn is_task_title(title: &str) -> bool {
@@ -772,7 +774,7 @@ impl Host {
             // A task orchestrator for a desktop's Home: autonomous, with its role.
             if pane.provider == "winfer" && pane.custom_title.as_deref().is_some_and(is_task_title) {
                 settings.auto_approve = true;
-                settings.system_prompt = [TASK_ROLE.trim(), settings.system_prompt.trim()].into_iter().filter(|p| !p.is_empty()).collect::<Vec<_>>().join("\n\n");
+                settings.system_prompt = [TASK_ROLE.trim(), ROUTING.trim(), settings.system_prompt.trim()].into_iter().filter(|p| !p.is_empty()).collect::<Vec<_>>().join("\n\n");
             }
             (pane, settings)
         };
@@ -1125,6 +1127,29 @@ impl Host {
                 }
             }
             "spawn_agent" => self.remote_tool("", tool, a),
+            // Models: what WinferCode agents here can run, and switching one mid-run.
+            "list_models" => {
+                let models = crate::chats::config(me).map(|(_, m)| m).unwrap_or_default();
+                if models.is_empty() {
+                    Ok("No models known yet (only WinferCode agents list them).".into())
+                } else {
+                    Ok(models.iter().map(|m| format!("- {} · {} · effort: {}", m["id"].as_str().unwrap_or_default(), m["name"].as_str().unwrap_or_default(), m["efforts"].as_array().map(|e| e.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("/")).unwrap_or_default())).collect::<Vec<_>>().join("\n"))
+                }
+            }
+            "set_model" => {
+                let id = {
+                    let s = self.state.lock();
+                    let ws = s.pane(me).and_then(|p| s.workspaces.iter().find(|w| w.id == p.workspace_id)).or(s.workspaces.first());
+                    let n = a["pane"].as_u64().or_else(|| a["pane"].as_str().and_then(|t| t.rsplit('/').next()?.trim().parse().ok()));
+                    ws.and_then(|w| n.and_then(|n| ordered(w).get((n as usize).wrapping_sub(1)).map(|p| p.id.clone())))
+                };
+                let text = |k: &str| a[k].as_str().map(str::trim).filter(|v| !v.is_empty());
+                match id {
+                    Some(id) if id == me => Err("That's you: switch your agents, not yourself.".into()),
+                    Some(id) => crate::chats::set(&id, text("model"), text("effort")).map(|()| "Switches from its next turn; WinferCode hands its conversation over.".to_string()),
+                    None => Err("No such pane. list_panes shows them.".into()),
+                }
+            }
             "open_file" => {
                 let path = a["path"].as_str().unwrap_or_default().trim().to_string();
                 if path.is_empty() {
@@ -1286,6 +1311,12 @@ fn server_tools() -> Vec<Value> {
         json!({"name": "remove_workspace", "description": "Remove a workspace from this machine: its sessions close; the folder and worktrees stay. Not the one you run in.", "inputSchema": {"type": "object", "properties": {"workspace": {"type": "string", "description": "Workspace name"}}, "required": ["workspace"]}}),
         json!({"name": "new_remote_workspace", "description": "Open a workspace on a paired machine: an existing folder there (path), or a git repository it clones first (git_url). Returns the workspace's name for spawn_remote_agent.", "inputSchema": {"type": "object", "properties": workspace_props(Some(&machine)), "required": ["machine"]}}),
         json!({"name": "remove_remote_workspace", "description": "Remove a workspace from a paired machine: its sessions there close; the folder and worktrees stay.", "inputSchema": {"type": "object", "properties": {"machine": machine, "workspace": {"type": "string", "description": "Workspace name there (list_remote_panes)"}}, "required": ["machine", "workspace"]}}),
+        json!({"name": "list_models", "description": "List the models WinferCode agents on this server can run (Claude, Codex/GPT, Gemini, …): spec, name, effort levels.", "inputSchema": {"type": "object", "properties": {}}}),
+        json!({"name": "set_model", "description": "Switch a WinferCode agent here to another model and/or effort mid-run: from its next turn, its conversation is handed over to the new model.", "inputSchema": {"type": "object", "properties": {
+            "pane": {"type": ["integer", "string"], "description": "Its number in list_panes"},
+            "model": {"type": "string", "description": "A spec from list_models"},
+            "effort": {"type": "string"}
+        }, "required": ["pane"]}}),
         json!({"name": "list_reviews", "description": "List the finished work waiting for review on this server, and its merge queue: review id, agent, branch, changes, tests, summary.", "inputSchema": {"type": "object", "properties": {}}}),
         json!({"name": "review_action", "description": "Act on a review from list_reviews: merge it (through the merge queue; tests: run the tests first), run its tests, send it back to its agent with text, discard the work, or dismiss the review.", "inputSchema": {"type": "object", "properties": {
             "review": {"type": "string"}, "action": {"type": "string", "enum": ["merge", "tests", "send", "discard", "dismiss"]},

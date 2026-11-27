@@ -4,6 +4,11 @@
 (engine, tasks, tools) and `ui/home_view.rs` (the view). Roles: `assets/conductor-role.txt`, `assets/task-role.txt`.
 Differences from the design below:
 - Settings → Home → Task agent picks what tasks start (default WinferCode; "Orchestrator picks" leaves it to them). read_pane returns a WinferCode pane's transcript.
+- Models per task: start_task takes model/effort/reason, set_task_model switches a task's agents
+  mid-run (WinferCode hands the conversation to the new model, across providers), list_models shows
+  what's available with usage left. Remote task orchestrators get list_models/set_model on winferd.
+  How to choose is a hidden guide in every orchestrator's system prompt
+  (`assets/model-routing.md`; `<data>/home/model-routing.md` overrides it). The card shows the model.
 - The side panel shows only the task cards (needs you, reviews, workspaces and usage were removed).
 - Shortcut is ⌘⇧M (⌘0 resets the text size). Also in the palette, and first in the sidebar and rail.
 - "Chips when unsure" are the conductor's `ask_user` picker in Home's chat (typed requests only).

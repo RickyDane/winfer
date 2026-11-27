@@ -534,6 +534,19 @@ impl Root {
     }
 
     /// `usage_status`.
+    /// The most usage left among each provider's signed-in accounts (provider id → percent).
+    pub(super) fn usage_by_provider(&self, _cx: &App) -> std::collections::HashMap<String, f64> {
+        let now = now_ms();
+        let mut out = std::collections::HashMap::new();
+        for a in self.usage.accounts.iter().filter(|a| a.signed_in) {
+            if let Some(left) = winfer_core::usage::overall_left(self.usage.snapshots.get(&winfer_core::usage::usage_key(&a.id)), now) {
+                let best: &mut f64 = out.entry(a.provider.clone()).or_insert(left);
+                *best = best.max(left);
+            }
+        }
+        out
+    }
+
     /// Each signed-in account's overall usage left, for Home: (label, percent).
     pub(super) fn usage_left_rows(&self, cx: &App) -> Vec<(String, f64)> {
         let now = now_ms();
