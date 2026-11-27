@@ -442,7 +442,12 @@ impl CodeState {
             Ev::ReasoningEnd { id } => {
                 if !id.is_empty() {
                     if let Some(i) = find_last(&self.items, |i| matches!(i, Item::Reasoning { key, .. } if *key == id)) {
-                        if let Item::Reasoning { streaming, ended, .. } = &mut self.items[i] {
+                        if let Item::Reasoning { text, streaming, ended, .. } = &mut self.items[i] {
+                            // Nothing to show (thinking the provider left out): no empty "Thought" row.
+                            if text.trim().is_empty() {
+                                self.items.remove(i);
+                                return;
+                            }
                             *streaming = false;
                             if ended.is_none() {
                                 *ended = Some(now_ms());
@@ -868,6 +873,22 @@ mod tests {
         s.apply(ev(json!({ "type": "reasoning_delta", "id": "r", "text": "hmm" })));
         s.apply(ev(json!({ "type": "text_delta", "id": "t", "text": "ok" })));
         assert!(matches!(&s.items[0], Item::Reasoning { streaming: false, ended: Some(_), .. }));
+    }
+
+    #[test]
+    fn empty_reasoning_is_dropped_and_late_thoughts_fill_their_row_above_the_text() {
+        let mut s = CodeState::default();
+        // Thinking the provider omitted: no empty "Thought" row stays.
+        s.apply(ev(json!({ "type": "reasoning_delta", "id": "r0", "text": "" })));
+        s.apply(ev(json!({ "type": "reasoning_end", "id": "r0" })));
+        assert!(s.items.is_empty());
+        // Antigravity: the row opens empty, closes as text starts, gets its thoughts once the step is done.
+        s.apply(ev(json!({ "type": "reasoning_delta", "id": "r1", "text": "" })));
+        s.apply(ev(json!({ "type": "text_delta", "id": "t1", "text": "ok" })));
+        s.apply(ev(json!({ "type": "reasoning_delta", "id": "r1", "text": "checking" })));
+        s.apply(ev(json!({ "type": "reasoning_end", "id": "r1" })));
+        assert!(matches!(&s.items[0], Item::Reasoning { text, streaming: false, .. } if text == "checking"));
+        assert!(matches!(&s.items[1], Item::Text { .. }));
     }
 
     #[test]

@@ -814,6 +814,11 @@ struct Bridge {
     swarm_invoked: bool,
     /// True after Ultracode is toggled off following a `/swarm` turn; sends a one-shot exit note.
     swarm_exit_pending: bool,
+    /// The reasoning row opened when a model request started thinking, until an `agent_response`
+    /// step claims it. agy streams no thoughts: its transcript has them once the step is done.
+    thinking: Option<String>,
+    /// Reasoning rows of `agent_response` steps still running, by step index.
+    thought_rows: HashMap<u64, String>,
 }
 
 impl Bridge {
@@ -931,9 +936,54 @@ impl Bridge {
         for (id, _) in std::mem::take(&mut self.calls) {
             self.emit(Ev::ToolEnd { id, ok: false, output: why.into(), diff: None });
         }
+        self.settle_thinking();
         self.busy = false;
         self.queued = 0;
         self.emit(Ev::TurnDone);
+    }
+
+    /// A model request starts thinking: opens its reasoning row now, so it sits above the
+    /// response and times the silent stretch before it.
+    fn open_thinking(&mut self) {
+        if self.thinking.is_none() {
+            static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis());
+            let id = format!("r{stamp}-{seq}");
+            self.emit(Ev::ReasoningDelta { id: id.clone(), text: String::new() });
+            self.thinking = Some(id);
+        }
+    }
+
+    /// Fills a reasoning row with its step's thoughts from agy's transcript and closes it; a row
+    /// left empty is dropped.
+    fn close_thinking(&self, id: String, step: Option<u64>) {
+        if let Some(text) = step.and_then(|i| self.step_thinking(i)) {
+            self.emit(Ev::ReasoningDelta { id: id.clone(), text });
+        }
+        self.emit(Ev::ReasoningEnd { id });
+    }
+
+    /// Closes the rows still open when a turn ends or is cut short.
+    fn settle_thinking(&mut self) {
+        if let Some(id) = self.thinking.take() {
+            self.close_thinking(id, None);
+        }
+        for (step, id) in std::mem::take(&mut self.thought_rows) {
+            self.close_thinking(id, Some(step));
+        }
+    }
+
+    /// The thinking agy logged for step `index` of the conversation (`showThinking` doesn't reach
+    /// print mode; the transcript gets each step once it is done).
+    fn step_thinking(&self, index: u64) -> Option<String> {
+        let path = subagent_log_in(self.brain_dir.as_deref(), self.session.as_deref()?)?;
+        let raw = std::fs::read_to_string(path).ok()?;
+        raw.lines()
+            .rev()
+            .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+            .find(|v| v["step_index"].as_u64() == Some(index) && v["type"] == "PLANNER_RESPONSE")
+            .and_then(|v| v["thinking"].as_str().map(str::trim).filter(|t| !t.is_empty()).map(String::from))
     }
 
     fn has_running_subagents(&self) -> bool {
@@ -1559,6 +1609,7 @@ impl Bridge {
                 self.settle_subagents_on_result(ok);
                 // The result's usage is the whole turn's: the sum of its model requests. Counting it
                 // again would double the totals and make the context the sum of every request's prompt.
+                self.settle_thinking();
                 let had_step_usage = std::mem::take(&mut self.step_usage);
                 if !r["usage"].is_null() && !had_step_usage {
                     self.on_usage(&r["usage"]);
@@ -1603,12 +1654,22 @@ impl Bridge {
         }
         let mut call_completed = false;
         match s["step_type"].as_str().unwrap_or("") {
+            "user_input" if state == "DONE" && self.busy => self.open_thinking(),
             "agent_response" => {
+                if !self.thought_rows.contains_key(&index) {
+                    self.open_thinking();
+                    if let Some(id) = self.thinking.take() {
+                        self.thought_rows.insert(index, id);
+                    }
+                }
                 if let Some(text) = s["text_delta"].as_str().filter(|t| !t.is_empty()) {
                     if self.turn.streamed(text) {
                         self.emit_usage();
                     }
                     self.emit(Ev::TextDelta { id: format!("t{index}"), text: text.to_string() });
+                }
+                if !running && let Some(id) = self.thought_rows.remove(&index) {
+                    self.close_thinking(id, Some(index));
                 }
             }
             "subagent" => {
@@ -1668,6 +1729,10 @@ impl Bridge {
         }
         if call_completed && self.busy && self.calls.is_empty() && !self.turn.has_request() {
             self.turn.request_started(std::time::Instant::now());
+        }
+        // The tools are done: the next model request starts thinking.
+        if call_completed && self.busy && self.calls.is_empty() {
+            self.open_thinking();
         }
     }
 
@@ -1901,6 +1966,8 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         ultracode: opts.ultracode,
         swarm_invoked: false,
         swarm_exit_pending: false,
+        thinking: None,
+        thought_rows: HashMap::new(),
     };
     crate::harness::bg::set_mode(&b.bg_owner, b.mode);
     if let Some(err) = mcp_err {
@@ -2037,8 +2104,48 @@ mod tests {
             calls: HashMap::new(), subagents: HashMap::new(), brain_dir: None, swarm: SwarmState::default(),
             restart: false, usage: Usage::default(), step_usage: false, turn_done_tokens: 0,
             turn: TurnTokens::default(), mode: Mode::Ask, bg_owner: String::new(), asks: Arc::default(),
-            ultracode: false, swarm_invoked: false, swarm_exit_pending: false,
+            ultracode: false, swarm_invoked: false, swarm_exit_pending: false, thinking: None, thought_rows: HashMap::new(),
         }
+    }
+
+    #[test]
+    fn thinking_row_opens_before_the_response_and_fills_from_the_transcript() {
+        let brain = std::env::temp_dir().join(format!("winfer-agy-think-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&brain);
+        let log = brain.join("conv").join(".system_generated/logs/transcript.jsonl");
+        std::fs::create_dir_all(log.parent().unwrap()).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut b = test_bridge(tx, "gemini-4-neon");
+        b.brain_dir = Some(brain.clone());
+        b.session = Some("conv".into());
+        let step = |i: u64, kind: &str, state: &str, extra: Value| {
+            let mut s = json!({ "step_index": i, "step_type": kind, "state": state });
+            s.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            json!({ "event": "step_update", "conversation_id": "conv", "step_update": s })
+        };
+
+        b.on_line(&step(0, "user_input", "DONE", json!({})));
+        b.on_line(&step(1, "agent_response", "ACTIVE", json!({ "text_delta": "Hi" })));
+        std::fs::write(&log, concat!(
+            r#"{"step_index":0,"type":"USER_INPUT","content":"q"}"#, "\n",
+            r#"{"step_index":1,"type":"PLANNER_RESPONSE","thinking":"Weighing options.\n\n","content":"Hi"}"#, "\n",
+        )).unwrap();
+        b.on_line(&step(1, "agent_response", "DONE", json!({})));
+        let evs: Vec<Ev> = rx.try_iter().collect();
+        let row = match &evs[0] {
+            Ev::ReasoningDelta { id, text } if text.is_empty() => id.clone(),
+            other => panic!("thinking row first, got {other:?}"),
+        };
+        assert!(matches!(&evs[1], Ev::TextDelta { text, .. } if text == "Hi"), "{evs:?}");
+        assert!(matches!(&evs[2], Ev::ReasoningDelta { id, text } if *id == row && text == "Weighing options."), "{evs:?}");
+        assert!(matches!(&evs[3], Ev::ReasoningEnd { id } if *id == row), "{evs:?}");
+
+        // A row no step claimed (the turn ended) closes empty, for the UI to drop.
+        b.on_line(&step(2, "user_input", "DONE", json!({})));
+        b.on_line(&json!({ "event": "result", "result": { "status": "SUCCESS" } }));
+        let evs: Vec<Ev> = rx.try_iter().collect();
+        assert!(matches!((&evs[0], &evs[1]), (Ev::ReasoningDelta { id: a, .. }, Ev::ReasoningEnd { id: b }) if a == b), "{evs:?}");
+        let _ = std::fs::remove_dir_all(&brain);
     }
 
     #[test]
@@ -2255,7 +2362,8 @@ mod tests {
         b.on_line(&step("ACTIVE", None));
         b.on_line(&step("DONE", Some("a.txt")));
         b.on_line(&json!({ "event": "result", "result": { "status": "SUCCESS" } }));
-        let evs: Vec<Ev> = rx.try_iter().collect();
+        // The thinking row opened after the tool closes empty with the turn (the UI drops it).
+        let evs: Vec<Ev> = rx.try_iter().filter(|e| !matches!(e, Ev::ReasoningDelta { .. } | Ev::ReasoningEnd { .. })).collect();
         assert!(matches!(&evs[0], Ev::ToolStart { name, title, .. } if name == "Bash" && title == "ls"));
         assert!(matches!(&evs[1], Ev::ToolEnd { ok: true, output, .. } if output == "a.txt"));
         assert!(matches!(&evs[2], Ev::TurnDone));
