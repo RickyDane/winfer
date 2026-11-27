@@ -1170,8 +1170,9 @@ html[data-nav="tab"]::view-transition-new(root) { animation: vt-fade-in 0.24s va
 .android-stage { background: radial-gradient(ellipse at center, color-mix(in srgb, var(--accent) 6%, var(--app)), var(--app) 70%); }
 .android-keys { display: flex; justify-content: space-around; padding: 4px 16px calc(var(--sb) + 6px); background: var(--panel); border-top: 1px solid var(--border); }
 .android-keys .icon-btn { width: 52px; height: 40px; }
-.android-empty { overflow-y: auto; padding-bottom: 20px; }
+.android-empty { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 0 20px; }
 .android-avds { margin: 0 12px; }
+.android-avds + .android-avds { margin-top: 18px; }
 
 .term-screen .bar { flex: none; }
 .term-host { flex: 1; min-height: 0; padding: 12px 2px 0 6px; background: var(--code-bg); overflow: hidden; }

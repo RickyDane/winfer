@@ -106,7 +106,8 @@ Phone handles frames strictly in arrival order and re-requests `panes.get` every
 
 ## Side panel
 
-The phone's Panel tab reaches the desktop's side panel per workspace: its browser, the Android mirror, terminals and
+The phone's Panel tab reaches the desktop's side panel per workspace: its browser, the device mirror (Android, and a
+Mac's iOS Simulators), terminals and
 files (native desktop: `ui/mobile_panel.rs`). Requests answer with `ack {ok, value?, error?}`; requests sent without
 an `id` (input, frame acks) aren't answered. Any request renews the phone's lease; a phone silent for 45 s loses its
 streams (terminal output, frames).
@@ -128,10 +129,15 @@ Browser ops: `state {retry?}` → `{workspaceId, ready, needsInstall, installing
 pixels), `newTab {url?}` → tab id, `closeTab {tab}`, `navigate {tab, url}` (typed text becomes a URL or search),
 `history {tab, delta}` (-1 back, 1 forward, 0 reload).
 
-Android ops: `state` → `{loaded, adb, devices: [{serial, state, model, emulator}], avds, current, starting, error,
-mirror: {serial, mode, error, showing, live}}`, `watch {maxWidth}` (the mirror runs while a phone or the panel shows it),
-`unwatch`, `select {serial}`, `startAvd {name}`, `touch {kind: down|move|up, x, y}` (fractions of the screen; scrcpy
-plays them live, adb turns them into a tap or swipe), `scroll {x, y, v}`, `key {code}` (Android keycodes), `text {text}`.
+Device ops (`android.call`, frames as feed `android`, for iOS Simulators too): `state` → `{loaded, adb,
+devices: [{serial, state, model, emulator}], avds, ios: {simctl, devices: [{udid, name, runtime, state, booted}]} | null,
+current, starting, error, mirror: {serial, mode: scrcpy|stream|live|screenshots, error, showing, live, input?}}`
+(`current`, `starting` and `mirror.serial` name a simulator by udid; `ios` is a Mac's, absent from older desktops;
+`input: false` is a simulator that can only be watched), `watch {maxWidth}` (the mirror runs while a phone or the panel
+shows it), `unwatch`, `select {serial}` (adb serial or udid), `startAvd {name}`, `startSim {udid}` (boots it),
+`touch {kind: down|move|up, x, y}` (fractions of the screen; scrcpy and simulators play them live, else they become a tap
+or swipe), `scroll {x, y, v}`, `key {code}` (Android keycodes; on a simulator home, power (locks), enter, delete, tab
+and arrows work), `text {text}`.
 
 Files ops (only paths in a workspace's folder or its agents' worktrees, or open in the viewer): `docs {workspaceId}` →
 `{root, docs, groups, active}` (every file open in the viewer, as `groups: [{id, name, docs, here}]` by project — this

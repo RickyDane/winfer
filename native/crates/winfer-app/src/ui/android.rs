@@ -50,6 +50,16 @@ fn keycode(key: &str) -> Option<u32> {
     })
 }
 
+/// What a simulator gets for an Android keycode a phone sends: a button or a key; None for ones
+/// it has no equivalent of (back, recent apps, volume).
+fn simulator_key(code: u32) -> Option<Value> {
+    match code {
+        KEY_HOME => Some(json!({"kind": "button", "button": "home"})),
+        KEY_POWER => Some(json!({"kind": "button", "button": "power"})),
+        _ => ["enter", "backspace", "tab", "up", "down", "left", "right"].into_iter().find(|k| keycode(k) == Some(code)).map(|k| json!({"kind": "key", "key": k})),
+    }
+}
+
 /// Offsets of start codes (00 00 01, possibly preceded by another 00) in `buf`.
 pub fn start_codes(buf: &[u8]) -> Vec<usize> {
     let mut out = Vec::new();
@@ -1016,24 +1026,37 @@ impl AndroidPanel {
         cx.notify();
     }
 
-    /// What a phone shows: adb, the devices, emulators to start, and the device mirrored and how.
+    /// This Mac's simulator, when that's what's mirrored (a phone never reaches a paired machine's).
+    fn phone_simulator(&self) -> Option<&Hosted> {
+        self.hosted.as_ref().filter(|h| h.machine.is_none())
+    }
+
+    /// What a phone shows: adb, the devices, emulators and simulators to start, and the device
+    /// mirrored and how.
     pub fn phone_state(&self, cx: &App) -> Value {
         let status = self.status.clone().unwrap_or(Value::Null);
-        let mirror = self.mirror.as_ref().map(|m| {
-            let mode = match m.mode {
-                Mode::Scrcpy => "scrcpy",
-                Mode::Stream => "stream",
-                Mode::Screenshots => "screenshots",
-            };
-            json!({ "serial": m.serial, "mode": mode, "error": m.error, "showing": m.frames > 0, "live": m.session.is_some() })
-        });
+        let ios = self.lists.get(&None).and_then(|l| l.as_ref().ok()).map(|l| l["ios"].clone());
+        let mirror = match self.phone_simulator() {
+            // `input` is false once the stream says it takes none (no native input, AXe or idb).
+            Some(h) => Some(json!({ "serial": h.id, "mode": if h.live() { "live" } else { "screenshots" }, "error": h.error, "showing": h.frames > 0, "live": h.live(), "input": h.info.is_none() || h.input() })),
+            None => self.mirror.as_ref().map(|m| {
+                let mode = match m.mode {
+                    Mode::Scrcpy => "scrcpy",
+                    Mode::Stream => "stream",
+                    Mode::Screenshots => "screenshots",
+                };
+                json!({ "serial": m.serial, "mode": mode, "error": m.error, "showing": m.frames > 0, "live": m.session.is_some() })
+            }),
+        };
         json!({
-            "loaded": self.status.is_some(),
+            "loaded": self.status.is_some() || ios.is_some(),
             "adb": status["adb"],
             "devices": status["devices"],
             "avds": status["avds"],
+            "ios": ios,
             "current": self.current(cx).and_then(|d| match d.pick {
                 Pick::Local(serial) => Some(serial),
+                Pick::Hosted { machine: None, id, .. } => Some(id),
                 Pick::Hosted { .. } => None,
             }),
             "starting": self.starting,
@@ -1042,10 +1065,16 @@ impl AndroidPanel {
         })
     }
 
-    /// The phone works with this machine's adb devices, so it switches the panel back to them.
-    pub fn phone_select(&mut self, serial: String, cx: &mut Context<Self>) {
+    /// The phone works with this machine's devices (`id`: an adb serial or a simulator's udid), so
+    /// it switches the panel back to them.
+    pub fn phone_select(&mut self, id: String, cx: &mut Context<Self>) {
         self.pick_machine(None, cx);
-        self.pick(&Pick::Local(serial), cx);
+        // Picking a simulator whose stream stopped connects it again.
+        if self.phone_simulator().is_some_and(|h| h.id == id && h.error.is_some()) {
+            self.stop_mirror();
+        }
+        let pick = self.picks().into_iter().map(|d| d.pick).find(|p| p.id() == id).unwrap_or(Pick::Local(id));
+        self.pick(&pick, cx);
     }
 
     pub fn phone_start_avd(&mut self, name: String, cx: &mut Context<Self>) {
@@ -1053,9 +1082,22 @@ impl AndroidPanel {
         self.boot("android", name, cx);
     }
 
+    pub fn phone_start_simulator(&mut self, udid: String, cx: &mut Context<Self>) {
+        self.pick_machine(None, cx);
+        self.boot("ios", udid, cx);
+    }
+
     /// A finger on the phone's picture, as a fraction of the screen (0..1 both ways).
     pub fn phone_touch(&mut self, touch: Touch, at: (f32, f32)) {
         let at = (at.0.clamp(0.0, 1.0), at.1.clamp(0.0, 1.0));
+        if self.phone_simulator().is_some() {
+            let action = match touch {
+                Touch::Down => "down",
+                Touch::Move => "move",
+                Touch::Up => "up",
+            };
+            return self.hosted_input(json!({ "kind": "touch", "action": action, "x": at.0, "y": at.1 }));
+        }
         if let Some(s) = self.session() {
             s.touch(touch, at);
             return;
@@ -1078,18 +1120,30 @@ impl AndroidPanel {
         }
     }
 
-    /// Wheel notches at a point (scrcpy only; adb has swipes for that).
+    /// Wheel notches at a point (scrcpy and simulators; adb has swipes for that).
     pub fn phone_scroll(&self, at: (f32, f32), v: f32) {
+        if self.phone_simulator().is_some() {
+            return self.hosted_input(json!({ "kind": "scroll", "x": at.0, "y": at.1, "h": 0.0, "v": v }));
+        }
         if let Some(s) = self.session() {
             s.scroll(at, 0.0, v);
         }
     }
 
     pub fn phone_key(&self, code: u32) {
+        if self.phone_simulator().is_some() {
+            if let Some(input) = simulator_key(code) {
+                self.hosted_input(input);
+            }
+            return;
+        }
         self.key(code);
     }
 
     pub fn phone_text(&self, text: &str) {
+        if self.phone_simulator().is_some() {
+            return self.hosted_input(json!({ "kind": "text", "text": text }));
+        }
         match self.session() {
             Some(s) => s.text(text),
             None => self.send(json!({ "kind": "text", "text": text })),
@@ -1538,7 +1592,48 @@ impl Render for AndroidPanel {
 
 #[cfg(test)]
 mod tests {
-    use super::{keycode, matches_query, start_codes, to_device};
+    use super::{keycode, matches_query, simulator_key, start_codes, to_device};
+
+    #[gpui_kit::test]
+    fn a_phone_sees_and_picks_this_macs_simulators(cx: &mut gpui_kit::TestAppContext) {
+        use super::AndroidPanel;
+        use crate::model::AppState;
+        use gpui_kit::AppContext;
+        use serde_json::json;
+
+        cx.update(gpui_kit::init);
+        let (panel, vcx) = cx.add_window_view(|_, cx| {
+            let app = cx.new(|_| AppState::new());
+            let mut panel = AndroidPanel::new(app, cx);
+            panel.status = Some(json!({"adb": true, "devices": [{"serial": "a1", "model": "Pixel 9", "state": "device"}], "avds": []}));
+            let sim = |udid: &str, booted: bool| json!({"udid": udid, "name": udid, "runtime": "iOS 18.2", "booted": booted});
+            panel.lists.insert(None, Ok(json!({"ios": {"simctl": true, "devices": [sim("S1", true), sim("S2", false)]}})));
+            panel
+        });
+        vcx.run_until_parked();
+        let state = vcx.read(|cx| panel.read(cx).phone_state(cx));
+        assert_eq!(state["current"], "a1");
+        assert_eq!(state["ios"]["devices"][1]["udid"], "S2");
+
+        vcx.update(|_, cx| panel.update(cx, |p, cx| p.phone_select("S1".into(), cx)));
+        assert_eq!(vcx.read(|cx| panel.read(cx).phone_state(cx))["current"], "S1");
+        vcx.update(|_, cx| panel.update(cx, |p, cx| p.phone_select("a1".into(), cx)));
+        assert_eq!(vcx.read(|cx| panel.read(cx).phone_state(cx))["current"], "a1");
+    }
+
+    #[test]
+    fn a_phones_keys_on_a_simulator() {
+        use serde_json::json;
+
+        assert_eq!(simulator_key(3), Some(json!({"kind": "button", "button": "home"})));
+        assert_eq!(simulator_key(26), Some(json!({"kind": "button", "button": "power"})));
+        assert_eq!(simulator_key(67), Some(json!({"kind": "key", "key": "backspace"})));
+        assert_eq!(simulator_key(19), Some(json!({"kind": "key", "key": "up"})));
+        // Back, recent apps and volume have no equivalent.
+        for code in [4, 187, 24, 25] {
+            assert_eq!(simulator_key(code), None);
+        }
+    }
 
     #[gpui_kit::test]
     fn the_device_picker_searches_and_picks(cx: &mut gpui_kit::TestAppContext) {

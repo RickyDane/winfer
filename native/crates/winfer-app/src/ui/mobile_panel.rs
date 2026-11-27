@@ -1,11 +1,12 @@
 //! The side panel on the phone (docs/mobile/protocol.md, "Side panel"): a workspace's browser,
-//! the Android mirror, terminals and files, each usable from the phone.
+//! the device mirror (Android and iOS Simulators), terminals and files, each usable from the phone.
 //!
 //! Terminals are Winfer Connect's `term.*` stream with the phone as peer `phone:<device>`. The
 //! browser and the Android mirror stream JPEG frames (`panel.frame`), each acknowledged by the
 //! phone (`panel.frameDone`) before the next goes out, so the rate follows what its relay carries.
 //! Browser frames are screenshots of the tab's viewport (the panel's own screencast stays as it is);
-//! Android frames are the mirror's pictures, which runs while a phone watches it.
+//! Android frames (feed "android", simulators' too) are the mirror's pictures, which runs while a
+//! phone watches it.
 //! A phone that stops asking (it asks at least every 20 s while open) loses its streams.
 
 use super::*;
@@ -460,6 +461,10 @@ impl Root {
             }
             "startAvd" => {
                 self.android.update(cx, |a, cx| a.phone_start_avd(str_of(req, "name"), cx));
+                answer(ok(Value::Null))
+            }
+            "startSim" => {
+                self.android.update(cx, |a, cx| a.phone_start_simulator(str_of(req, "udid"), cx));
                 answer(ok(Value::Null))
             }
             "touch" => {

@@ -234,7 +234,7 @@ export type PhoneMsg =
   | ({ t: "files.call"; op: FilesOp } & Record<string, unknown>);
 
 export type BrowserOp = "state" | "tabs" | "install" | "select" | "watch" | "unwatch" | "input" | "newTab" | "closeTab" | "navigate" | "history";
-export type AndroidOp = "state" | "watch" | "unwatch" | "select" | "startAvd" | "touch" | "scroll" | "key" | "text";
+export type AndroidOp = "state" | "watch" | "unwatch" | "select" | "startAvd" | "startSim" | "touch" | "scroll" | "key" | "text";
 export type FilesOp = "docs" | "list" | "read" | "write" | "comment" | "open" | "close";
 
 /** `panel.get`: a workspace's terminals (its side terminal first, then its terminal panes). */
@@ -281,15 +281,27 @@ export interface AndroidDevice {
   emulator?: boolean;
 }
 
+export interface IosSimulator {
+  udid: string;
+  name: string;
+  runtime?: string;
+  booted: boolean;
+}
+
+/** The devices mirror: Android devices and emulators, and (a Mac's) iOS Simulators. */
 export interface AndroidState {
   loaded: boolean;
   adb: boolean | null;
   devices: AndroidDevice[] | null;
   avds: string[] | null;
+  /** A Mac desktop's simulators; absent from older desktops, null until listed (or not a Mac). */
+  ios?: { simctl: boolean; devices: IosSimulator[] } | null;
+  /** The mirrored device: an adb serial or a simulator's udid. */
   current: string | null;
   starting: string | null;
   error: string | null;
-  mirror: { serial: string; mode: "scrcpy" | "stream" | "screenshots"; error: string | null; showing: boolean; live: boolean } | null;
+  /** `input` false: a simulator that only shows (nothing on the Mac can tap or type). */
+  mirror: { serial: string; mode: "scrcpy" | "stream" | "live" | "screenshots"; error: string | null; showing: boolean; live: boolean; input?: boolean } | null;
 }
 
 export interface FileEntry {

@@ -1,4 +1,4 @@
-// The Panel tab: the desktop's side panel for a workspace — its browser, the Android mirror,
+// The Panel tab: the desktop's side panel for a workspace — its browser, the device mirror,
 // terminals and files — each opening full screen.
 import { useState } from "react";
 import type { ClientState, DesktopClient } from "../client";
@@ -14,7 +14,7 @@ import { call, savedWorkspace, saveWorkspace, usePoll } from "./panelKit";
 type ModuleId = "browser" | "android" | "terminal" | "files";
 const MODULES: { id: ModuleId; label: string; icon: IconName; text: string }[] = [
   { id: "browser", label: "Browser", icon: "globe", text: "The workspace's tabs, live" },
-  { id: "android", label: "Android", icon: "phone", text: "Devices and emulators" },
+  { id: "android", label: "Devices", icon: "phone", text: "Android and iOS simulators" },
   { id: "terminal", label: "Terminal", icon: "terminal", text: "The workspace's shell" },
   { id: "files", label: "Files", icon: "file", text: "Browse, read and edit" },
 ];
@@ -306,7 +306,7 @@ function AllWorkspaces({ client }: { client: DesktopClient }) {
   return (
     <main className="panel-hub panel-all">
       <section className="group">
-        <h2>Android</h2>
+        <h2>Devices</h2>
         <div className="group-card">
           {anchors.map((a) => (
             <button key={a.id} className="row" onClick={() => openModule(a.id, "android", "/panel")}>
@@ -314,7 +314,7 @@ function AllWorkspaces({ client }: { client: DesktopClient }) {
                 <Icon name="phone" size={16} />
               </span>
               <span className="row-main">
-                <b>Devices and emulators</b>
+                <b>Emulators and simulators</b>
                 <span>{several && a.machineName ? `On ${a.machineName}` : "On the desktop"}</span>
               </span>
               <Icon name="right" size={16} />

@@ -1,5 +1,5 @@
 // `?mock=1`: the side panel of the in-memory desktop — a browser that draws its tabs, an Android
-// emulator, a terminal that echoes and a few files — so the panel screens run without a desktop.
+// emulator and an iOS Simulator, a terminal that echoes and a few files — so the panel screens run without a desktop.
 import type { DesktopMsg, PhoneMsg } from "./protocol";
 
 type Emit = (msg: DesktopMsg) => void;
@@ -30,6 +30,11 @@ export class MockPanel {
   private docs = [`${ROOT}/README.md`, "/Users/me/.claude/plans/mobile-panel.md"];
   private line = "";
   private avdStarted = false;
+  private device: string | null = null;
+  private sims = [
+    { udid: "SIM-16", name: "iPhone 16", runtime: "iOS 18.2", booted: true },
+    { udid: "SIM-AIR", name: "iPad Air", runtime: "iOS 18.2", booted: false },
+  ];
 
   constructor(private emit: Emit) {}
 
@@ -161,22 +166,33 @@ export class MockPanel {
       case "android.call":
         switch (msg.op) {
           case "state":
-          case "watch":
+          case "watch": {
             if (msg.op === "watch") this.watch("android");
+            const devices = this.avdStarted ? [{ serial: "emulator-5554", state: "device", model: "Pixel 8", emulator: true }] : [];
+            const current = this.device ?? devices[0]?.serial ?? this.sims.find((d) => d.booted)?.udid ?? null;
+            const sim = this.sims.some((d) => d.udid === current);
             return {
               value: {
                 loaded: true,
                 adb: true,
-                devices: this.avdStarted ? [{ serial: "emulator-5554", state: "device", model: "Pixel 8", emulator: true }] : [],
+                devices,
                 avds: ["Pixel_8_API_35"],
-                current: this.avdStarted ? "emulator-5554" : null,
+                ios: { simctl: true, devices: this.sims.map((d) => ({ ...d })) },
+                current,
                 starting: null,
                 error: null,
-                mirror: this.avdStarted ? { serial: "emulator-5554", mode: "scrcpy", error: null, showing: true, live: true } : null,
+                mirror: current ? { serial: current, mode: sim ? "live" : "scrcpy", error: null, showing: true, live: true, input: true } : null,
               },
             };
+          }
+          case "select":
+            this.device = m.serial as string;
+            return {};
           case "startAvd":
             this.avdStarted = true;
+            return {};
+          case "startSim":
+            this.sims = this.sims.map((d) => (d.udid === m.udid ? { ...d, booted: true } : d));
             return {};
           case "unwatch":
             this.unwatch();
