@@ -28,6 +28,8 @@ pub struct UsageStore {
     pub poll: HashMap<String, PollState>,
     /// Usage keys with a request currently in flight (deduplicates overlapping refreshes).
     pub in_flight: std::collections::HashSet<String>,
+    /// Usage keys with a banked reset being redeemed.
+    pub redeeming: std::collections::HashSet<String>,
 }
 
 impl UsageStore {
@@ -360,9 +362,10 @@ impl Root {
         .detach();
     }
 
-    fn record_usage(&mut self, snapshot: Snapshot, cx: &mut Context<Self>) {
+    fn record_usage(&mut self, mut snapshot: Snapshot, cx: &mut Context<Self>) {
         let now = now_ms();
         let key = snapshot.provider.clone();
+        snapshot.keep_resets(self.usage.snapshots.get(&key));
         let mut exhausted = Vec::new();
         for w in &snapshot.windows {
             let points = self.usage.samples.entry(window_key(&key, w)).or_default();
@@ -387,7 +390,7 @@ impl Root {
                         if self.usage.accounts.iter().filter(|a| a.provider == provider && a.enabled).count() > 1 {
                             break;
                         }
-                        self.limit_reached(&provider, format!("{name}: {} limit reached{reset}", w.label.to_lowercase()), snapshot.reset_credits.unwrap_or(0), cx);
+                        self.limit_reached(&key, format!("{name}: {} limit reached{reset}", w.label.to_lowercase()), snapshot.banked_resets(now), cx);
                     } else {
                         self.toast(format!("{name}: {:.0}% of the {} limit left{reset}", left, w.label.to_lowercase()), cx);
                     }
@@ -417,7 +420,7 @@ impl Root {
                 state.last_error = None;
                 state.error_kind = None;
             }
-            self.record_usage(Snapshot { provider: key, windows, at: now, reset_credits: None }, cx);
+            self.record_usage(Snapshot { provider: key, windows, at: now, reset_credits: None, resets: Vec::new() }, cx);
         }
     }
 
@@ -516,6 +519,11 @@ impl Root {
         if let Some(t) = tightest(Some(snapshot), now) {
             lines.push(format!("Least left: {}, {}%.", t.label, round1(left_now(t, now))));
         }
+        let banked = snapshot.banked_resets(now);
+        if banked > 0 {
+            let expiry = snapshot.live_resets(now).first().and_then(|r| r.expires_at).map_or(String::new(), |e| format!(" (the next expires {})", at_text(e, now)));
+            lines.push(format!("Banked rate limit resets: {banked}{expiry}. Only the user can use one, from winfer's usage popover."));
+        }
         if age > 30.0 * 60_000.0 {
             lines.push("These numbers may be out of date: no agent has reported usage for a while.".to_string());
         }
@@ -603,6 +611,90 @@ impl Root {
             );
         }
         row
+    }
+
+    /// Banked rate limit resets for one agent's accounts (`keys`): Codex's with a button to use
+    /// each; Claude shows its own only to Claude's apps, so winfer hands over to Claude Code.
+    /// `remote`: another machine's numbers, to look at only.
+    pub(super) fn render_banked_resets(&self, provider: &str, keys: &[String], remote: bool, c: Colors, cx: &mut Context<Self>) -> Option<Div> {
+        let claude = provider == "claude";
+        if !claude && provider != "codex" {
+            return None;
+        }
+        // Claude's are redeemed here and now, so there's nothing to say about another machine's.
+        if claude && remote {
+            return None;
+        }
+        let now = now_ms();
+        // A removed account's cached reading mustn't get a button.
+        let keys: Vec<&String> = keys.iter().filter(|k| !k.contains(':') || self.usage.accounts.iter().any(|a| usage_key(&a.id) == **k)).collect();
+        let multi = keys.len() > 1;
+        let button = |id: String, label: SharedString, busy: bool| {
+            div().id(SharedString::from(id)).flex_shrink_0().h(px(24.0)).flex().items_center().px_2p5().rounded_md().border_1().border_color(c.edge).text_size(px(11.5)).text_color(c.fg)
+                .when(!busy, |d| d.cursor_pointer().hover(move |d| d.bg(c.hover)))
+                .when(busy, |d| d.opacity(0.6))
+                .child(if busy { "Using…".into() } else { label })
+        };
+        let row = |title: String, detail: String| {
+            div().flex().items_center().gap_2()
+                .child(div().flex_1().min_w_0().flex().flex_col()
+                    .child(div().text_size(px(12.0)).text_color(c.fg).child(title))
+                    .when(!detail.is_empty(), |d| d.child(div().text_size(px(11.0)).text_color(c.subtle).child(detail))))
+        };
+        let mut card = div().flex().flex_col().gap_2().rounded_lg().border_1().border_color(c.edge).bg(c.panel).p_3()
+            .child(div().text_size(px(11.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.subtle).child("BANKED RESETS"));
+        if claude {
+            let mut buttons = div().flex().flex_wrap().gap_2();
+            for &key in &keys {
+                if self.usage.accounts.iter().any(|a| usage_key(&a.id) == *key && !a.signed_in) {
+                    continue;
+                }
+                let label = if multi { account_name(key, &self.usage.accounts) } else { "Open /limit-reset".into() };
+                let open = key.clone();
+                buttons = buttons.child(button(format!("claude-reset-{key}"), label.into(), false)
+                    .on_click(cx.listener(move |this, _, window, cx| this.execute(super::commands::Command::ClaudeLimitReset(open.clone()), window, cx))));
+            }
+            let hint = if multi { "Claude only shows these to its own apps. Open /limit-reset in Claude Code for:" } else { "Claude only shows these to its own apps. Check and use them in Claude Code." };
+            return Some(card.child(div().text_size(px(11.0)).text_color(c.subtle).child(hint)).child(buttons));
+        }
+        let mut shown = false;
+        for &key in &keys {
+            let account = multi.then(|| account_name(key, &self.usage.accounts));
+            let Some(snapshot) = self.usage.snapshots.get(key).filter(|s| s.reset_credits.is_some()) else { continue };
+            shown = true;
+            if let Some(account) = account {
+                card = card.child(div().text_size(px(11.0)).font_weight(FontWeight::MEDIUM).text_color(c.muted).child(account));
+            }
+            let banked = snapshot.banked_resets(now);
+            if banked == 0 {
+                card = card.child(div().text_size(px(11.5)).text_color(c.subtle).child("None banked."));
+                continue;
+            }
+            let busy = self.usage.redeeming.contains(key);
+            let live = snapshot.live_resets(now);
+            // The list couldn't be read: one button, and Codex picks which.
+            let entries: Vec<(Option<String>, String, String)> = if live.is_empty() {
+                vec![(None, format!("{banked} banked reset{}", if banked == 1 { "" } else { "s" }), String::new())]
+            } else {
+                live.iter().map(|r| {
+                    let expiry = r.expires_at.map(|e| format!("Use by {} (in {})", short_when(e, now), duration(e - now)));
+                    let detail = [r.description.clone(), expiry].into_iter().flatten().collect::<Vec<_>>().join(" · ");
+                    (Some(r.id.clone()), r.title.clone().unwrap_or_else(|| "Limit reset".into()), detail)
+                }).collect()
+            };
+            for (idx, (credit, title, detail)) in entries.into_iter().enumerate() {
+                let mut line = row(title, detail);
+                if !remote {
+                    let key = key.clone();
+                    let id = format!("codex-reset-{key}-{idx}");
+                    line = line.child(button(id, "Use".into(), busy).when(!busy, |d| d.on_click(cx.listener(move |this, _, window, cx| {
+                        this.execute(super::commands::Command::RedeemReset { key: key.clone(), credit: credit.clone() }, window, cx)
+                    }))));
+                }
+                card = card.child(line);
+            }
+        }
+        shown.then_some(card)
     }
 
     pub(super) fn render_usage_popover(&self, c: &Colors, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -697,6 +789,10 @@ impl Root {
             }
             list = list.child(rows);
         }
+        let keys = group_limit_keys(&self.usage.snapshots, &self.usage.accounts).into_iter().find(|(p, _)| *p == provider).map(|(_, keys)| keys).unwrap_or_default();
+        if let Some(resets) = self.render_banked_resets(&provider, &keys, false, c, cx) {
+            list = list.child(resets);
+        }
         let busy = self.usage.is_refreshing();
         let refresh = div().id("usage-refresh").flex().items_center().gap_1p5().h(px(26.0)).px_2().rounded_md().text_size(px(11.5)).text_color(c.muted)
             .when(!busy, |d| d.cursor_pointer().hover(move |d| d.bg(c.hover).text_color(c.fg)).on_click(cx.listener(|this, _, _, cx| this.refresh_usage_manual(cx))))
@@ -716,7 +812,7 @@ impl Root {
                     cx.notify();
                 }))
                 .child(
-                    div().id("usage-popover").absolute().top(px(40.0)).right(px(120.0)).w(px(340.0)).flex().flex_col().gap_3().rounded(px(12.0)).border_1().border_color(c.edge).bg(c.raised).shadow_2xl().p_4()
+                    div().id("usage-popover").absolute().top(px(40.0)).right(px(120.0)).w(px(340.0)).max_h(relative(0.94)).overflow_y_scroll().flex().flex_col().gap_3().rounded(px(12.0)).border_1().border_color(c.edge).bg(c.raised).shadow_2xl().p_4()
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(div().flex().items_center().gap_2()
                             .child(div().size(px(26.0)).flex().items_center().justify_center().rounded_lg().bg(c.hover).child(crate::ui::code_pickers::mark(c, &provider, 14.0, 1.0)))
@@ -735,14 +831,15 @@ impl Root {
         DEMO.store(true, std::sync::atomic::Ordering::Relaxed);
         let now = now_ms();
         let window = |kind: &str, label: &str, used: f64, hours: f64| UsageWindow { kind: kind.into(), label: label.into(), used_percent: used, resets_at: Some(now + hours * 3_600_000.0) };
-        self.usage.snapshots.insert("claude".into(), Snapshot { provider: "claude".into(), windows: vec![window("session", "5-hour", 78.0, 2.5), window("week", "Weekly", 36.0, 60.0)], at: now, reset_credits: None });
-        self.usage.snapshots.insert("codex".into(), Snapshot { provider: "codex".into(), windows: vec![window("session", "5-hour", 22.0, 3.0), window("week", "Weekly", 91.0, 30.0)], at: now, reset_credits: None });
+        self.usage.snapshots.insert("claude".into(), Snapshot { provider: "claude".into(), windows: vec![window("session", "5-hour", 78.0, 2.5), window("week", "Weekly", 36.0, 60.0)], at: now, reset_credits: None, resets: Vec::new() });
+        let reset = |id: &str, days: f64| winfer_core::usage::BankedReset { id: id.into(), title: Some("Full reset (Weekly + 5 hr)".into()), description: None, expires_at: Some(now + days * 86_400_000.0) };
+        self.usage.snapshots.insert("codex".into(), Snapshot { provider: "codex".into(), windows: vec![window("session", "5-hour", 22.0, 3.0), window("week", "Weekly", 91.0, 30.0)], at: now, reset_credits: Some(2), resets: vec![reset("demo-1", 4.0), reset("demo-2", 21.0)] });
         self.usage.samples.insert(format!("claude:session:{}", (now + 2.5 * 3_600_000.0) as i64), vec![(now - 3_600_000.0, 50.0), (now, 78.0)]);
         // Three Claude Code accounts with their own readings.
         let account = |id: &str, label: &str, email: Option<&str>| Account { id: id.into(), provider: "claude".into(), label: label.into(), enabled: true, signed_in: true, email: email.map(str::to_string), exhausted_until: None, dir: String::new() };
         self.usage.accounts = vec![account("a1", "Default", Some("dane@example.com")), account("a2", "Account 2", Some("work@example.org")), account("a3", "Account 3", None)];
         for (id, session, week) in [("a1", 100.0, 41.0), ("a2", 99.0, 12.0), ("a3", 35.0, 60.0)] {
-            self.usage.snapshots.insert(usage_key(id), Snapshot { provider: "claude".into(), windows: vec![window("session", "5-hour", session, 6.3), window("week", "Weekly", week, 70.0)], at: now, reset_credits: None });
+            self.usage.snapshots.insert(usage_key(id), Snapshot { provider: "claude".into(), windows: vec![window("session", "5-hour", session, 6.3), window("week", "Weekly", week, 70.0)], at: now, reset_credits: None, resets: Vec::new() });
         }
         self.usage.popover = Some("claude".into());
         cx.notify();
@@ -801,7 +898,7 @@ mod tests {
     #[test]
     fn pooled_averages_counted_accounts_resetting_with_the_first() {
         let acc = |id: &str, enabled: bool| Account { id: id.into(), provider: "claude".into(), label: id.into(), enabled, signed_in: true, email: None, exhausted_until: None, dir: String::new() };
-        let snap = |used: [f64; 2], resets: f64, at: f64| Snapshot { provider: "claude".into(), windows: vec![window("session", used[0], Some(resets)), window("week", used[1], None)], at, reset_credits: None };
+        let snap = |used: [f64; 2], resets: f64, at: f64| Snapshot { provider: "claude".into(), windows: vec![window("session", used[0], Some(resets)), window("week", used[1], None)], at, reset_credits: None, resets: Vec::new() };
         let snapshots: HashMap<String, Snapshot> = [
             ("claude".to_string(), snap([100.0, 0.0], 5000.0, 10.0)),
             ("claude:a2".to_string(), snap([26.0, 26.0], 9000.0, 20.0)),
@@ -830,7 +927,7 @@ mod tests {
 
     #[test]
     fn reset_windows_start_over_and_tightest_wins() {
-        let s = Snapshot { provider: "claude".into(), windows: vec![window("session", 90.0, Some(1000.0)), window("week", 50.0, None)], at: 0.0, reset_credits: None };
+        let s = Snapshot { provider: "claude".into(), windows: vec![window("session", 90.0, Some(1000.0)), window("week", 50.0, None)], at: 0.0, reset_credits: None, resets: Vec::new() };
         assert_eq!(left_now(&s.windows[0], 2000.0), 100.0);
         assert_eq!(tightest(Some(&s), 2000.0).unwrap().kind, "week");
         assert_eq!(tightest(Some(&s), 500.0).unwrap().kind, "session");
@@ -838,7 +935,7 @@ mod tests {
 
     #[test]
     fn credits_only_once_the_plan_is_out() {
-        let s = Snapshot { provider: "x".into(), windows: vec![window("week", 100.0, None), window("month-credit", 20.0, None)], at: 0.0, reset_credits: None };
+        let s = Snapshot { provider: "x".into(), windows: vec![window("week", 100.0, None), window("month-credit", 20.0, None)], at: 0.0, reset_credits: None, resets: Vec::new() };
         assert_eq!(tightest(Some(&s), 0.0).unwrap().kind, "month-credit");
     }
 
@@ -928,7 +1025,7 @@ mod tests {
                 mk("week-1", "Weekly (Claude and GPT models)", 59.0, Some(40_000.0)),
             ],
             at: now,
-            reset_credits: None,
+            reset_credits: None, resets: Vec::new(),
         };
         let (left, reset) = overall_summary(Some(&agy), now).unwrap();
         assert!((left - 15.5).abs() < 1e-9);
@@ -950,7 +1047,7 @@ mod tests {
                 mk("week-1", "Weekly (Claude and GPT models)", 59.0, Some(40_000.0)),
             ],
             at: now,
-            reset_credits: None,
+            reset_credits: None, resets: Vec::new(),
         };
         assert_eq!(overall_left(Some(&agy_out), now), Some(0.0));
 
@@ -963,7 +1060,7 @@ mod tests {
                 mk("gemini", "Gemini models", 69.0, Some(5_000.0)),
             ],
             at: now,
-            reset_credits: None,
+            reset_credits: None, resets: Vec::new(),
         };
         let (legacy_left, legacy_reset) = overall_summary(Some(&agy_legacy), now).unwrap();
         assert!((legacy_left - 15.5).abs() < 1e-9);
@@ -978,7 +1075,7 @@ mod tests {
                 mk("week-opus", "Weekly (Opus)", 20.0, Some(50_000.0)),
             ],
             at: now,
-            reset_credits: None,
+            reset_credits: None, resets: Vec::new(),
         };
         assert_eq!(overall_summary(Some(&claude), now), Some((0.0, Some(5_000.0))));
 
@@ -991,7 +1088,7 @@ mod tests {
                 mk("month-credit", "Monthly credit", 20.0, Some(90_000.0)),
             ],
             at: now,
-            reset_credits: None,
+            reset_credits: None, resets: Vec::new(),
         };
         assert_eq!(overall_summary(Some(&codex), now), Some((80.0, Some(90_000.0))));
     }

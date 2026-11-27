@@ -212,10 +212,12 @@ impl Root {
         .detach();
     }
 
-    /// A plan ran out: offers a Codex reset, or to carry the work over to an agent with room.
-    pub(super) fn limit_reached(&mut self, provider: &str, text: String, resets: i64, cx: &mut Context<Self>) {
+    /// A plan ran out (usage key `key`): offers a banked Codex reset, or to carry the work over to
+    /// an agent with room.
+    pub(super) fn limit_reached(&mut self, key: &str, text: String, resets: i64, cx: &mut Context<Self>) {
+        let provider = key.split(':').next().unwrap_or(key);
         if provider == "codex" && resets > 0 {
-            return self.toast_action(text, "Use a reset", Command::RedeemCodexReset, cx);
+            return self.toast_action(text, "Use a reset", Command::RedeemReset { key: key.to_string(), credit: None }, cx);
         }
         let target = self.handoff_target(provider, cx);
         let pane = target.as_ref().and_then(|_| self.pane_to_hand_off(provider, cx));
@@ -281,21 +283,74 @@ impl Root {
         });
     }
 
-    pub(super) fn redeem_codex_reset(&mut self, cx: &mut Context<Self>) {
+    /// Asks before spending a banked Codex reset of the account behind usage key `key`
+    /// (`credit` None: Codex picks which).
+    pub(super) fn confirm_reset(&mut self, key: String, credit: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
+        if self.usage.redeeming.contains(&key) {
+            return;
+        }
+        let now = now_ms();
+        let mut detail = if key.contains(':') { format!("Account \"{}\". ", self.account_label(&key)) } else { String::new() };
+        detail.push_str("It refills your Codex plan limits right away and can't be undone.");
+        if let Some(snapshot) = self.usage.snapshots.get(&key) {
+            let left: Vec<String> = snapshot.windows.iter().map(|w| format!("{} {:.0}%", w.label, left_now(w, now))).collect();
+            detail.push_str(&format!(" Left now: {}.", left.join(", ")));
+        }
+        self.confirm("Use a banked reset?", detail, "Use reset", window, cx, move |this, cx| this.redeem_codex_reset(key, credit, cx));
+    }
+
+    fn redeem_codex_reset(&mut self, key: String, credit: Option<String>, cx: &mut Context<Self>) {
+        if !self.usage.redeeming.insert(key.clone()) {
+            return;
+        }
+        cx.notify();
+        let account = key.contains(':').then(|| key.clone());
         cx.spawn(async move |this, cx| {
-            let result = tauri::async_runtime::spawn(winfer_backend::usage::usage_codex_redeem_reset(None, None)).await.map_err(|e| e.to_string()).and_then(|r| r).and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()));
+            let a = account.clone();
+            let result = tauri::async_runtime::spawn(winfer_backend::usage::usage_codex_redeem_reset(credit, a)).await.map_err(|e| e.to_string()).and_then(|r| r);
             let _ = this.update(cx, |this, cx| {
+                this.usage.redeeming.remove(&key);
                 match result {
-                    Ok(v) => {
-                        let code = v["code"].as_str().unwrap_or_default().to_string();
-                        this.toast(reset_outcome_text(&code), cx);
+                    Ok(outcome) => {
+                        if outcome.code == "reset" {
+                            // Full again: warn anew next time, and the account can be used again.
+                            let prefix = format!("{key}:");
+                            this.usage.warned.retain(|id| !id.starts_with(&prefix));
+                            this.failover.exhausted.retain(|id| !id.starts_with(&prefix));
+                            let id = account.clone().unwrap_or_else(|| default_account("codex"));
+                            let _ = backend::background(move || backend_accounts::accounts_clear_exhausted(id));
+                            this.reload_accounts(cx);
+                        }
+                        this.toast(reset_outcome_text(&outcome.code), cx);
                     }
                     Err(e) => this.toast(e, cx),
                 }
-                this.refresh_one("codex".into(), None, cx);
+                this.refresh_one("codex".into(), account, cx);
+                cx.notify();
             });
         })
         .detach();
+    }
+
+    /// Claude's banked resets are only offered to its own apps: opens Claude Code's
+    /// `/limit-reset` on the account behind usage key `key`.
+    pub(super) fn claude_limit_reset(&mut self, key: String, cx: &mut Context<Self>) {
+        let account = key.contains(':').then_some(key);
+        let title = match &account {
+            Some(id) => format!("Limit reset · {}", self.account_label(id)),
+            None => "Claude limit reset".into(),
+        };
+        self.usage.popover = None;
+        self.update_state(cx, |s| {
+            let pane = s.add_pane("shell", AddPane { prompt: Some("claude /limit-reset".into()), custom_title: Some(title), ..Default::default() });
+            if let Some(id) = account
+                && let Some(p) = s.pane_mut(&pane)
+            {
+                p.account_id = Some(id);
+            }
+            s.settings_open = false;
+        });
+        cx.notify();
     }
 
     pub(super) fn reload_accounts(&mut self, cx: &mut Context<Self>) {

@@ -24,9 +24,51 @@ pub struct Snapshot {
     pub provider: String,
     pub windows: Vec<UsageWindow>,
     pub at: f64,
-    /// Codex: rate limit resets the account can redeem.
+    /// Codex: banked rate limit resets the account holds. None: this reading doesn't say.
     #[serde(default, rename = "resetCredits")]
     pub reset_credits: Option<i64>,
+    /// Those resets one by one (may be empty if only the count could be read).
+    #[serde(default)]
+    pub resets: Vec<BankedReset>,
+}
+
+/// A banked rate limit reset: refills the plan's windows right away when used.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BankedReset {
+    pub id: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub expires_at: Option<f64>,
+}
+
+impl Snapshot {
+    /// A reading that doesn't say anything about resets (a status line, a session log) keeps
+    /// the ones already known.
+    pub fn keep_resets(&mut self, previous: Option<&Snapshot>) {
+        if self.reset_credits.is_none()
+            && let Some(p) = previous
+        {
+            self.reset_credits = p.reset_credits;
+            self.resets = p.resets.clone();
+        }
+    }
+
+    /// The listed resets that haven't expired, soonest to expire first.
+    pub fn live_resets(&self, now: f64) -> Vec<&BankedReset> {
+        let mut live: Vec<&BankedReset> = self.resets.iter().filter(|r| r.expires_at.is_none_or(|e| e > now)).collect();
+        live.sort_by(|a, b| a.expires_at.unwrap_or(f64::MAX).total_cmp(&b.expires_at.unwrap_or(f64::MAX)));
+        live
+    }
+
+    /// How many resets can still be used.
+    pub fn banked_resets(&self, now: f64) -> i64 {
+        let expired = (self.resets.len() - self.live_resets(now).len()) as i64;
+        (self.reset_credits.unwrap_or(0) - expired).max(0)
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -393,7 +435,7 @@ pub fn pooled(provider: &str, snapshots: &HashMap<String, Snapshot>, list: &[Acc
                 UsageWindow { kind: kind.to_string(), label: ws[0].label.clone(), used_percent: 100.0 - left, resets_at }
             }).collect();
             let at = members.iter().map(|s| s.at).reduce(f64::min).unwrap_or(now);
-            Some((Snapshot { provider: provider.to_string(), windows, at, reset_credits: None }, true))
+            Some((Snapshot { provider: provider.to_string(), windows, at, reset_credits: None, resets: Vec::new() }, true))
         }
     }
 }
@@ -769,7 +811,7 @@ pub fn pooled_snapshot(provider: &str, keys: &[String], snapshots: &HashMap<Stri
         })
         .collect();
     let at = members.iter().map(|s| s.at).reduce(f64::min).unwrap_or(now);
-    Snapshot { provider: provider.to_string(), windows, at, reset_credits: None }
+    Snapshot { provider: provider.to_string(), windows, at, reset_credits: None, resets: Vec::new() }
 }
 
 /// Combined historical curve + stepped future projection across every account of a provider.
@@ -1159,7 +1201,8 @@ impl Poller {
         }
     }
 
-    pub fn record(&mut self, snapshot: Snapshot, now: f64) {
+    pub fn record(&mut self, mut snapshot: Snapshot, now: f64) {
+        snapshot.keep_resets(self.snapshots.get(&snapshot.provider));
         add_samples(&mut self.samples, &snapshot, now);
         self.snapshots.insert(snapshot.provider.clone(), snapshot);
     }
@@ -1196,6 +1239,36 @@ impl Poller {
             state.last_error = None;
             state.error_kind = None;
         }
-        self.record(Snapshot { provider: key, windows, at: now, reset_credits: None }, now);
+        self.record(Snapshot { provider: key, windows, at: now, reset_credits: None, resets: Vec::new() }, now);
+    }
+}
+
+#[cfg(test)]
+mod banked_reset_tests {
+    use super::*;
+
+    fn with(count: Option<i64>, expiries: &[Option<f64>]) -> Snapshot {
+        let resets = expiries.iter().enumerate().map(|(i, e)| BankedReset { id: i.to_string(), expires_at: *e, ..Default::default() }).collect();
+        Snapshot { provider: "codex".into(), reset_credits: count, resets, ..Default::default() }
+    }
+
+    #[test]
+    fn readings_without_reset_news_keep_the_known_ones() {
+        let known = with(Some(1), &[None]);
+        let mut silent = with(None, &[]);
+        silent.keep_resets(Some(&known));
+        assert_eq!((silent.reset_credits, silent.resets.len()), (Some(1), 1));
+        let mut spent = with(Some(0), &[]);
+        spent.keep_resets(Some(&known));
+        assert_eq!((spent.reset_credits, spent.resets.len()), (Some(0), 0));
+    }
+
+    #[test]
+    fn expired_resets_do_not_count_and_the_soonest_comes_first() {
+        let s = with(Some(3), &[None, Some(50.0), Some(500.0)]);
+        assert_eq!(s.live_resets(100.0).iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["2", "0"]);
+        assert_eq!(s.banked_resets(100.0), 2);
+        assert_eq!(with(Some(2), &[]).banked_resets(100.0), 2, "a count without a list still counts");
+        assert_eq!(with(None, &[]).banked_resets(100.0), 0);
     }
 }

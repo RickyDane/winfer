@@ -39,9 +39,11 @@ pub struct Snapshot {
     pub windows: Vec<Window>,
     /// When the numbers were measured (unix ms).
     pub at: i64,
-    /// Codex: rate limit resets the account can redeem (granted by OpenAI or referrals).
+    /// Codex: banked rate limit resets the account holds. None: this reading doesn't say.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reset_credits: Option<i64>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub resets: Vec<ResetCredit>,
 }
 
 fn now_ms() -> i64 {
@@ -154,7 +156,7 @@ fn claude_access_token(account: Option<&str>, now: i64) -> Option<String> {
 
 fn claude_usage_snapshot(body: &Value, at: i64) -> Option<Snapshot> {
     let windows = claude_windows(&json!({ "rate_limits": body }));
-    (!windows.is_empty()).then(|| Snapshot { provider: "claude".into(), windows, at, reset_credits: None })
+    (!windows.is_empty()).then(|| Snapshot { provider: "claude".into(), windows, at, reset_credits: None, resets: Vec::new() })
 }
 
 /// Read-only fallback from Claude Code's own `.claude.json` (`cachedUsageUtilization`), when the
@@ -424,6 +426,35 @@ fn codex_live(account: Option<&str>) -> Option<Snapshot> {
     codex_usage_snapshot(&body, now_ms())
 }
 
+type CodexResetCache = std::sync::Mutex<std::collections::HashMap<String, (i64, i64, Vec<ResetCredit>)>>;
+
+/// Per account: (count the usage endpoint reported, when listed, the list).
+fn codex_reset_cache() -> &'static CodexResetCache {
+    static CACHE: std::sync::OnceLock<CodexResetCache> = std::sync::OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+/// The resets behind the usage endpoint's count, listed again only when the count changes or
+/// after ten minutes.
+fn codex_listed_resets(account: Option<&str>, count: i64) -> Vec<ResetCredit> {
+    if count <= 0 {
+        return Vec::new();
+    }
+    let key = account.map_or_else(|| crate::accounts::default_id("codex"), String::from);
+    let now = now_ms();
+    if let Some((cached_count, at, list)) = codex_reset_cache().lock().ok().and_then(|c| c.get(&key).cloned()) {
+        if cached_count == count && now - at < 10 * 60_000 {
+            return list;
+        }
+    }
+    let Ok(body) = codex_call(CODEX_RESETS_URL, None, account) else { return Vec::new() };
+    let list = codex_reset_credits(&body);
+    if let Ok(mut cache) = codex_reset_cache().lock() {
+        cache.insert(key, (count, now, list.clone()));
+    }
+    list
+}
+
 /// A Codex account's ChatGPT sign-in (access token, account id); for the default account,
 /// OpenCode's when Codex has none.
 fn codex_auth(account: Option<&str>) -> Option<(String, Option<String>)> {
@@ -467,7 +498,7 @@ pub fn codex_usage_snapshot(body: &Value, at: i64) -> Option<Snapshot> {
         .collect();
     windows.extend(credit_window(&body["spend_control"]["individual_limit"]));
     let reset_credits = body["rate_limit_reset_credits"]["available_count"].as_i64();
-    (!windows.is_empty()).then(|| Snapshot { provider: "codex".into(), windows, at, reset_credits })
+    (!windows.is_empty()).then(|| Snapshot { provider: "codex".into(), windows, at, reset_credits, resets: Vec::new() })
 }
 
 /// Workspace plans: the member's monthly credit limit. None when no credits are allotted (a
@@ -564,7 +595,7 @@ pub fn codex_snapshot_in(log: &str) -> Option<Snapshot> {
             })
             .collect();
         windows.extend(credit_window(&limits["individual_limit"]));
-        (!windows.is_empty()).then(|| Snapshot { provider: "codex".into(), windows, at, reset_credits: None })
+        (!windows.is_empty()).then(|| Snapshot { provider: "codex".into(), windows, at, reset_credits: None, resets: Vec::new() })
     })
 }
 
@@ -636,7 +667,8 @@ pub async fn usage_codex_context(session: Option<String>, cwd: String) -> Option
 #[tauri::command]
 pub async fn usage_codex(account: Option<String>) -> Option<Snapshot> {
     tauri::async_runtime::spawn_blocking(move || {
-        if let Some(live) = codex_live(account.as_deref()) {
+        if let Some(mut live) = codex_live(account.as_deref()) {
+            live.resets = codex_listed_resets(account.as_deref(), live.reset_credits.unwrap_or(0));
             return Some(live);
         }
         // Session logs are shared by all accounts, so they only stand in for the default one.
@@ -655,7 +687,7 @@ pub async fn usage_codex(account: Option<String>) -> Option<Snapshot> {
 
 const CODEX_RESETS_URL: &str = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
 
-/// A Codex rate limit reset the account can redeem: resets the plan's windows right away.
+/// A banked rate limit reset the account can redeem: refills the plan's windows right away.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ResetCredit {
@@ -717,19 +749,46 @@ pub async fn usage_codex_resets(account: Option<String>) -> Result<Vec<ResetCred
         .map_err(|e| e.to_string())?
 }
 
+/// Redemptions whose outcome we never learned: retrying within ten minutes sends the same
+/// request id, so the provider can't spend a second reset on it.
+fn unsettled_redeems() -> &'static std::sync::Mutex<std::collections::HashMap<String, (String, i64)>> {
+    static PENDING: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, (String, i64)>>> = std::sync::OnceLock::new();
+    PENDING.get_or_init(Default::default)
+}
+
+fn redeem_request_id(key: &str) -> String {
+    let now = now_ms();
+    let fresh = || format!("winfer-{:016x}", rand::random::<u64>());
+    let Ok(mut pending) = unsettled_redeems().lock() else { return fresh() };
+    pending.retain(|_, (_, at)| now - *at < 10 * 60_000);
+    pending.entry(key.to_string()).or_insert_with(|| (fresh(), now)).0.clone()
+}
+
+fn settle_redeem(key: &str) {
+    if let Ok(mut pending) = unsettled_redeems().lock() {
+        pending.remove(key);
+    }
+}
+
 /// Redeems a reset (the given one, else whichever the server picks).
 #[tauri::command]
 pub async fn usage_codex_redeem_reset(credit_id: Option<String>, account: Option<String>) -> Result<ResetOutcome, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let mut request = json!({ "redeem_request_id": format!("winfer-{:016x}", rand::random::<u64>()) });
-        if let Some(id) = credit_id.filter(|s| !s.is_empty()) {
+        let credit_id = credit_id.filter(|s| !s.is_empty());
+        let key = format!("codex/{}/{}", account.as_deref().unwrap_or_default(), credit_id.as_deref().unwrap_or_default());
+        let mut request = json!({ "redeem_request_id": redeem_request_id(&key) });
+        if let Some(id) = credit_id {
             request["credit_id"] = json!(id);
         }
         let body = codex_call(&format!("{CODEX_RESETS_URL}/consume"), Some(request), account.as_deref())?;
-        Ok(ResetOutcome {
-            code: body["code"].as_str().unwrap_or("unknown").to_string(),
-            windows_reset: body["windows_reset"].as_i64().unwrap_or(0),
-        })
+        let code = body["code"].as_str().unwrap_or("unknown").to_string();
+        if code != "unknown" {
+            settle_redeem(&key);
+        }
+        if let Ok(mut cache) = codex_reset_cache().lock() {
+            cache.clear();
+        }
+        Ok(ResetOutcome { code, windows_reset: body["windows_reset"].as_i64().unwrap_or(0) })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -910,7 +969,7 @@ pub async fn usage_agy() -> Result<Snapshot, String> {
         if windows.is_empty() {
             return Err("Antigravity returned no plan limits.".to_string());
         }
-        Ok(Snapshot { provider: "agy".into(), windows, at: now_ms(), reset_credits: None })
+        Ok(Snapshot { provider: "agy".into(), windows, at: now_ms(), reset_credits: None, resets: Vec::new() })
     }).await.map_err(|_| "Antigravity usage refresh failed.".to_string())?
 }
 
@@ -1314,6 +1373,14 @@ mod tests {
         assert_eq!(credits.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), ["credit-1", "credit-3"]);
         assert_eq!(credits[0].title.as_deref(), Some("Full reset (Weekly + 5 hr)"));
         assert!(credits[0].expires_at.is_some() && credits[1].expires_at.is_none());
+    }
+
+    #[test]
+    fn retries_an_unsettled_redeem_with_the_same_id() {
+        let first = redeem_request_id("test/retry");
+        assert_eq!(redeem_request_id("test/retry"), first);
+        settle_redeem("test/retry");
+        assert_ne!(redeem_request_id("test/retry"), first);
     }
 
     #[test]

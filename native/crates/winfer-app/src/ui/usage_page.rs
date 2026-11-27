@@ -675,6 +675,7 @@ impl Root {
                         .when_some(account, |d, a| d.child(div().font_weight(FontWeight::NORMAL).text_color(c.subtle).child(format!("· {a}"))))
                         .child(div().flex_1())
                         .child(render_age(snap.at));
+                    let resets = self.render_banked_resets(&provider, &keys, self.usage_page.machine.is_some(), c, cx);
                     let mut block = div().flex().flex_col().gap_2().child(header);
                     let groups = super::usage::group_windows(&snap.windows);
                     if groups.len() > 1 {
@@ -722,7 +723,7 @@ impl Root {
                             block = block.child(card.child(wins));
                         }
                     }
-                    page = page.child(block);
+                    page = page.child(block.when_some(resets, |d, r| d.child(r)));
                 } else {
                     // Several accounts under the same provider: one provider heading, one card with
                     // a combined "main" limit graphic across all accounts on top and compact
@@ -807,7 +808,8 @@ impl Root {
                         );
                     }
                     card = card.child(rows);
-                    page = page.child(div().flex().flex_col().gap_2().child(header).child(card));
+                    let resets = self.render_banked_resets(&provider, &keys, self.usage_page.machine.is_some(), c, cx);
+                    page = page.child(div().flex().flex_col().gap_2().child(header).child(card).when_some(resets, |d, r| d.child(r)));
                 }
             }
         }
@@ -1342,7 +1344,7 @@ mod tests {
     #[test]
     fn limit_keys_group_by_provider_in_account_order() {
         let w = UsageWindow { kind: "session".into(), label: "5-hour".into(), used_percent: 40.0, resets_at: None };
-        let snap = |p: &str| Snapshot { provider: p.into(), windows: vec![w.clone()], at: 1.0, reset_credits: None };
+        let snap = |p: &str| Snapshot { provider: p.into(), windows: vec![w.clone()], at: 1.0, reset_credits: None, resets: Vec::new() };
         let mut snaps = HashMap::new();
         // Real snapshots store the full account key in `snap.provider` (e.g. `"claude:account-2"`).
         snaps.insert("claude".into(), snap("claude"));
@@ -1366,9 +1368,9 @@ mod tests {
         let min = 60_000.0;
         let hr = 3_600_000.0;
         let mut snaps = HashMap::new();
-        snaps.insert("claude".into(), Snapshot { provider: "claude".into(), windows: vec![UsageWindow { kind: "session".into(), label: "5-hour".into(), used_percent: 100.0, resets_at: Some(now + 4.0 * hr) }], at: now, reset_credits: None });
-        snaps.insert("claude:account-2".into(), Snapshot { provider: "claude:account-2".into(), windows: vec![UsageWindow { kind: "session".into(), label: "5-hour".into(), used_percent: 100.0, resets_at: Some(now + 10.0 * min) }], at: now, reset_credits: None });
-        snaps.insert("claude:account-3".into(), Snapshot { provider: "claude:account-3".into(), windows: vec![UsageWindow { kind: "session".into(), label: "5-hour".into(), used_percent: 100.0, resets_at: Some(now + 50.0 * min) }], at: now, reset_credits: None });
+        snaps.insert("claude".into(), Snapshot { provider: "claude".into(), windows: vec![UsageWindow { kind: "session".into(), label: "5-hour".into(), used_percent: 100.0, resets_at: Some(now + 4.0 * hr) }], at: now, reset_credits: None, resets: Vec::new() });
+        snaps.insert("claude:account-2".into(), Snapshot { provider: "claude:account-2".into(), windows: vec![UsageWindow { kind: "session".into(), label: "5-hour".into(), used_percent: 100.0, resets_at: Some(now + 10.0 * min) }], at: now, reset_credits: None, resets: Vec::new() });
+        snaps.insert("claude:account-3".into(), Snapshot { provider: "claude:account-3".into(), windows: vec![UsageWindow { kind: "session".into(), label: "5-hour".into(), used_percent: 100.0, resets_at: Some(now + 50.0 * min) }], at: now, reset_credits: None, resets: Vec::new() });
         let keys = vec!["claude".into(), "claude:account-2".into(), "claude:account-3".into()];
         let s = pooled_series("session", &keys, &snaps, &HashMap::new(), now);
         assert_eq!(s.resets.len(), 3);

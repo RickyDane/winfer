@@ -82,7 +82,10 @@ pub enum Command {
     RaceResults(String),
     /// Carries a pane's task over to another agent.
     HandOff { pane: String, to: String },
-    RedeemCodexReset,
+    /// Uses a banked Codex reset of the account behind a usage key, after asking.
+    RedeemReset { key: String, credit: Option<String> },
+    /// Claude Code's `/limit-reset` for the account behind a usage key.
+    ClaudeLimitReset(String),
     /// A plugin tool's palette entry with its fixed arguments.
     PluginTool { id: String, args: serde_json::Value },
     RecipeLoad(String),
@@ -899,7 +902,8 @@ impl Root {
             }),
             C::RaceResults(race) => self.open_race_results(race, cx),
             C::HandOff { pane, to } => self.continue_in(&pane, &to, cx),
-            C::RedeemCodexReset => self.redeem_codex_reset(cx),
+            C::RedeemReset { key, credit } => self.confirm_reset(key, credit, window, cx),
+            C::ClaudeLimitReset(key) => self.claude_limit_reset(key, cx),
             C::PluginTool { id, args } => self.run_plugin_tool(&id, args, window, cx),
             C::RecipeLoad(id) => self.load_recipe(&id, window, cx),
             C::Unavailable(name) => self.toast(format!("{name} isn't in the native build yet."), cx),
