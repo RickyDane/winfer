@@ -29,6 +29,8 @@ export function Segmented<T extends string>({ options, value, onChange }: { opti
 /* ---------- Swipeable card: right = primary action, left = secondary ---------- */
 type SwipeAction = { label: string; icon: IconName; run: () => void };
 const ARM = 96;
+/** Travel (px) past which a touch is a drag, not a tap. */
+const SLOP = 8;
 export function SwipeCard({ right, left, onTap, onLongPress, children, status, index, className }: { right?: SwipeAction; left?: SwipeAction; onTap: () => void; onLongPress?: () => void; children: ReactNode; status: AgentStatus; index: number; className?: string }) {
   const card = useRef<HTMLDivElement>(null);
   // Holding still on the card for a moment opens its menu instead of the thread.
@@ -38,7 +40,6 @@ export function SwipeCard({ right, left, onTap, onLongPress, children, status, i
   };
   const under = useRef<{ r: HTMLDivElement | null; l: HTMLDivElement | null }>({ r: null, l: null });
   const g = useRef<{ x: number; y: number; dx: number; axis: "x" | "y" | null; id: number; armed: boolean } | null>(null);
-  const moved = useRef(false);
 
   const paint = (dx: number) => {
     const el = card.current;
@@ -98,7 +99,6 @@ export function SwipeCard({ right, left, onTap, onLongPress, children, status, i
             return;
           }
           g.current = { x: e.clientX, y: e.clientY, dx: 0, axis: null, id: e.pointerId, armed: false };
-          moved.current = false;
           release();
           hold.current = onLongPress
             ? {
@@ -117,7 +117,7 @@ export function SwipeCard({ right, left, onTap, onLongPress, children, status, i
           if (!s || s.id !== e.pointerId) return;
           const dx = e.clientX - s.x;
           const dy = e.clientY - s.y;
-          if (!s.axis && Math.hypot(dx, dy) > 8) {
+          if (!s.axis && Math.hypot(dx, dy) > SLOP) {
             release();
             s.axis = Math.abs(dx) > Math.abs(dy) * 1.2 ? "x" : "y";
             if (s.axis === "x") {
@@ -126,7 +126,6 @@ export function SwipeCard({ right, left, onTap, onLongPress, children, status, i
             }
           }
           if (s.axis !== "x") return;
-          moved.current = true;
           // Resist past the arm point; no travel toward a side without an action.
           let x = dx;
           if ((x > 0 && !right) || (x < 0 && !left)) x = x * 0.15;
@@ -145,7 +144,8 @@ export function SwipeCard({ right, left, onTap, onLongPress, children, status, i
           release();
           if (hold.current?.fired) return;
           if (!s || s.axis !== "x") {
-            if (s && !moved.current) onTap();
+            // Only a finger that stayed put taps: a vertical drag (scroll, pull to refresh) doesn't.
+            if (s && s.id === e.pointerId && !s.axis && Math.hypot(e.clientX - s.x, e.clientY - s.y) <= SLOP) onTap();
             return;
           }
           if (s.armed) {
