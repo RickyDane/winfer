@@ -161,6 +161,78 @@ struct Live {
     turn: TurnTokens,
     /// The running turn's output in finished requests.
     done: u64,
+    /// Whether the running assistant message streamed `thinking_delta` chunks.
+    thinking_streamed: bool,
+}
+
+impl Live {
+    fn reset_turn(&mut self) {
+        self.turn = TurnTokens::default();
+        self.done = 0;
+        self.thinking_streamed = false;
+        self.usage.turn_input = 0;
+        self.usage.turn_cached = 0;
+    }
+
+    fn start_turn(&mut self, at: std::time::Instant) {
+        self.reset_turn();
+        self.turn.request_started(at);
+    }
+
+    fn on_message_start(&mut self, at: std::time::Instant) {
+        self.thinking_streamed = false;
+        self.turn.first_token(at);
+    }
+
+    fn on_delta(&mut self, kind: &str, delta: &str, at: std::time::Instant) -> bool {
+        if delta.is_empty() {
+            return false;
+        }
+        if kind == "thinking_delta" {
+            self.thinking_streamed = true;
+        }
+        self.turn.streamed_at(delta, at)
+    }
+
+    fn on_tools_done(&mut self, at: std::time::Instant) {
+        if !self.turn.has_request() {
+            self.turn.request_started(at);
+        }
+    }
+
+    fn on_message_end(&mut self, m: &Value, at: std::time::Instant) {
+        let u = &m["usage"];
+        let n = |k: &str| u[k].as_u64().unwrap_or(0);
+        let input = n("input") + n("cacheRead") + n("cacheWrite");
+        let output = n("output");
+        self.usage.input += input;
+        self.usage.cached += n("cacheRead");
+        self.usage.output += output;
+        self.usage.turn_input += input;
+        self.usage.turn_cached += n("cacheRead");
+        if let Some(c) = u["cost"]["total"].as_f64() {
+            self.usage.cost = Some(self.usage.cost.unwrap_or(0.0) + c);
+        }
+        if input > 0 {
+            self.usage.context = input + output;
+        }
+        let has_thinking = m["content"].as_array().is_some_and(|blocks| {
+            blocks.iter().any(|b| matches!(b["type"].as_str(), Some("thinking" | "reasoning" | "redacted_thinking")))
+        }) || n("reasoning") > 0
+            || n("reasoningTokens") > 0;
+        let silent = has_thinking && !self.thinking_streamed;
+        self.thinking_streamed = false;
+        self.turn.request_done(output, at, silent);
+        self.done += output;
+        self.turn.exact(self.done);
+    }
+
+    fn snapshot(&mut self) -> Usage {
+        self.usage.turn = self.turn.now();
+        self.usage.turn_streamed = self.turn.streamed_total();
+        self.usage.turn_active_ms = self.turn.active_ms();
+        self.usage.clone()
+    }
 }
 
 #[derive(Default)]
@@ -262,14 +334,12 @@ impl Bridge {
     }
 
     fn emit_usage(&mut self) {
-        let l = &mut self.live;
-        l.usage.turn = l.turn.now();
-        l.usage.turn_streamed = l.turn.streamed_total();
-        let u = l.usage.clone();
+        let u = self.live.snapshot();
         self.emit(Ev::Usage(u));
     }
 
     fn turn_done(&mut self) {
+        self.calls.clear();
         self.streamed_tools.clear();
         for id in self.pending_streamed.drain() {
             let _ = self.events.send(Ev::ToolEnd { id, ok: false, output: String::new(), diff: None });
@@ -284,8 +354,7 @@ impl Bridge {
             Cmd::Send(msg) => {
                 self.busy = true;
                 self.turns.push(Vec::new());
-                let l = &mut self.live;
-                (l.turn, l.done, l.usage.turn_input, l.usage.turn_cached) = (TurnTokens::default(), 0, 0, 0);
+                self.live.start_turn(std::time::Instant::now());
                 self.emit(Ev::TurnStart);
                 self.write(prompt("prompt", &msg));
             }
@@ -326,6 +395,7 @@ impl Bridge {
             }
             Cmd::Compact => {
                 self.busy = true;
+                self.live.reset_turn();
                 self.emit(Ev::TurnStart);
                 self.write(json!({ "id": "compact", "type": "compact" }));
             }
@@ -352,12 +422,14 @@ impl Bridge {
             // Pi runs on its own too (queued follow-ups, extensions): show it as a turn.
             "agent_start" if !self.busy => {
                 self.busy = true;
+                self.live.start_turn(std::time::Instant::now());
                 self.emit(Ev::TurnStart);
             }
             "agent_settled" => self.turn_done(),
             "message_start" if v["message"]["role"] == "assistant" => {
                 self.message += 1;
                 self.streamed_tools.clear();
+                self.live.on_message_start(std::time::Instant::now());
             }
             "message_update" => self.on_update(&v["assistantMessageEvent"]),
             "message_end" if v["message"]["role"] == "assistant" => self.on_message_end(&v["message"]),
@@ -486,11 +558,12 @@ impl Bridge {
     fn on_update(&mut self, e: &Value) {
         let index = e["contentIndex"].as_u64().unwrap_or(0);
         let id = format!("m{}:{index}", self.message);
+        let kind = e["type"].as_str().unwrap_or("");
         let delta = e["delta"].as_str().unwrap_or("");
-        if !delta.is_empty() && self.live.turn.streamed(delta) {
+        if self.live.on_delta(kind, delta, std::time::Instant::now()) {
             self.emit_usage();
         }
-        match e["type"].as_str().unwrap_or("") {
+        match kind {
             "text_delta" => self.emit(Ev::TextDelta { id, text: delta.to_string() }),
             "text_end" => self.emit(Ev::Text { id, text: e["content"].as_str().unwrap_or("").to_string() }),
             "thinking_delta" => self.emit(Ev::ReasoningDelta { id, text: delta.to_string() }),
@@ -536,23 +609,7 @@ impl Bridge {
 
     /// A finished model request: its exact usage, or its error.
     fn on_message_end(&mut self, m: &Value) {
-        let u = &m["usage"];
-        let n = |k: &str| u[k].as_u64().unwrap_or(0);
-        let input = n("input") + n("cacheRead") + n("cacheWrite");
-        let l = &mut self.live;
-        l.usage.input += input;
-        l.usage.cached += n("cacheRead");
-        l.usage.output += n("output");
-        l.usage.turn_input += input;
-        l.usage.turn_cached += n("cacheRead");
-        if let Some(c) = u["cost"]["total"].as_f64() {
-            l.usage.cost = Some(l.usage.cost.unwrap_or(0.0) + c);
-        }
-        if input > 0 {
-            l.usage.context = input + n("output");
-        }
-        l.done += n("output");
-        l.turn.exact(l.done);
+        self.live.on_message_end(m, std::time::Instant::now());
         self.emit_usage();
         if m["stopReason"] == "error" {
             self.emit(Ev::Error(m["errorMessage"].as_str().unwrap_or("Pi reported an error.").to_string()));
@@ -581,6 +638,9 @@ impl Bridge {
         let ok = v["isError"] != true;
         let output = content_text(&v["result"]["content"]);
         let call = self.calls.remove(&id);
+        if self.busy && self.calls.is_empty() {
+            self.live.on_tools_done(std::time::Instant::now());
+        }
         let diff = call.as_ref().filter(|_| ok).and_then(|c| match c.name.as_str() {
             "edit" => v["result"]["details"]["patch"].as_str().map(str::to_string),
             "write" => {
@@ -804,5 +864,39 @@ mod tests {
         assert_eq!(model_info(&m), Some(ModelInfo { spec: "pi/openai/gpt-6.1-sol".into(), label: "GPT-6.1 Sol".into(), detail: "Pi · openai".into(), efforts: None }));
         assert_eq!(display_name("mcp__winfer__bg"), "winfer · bg");
         assert_eq!(display_name("bash"), "Bash");
+    }
+
+    #[test]
+    fn timed_turn_tracks_decode_speed_tool_gaps_and_hidden_thinking() {
+        let t0 = std::time::Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let mut live = Live::default();
+        // Request 1: 2s prefill, then message_start + 4 streamed deltas over 1s (100 tokens).
+        live.start_turn(at(0));
+        live.on_message_start(at(2_000));
+        for ms in [2_250, 2_500, 2_750, 3_000] {
+            live.on_delta("text_delta", &"x".repeat(100), at(ms));
+        }
+        let u_mid = live.snapshot();
+        assert_eq!((u_mid.turn_streamed, u_mid.turn_active_ms), (100, 1_000));
+        live.on_message_end(&json!({ "usage": { "input": 500, "output": 100 }, "content": [{ "type": "text", "text": "..." }] }), at(3_000));
+        let u1 = live.snapshot();
+        assert_eq!((u1.turn_streamed, u1.turn_active_ms), (100, 1_000));
+        // 5s tool execution excluded; Request 2 has hidden thinking (no thinking_delta streamed).
+        live.on_tools_done(at(8_000));
+        live.on_message_start(at(10_000));
+        for ms in [10_100, 10_200, 10_300] {
+            live.on_delta("text_delta", &"x".repeat(40), at(ms));
+        }
+        live.on_message_end(
+            &json!({
+                "usage": { "input": 600, "output": 230 },
+                "content": [{ "type": "thinking", "thinking": "hidden" }, { "type": "text", "text": "done" }]
+            }),
+            at(10_300),
+        );
+        let u2 = live.snapshot();
+        // Hidden thinking falls back to request_started (8_000 -> 10_300 = 2_300ms), not 300ms.
+        assert_eq!((u2.turn_streamed, u2.turn_active_ms), (330, 3_300));
     }
 }

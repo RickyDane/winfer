@@ -198,6 +198,9 @@ struct Bridge {
     /// Whether the running request had a reasoning item or reasoning summary deltas (emitted after
     /// hidden reasoning tokens, so the request must be timed from its start).
     reasoning_summary: bool,
+    /// Whether the running request emitted a tool call before any streamed output (unstreamed
+    /// tool-call arguments were generated before `r.first`, so the request times from its start).
+    unstreamed_tool: bool,
     /// Main-thread client tools currently executing (between `item/started` and `item/completed`).
     active_tools: HashSet<String>,
     /// When the last client tool of a batch finished while the model request's `tokenUsage` had
@@ -314,6 +317,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         turn_tokens: TurnTokens::default(),
         reasoning_streamed: false,
         reasoning_summary: false,
+        unstreamed_tool: false,
         active_tools: HashSet::new(),
         tools_finished_at: None,
         turn_base: 0,
@@ -1025,6 +1029,7 @@ impl Bridge {
                 self.turn_tokens.request_started(std::time::Instant::now());
                 self.reasoning_streamed = false;
                 self.reasoning_summary = false;
+                self.unstreamed_tool = false;
                 self.active_tools.clear();
                 self.tools_finished_at = None;
                 self.turn_base = self.output_total();
@@ -1098,13 +1103,22 @@ impl Bridge {
                 self.emit(Ev::ReasoningDelta { id: s(p, "itemId"), text: s(p, "delta") });
             }
             "item/reasoning/summaryTextDelta" => {
-                // Summaries arrive after hidden reasoning tokens were already generated, so they
-                // don't count as streamed raw reasoning.
+                // Summaries arrive in fast bursts after hidden reasoning tokens were already
+                // generated, so count them toward `usage.turn` without pacing tok/s or stamping `r.first`.
                 self.reasoning_summary = true;
-                self.streamed(p);
+                if self.turn_tokens.streamed_sub(p["delta"].as_str().unwrap_or("")) {
+                    self.emit_usage();
+                }
                 self.emit(Ev::ReasoningDelta { id: s(p, "itemId"), text: s(p, "delta") });
             }
             "item/reasoning/summaryPartAdded" => self.emit(Ev::ReasoningDelta { id: s(p, "itemId"), text: "\n\n".into() }),
+            // Model-generated tool-call argument deltas (distinct from command stdout `outputDelta`).
+            "item/functionCall/argumentsDelta"
+            | "item/toolCall/argumentsDelta"
+            | "item/mcpToolCall/argumentsDelta"
+            | "item/dynamicToolCall/argumentsDelta" => {
+                self.streamed(p);
+            }
             "item/commandExecution/outputDelta" => self.emit(Ev::ToolOutput { id: s(p, "itemId"), chunk: s(p, "delta") }),
             "turn/plan/updated" => {
                 let todos = p["plan"]
@@ -1130,10 +1144,11 @@ impl Bridge {
                 // delta, so then its start counts.
                 if (self.turn.is_some() || self.turn_tokens.has_request()) && n("total", "outputTokens") > self.usage.output {
                     let now = std::time::Instant::now();
-                    let silent = (n("last", "reasoningOutputTokens") > 0 || self.reasoning_summary) && !self.reasoning_streamed;
+                    let silent = ((n("last", "reasoningOutputTokens") > 0 || self.reasoning_summary) && !self.reasoning_streamed) || self.unstreamed_tool;
                     self.turn_tokens.request_done(n("last", "outputTokens"), now, silent);
                     self.reasoning_streamed = false;
                     self.reasoning_summary = false;
+                    self.unstreamed_tool = false;
                     // If the request's client tools finished before usage landed, the next model
                     // request already started when the last tool completed.
                     if let Some(at) = self.tools_finished_at.take() {
@@ -1334,6 +1349,9 @@ impl Bridge {
         }
         let id = s(item, "id");
         if self.turn.is_some() && is_client_tool(item) && !id.is_empty() {
+            if self.turn_tokens.has_request() && !self.turn_tokens.generating() {
+                self.unstreamed_tool = true;
+            }
             self.active_tools.insert(id.clone());
             self.tools_finished_at = None;
         }
@@ -1393,6 +1411,7 @@ impl Bridge {
                 if self.turn_tokens.has_request() {
                     self.tools_finished_at = Some(now);
                 } else {
+                    self.unstreamed_tool = false;
                     self.turn_tokens.request_started(now);
                 }
             }
@@ -1949,6 +1968,7 @@ mod tests {
             turn_tokens: TurnTokens::default(),
             reasoning_streamed: false,
             reasoning_summary: false,
+        unstreamed_tool: false,
             active_tools: HashSet::new(),
             tools_finished_at: None,
             turn_base: 0,
@@ -2026,6 +2046,78 @@ mod tests {
         let u2 = rx.try_iter().filter_map(|e| if let Ev::Usage(u) = e { Some(u) } else { None }).last().unwrap();
         assert_eq!(u2.turn_streamed, 600);
         assert!(u2.turn_active_ms >= u1.turn_active_ms + 50, "second request must include its own wait time, got {} -> {}ms", u1.turn_active_ms, u2.turn_active_ms);
+    }
+
+    #[test]
+    fn reasoning_summary_bursts_do_not_advance_live_pace() {
+        let (mut b, rx) = bridge();
+        let n = |b: &mut Bridge, method: &str, p: Value| b.on_notification(method, &p);
+        n(&mut b, "turn/started", json!({ "threadId": "main", "turn": { "id": "t1" } }));
+        // Fast burst of reasoning summary chunks: must update usage.turn display without stamping r.first or live active_ms.
+        for _ in 0..4 {
+            n(&mut b, "item/reasoning/summaryTextDelta", json!({ "threadId": "main", "itemId": "r1", "delta": "x".repeat(120) }));
+            std::thread::sleep(std::time::Duration::from_millis(40));
+        }
+        let last = rx.try_iter().filter_map(|e| if let Ev::Usage(u) = e { Some(u) } else { None }).last().unwrap();
+        assert!(last.turn >= 100, "summary text still ticks usage.turn, got {}", last.turn);
+        assert_eq!((last.turn_streamed, last.turn_active_ms), (0, 0), "summary bursts must not advance live tok/s");
+    }
+
+    #[test]
+    fn unstreamed_tool_before_trailing_text_times_from_request_start() {
+        let (mut b, rx) = bridge();
+        let n = |b: &mut Bridge, method: &str, p: Value| b.on_notification(method, &p);
+        n(&mut b, "turn/started", json!({ "threadId": "main", "turn": { "id": "t1" } }));
+        // Model spends 120ms generating an unstreamed tool call, then emits short trailing text over ~120ms.
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        n(&mut b, "item/started", json!({ "threadId": "main", "item": { "type": "fileChange", "id": "f1", "changes": [] } }));
+        for _ in 0..3 {
+            n(&mut b, "item/agentMessage/delta", json!({ "threadId": "main", "itemId": "m1", "delta": "x".repeat(40) }));
+            std::thread::sleep(std::time::Duration::from_millis(40));
+        }
+        n(&mut b, "thread/tokenUsage/updated", json!({ "threadId": "main", "tokenUsage": { "total": { "outputTokens": 530 }, "last": { "outputTokens": 530, "reasoningOutputTokens": 0 } } }));
+        let u = rx.try_iter().filter_map(|e| if let Ev::Usage(u) = e { Some(u) } else { None }).last().unwrap();
+        assert_eq!(u.turn_streamed, 530);
+        assert!(u.turn_active_ms >= 200, "must include pre-text tool-call generation time, got {}ms", u.turn_active_ms);
+    }
+
+    #[test]
+    fn tool_call_argument_deltas_feed_streaming_pace() {
+        let (mut b, _rx) = bridge();
+        let n = |b: &mut Bridge, method: &str, p: Value| b.on_notification(method, &p);
+        n(&mut b, "turn/started", json!({ "threadId": "main", "turn": { "id": "t1" } }));
+        for _ in 0..3 {
+            n(&mut b, "item/functionCall/argumentsDelta", json!({ "threadId": "main", "itemId": "fc1", "delta": "x".repeat(100) }));
+            std::thread::sleep(std::time::Duration::from_millis(60));
+        }
+        assert!(b.turn_tokens.generating());
+        assert_eq!(b.turn_tokens.streamed_total(), 50);
+        assert!(b.turn_tokens.active_ms() >= 100);
+    }
+
+    #[test]
+    fn tool_started_after_request1_usage_does_not_leak_unstreamed_flag_into_request2() {
+        let (mut b, rx) = bridge();
+        let n = |b: &mut Bridge, method: &str, p: Value| b.on_notification(method, &p);
+        n(&mut b, "turn/started", json!({ "threadId": "main", "turn": { "id": "t1" } }));
+        // Request 1 closes via tokenUsage BEFORE item/started for its tool arrives.
+        n(&mut b, "thread/tokenUsage/updated", json!({ "threadId": "main", "tokenUsage": { "total": { "outputTokens": 50 }, "last": { "outputTokens": 50, "reasoningOutputTokens": 0 } } }));
+        assert!(!b.turn_tokens.has_request());
+        n(&mut b, "item/started", json!({ "threadId": "main", "item": { "type": "fileChange", "id": "f1", "changes": [] } }));
+        assert!(!b.unstreamed_tool, "tool from already-closed Request 1 must not set unstreamed_tool");
+        n(&mut b, "item/completed", json!({ "threadId": "main", "item": { "type": "fileChange", "id": "f1", "status": "completed", "changes": [] } }));
+        assert!(!b.unstreamed_tool);
+        // Request 2 has 150ms prefill, then streams 3 chunks over ~120ms: must time from first token (not include 150ms prefill).
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        for _ in 0..3 {
+            n(&mut b, "item/agentMessage/delta", json!({ "threadId": "main", "itemId": "m2", "delta": "x".repeat(100) }));
+            std::thread::sleep(std::time::Duration::from_millis(55));
+        }
+        n(&mut b, "thread/tokenUsage/updated", json!({ "threadId": "main", "tokenUsage": { "total": { "outputTokens": 125 }, "last": { "outputTokens": 75, "reasoningOutputTokens": 0 } } }));
+        let u = rx.try_iter().filter_map(|e| if let Ev::Usage(u) = e { Some(u) } else { None }).last().unwrap();
+        // Request 1 (50 tok, ~0ms) + Request 2 decode (50 tok after chunk 1, ~110-180ms), excluding the 150ms prefill.
+        assert_eq!(u.turn_streamed, 100);
+        assert!(u.turn_active_ms < 250, "prefill must not be included in Request 2 decode time, got {}ms", u.turn_active_ms);
     }
 
     #[test]
@@ -2154,6 +2246,7 @@ mod tests {
             turn_tokens: TurnTokens::default(),
             reasoning_streamed: false,
             reasoning_summary: false,
+        unstreamed_tool: false,
             active_tools: HashSet::new(),
             tools_finished_at: None,
             turn_base: 0,
@@ -2271,6 +2364,7 @@ mod tests {
             turn_tokens: TurnTokens::default(),
             reasoning_streamed: false,
             reasoning_summary: false,
+        unstreamed_tool: false,
             active_tools: HashSet::new(),
             tools_finished_at: None,
             turn_base: 0,
@@ -2372,6 +2466,7 @@ mod tests {
             turn_tokens: TurnTokens::default(),
             reasoning_streamed: false,
             reasoning_summary: false,
+        unstreamed_tool: false,
             active_tools: HashSet::new(),
             tools_finished_at: None,
             turn_base: 0,
@@ -2450,6 +2545,7 @@ mod tests {
             turn_tokens: TurnTokens::default(),
             reasoning_streamed: false,
             reasoning_summary: false,
+        unstreamed_tool: false,
             active_tools: HashSet::new(),
             tools_finished_at: None,
             turn_base: 0,

@@ -391,7 +391,7 @@ impl Bridge {
         self.finished = false;
         self.noise.clear();
         self.turn = TurnTokens::default();
-        (self.usage.turn, self.usage.turn_input, self.usage.turn_cached) = (0, 0, 0);
+        (self.usage.turn, self.usage.turn_input, self.usage.turn_cached, self.usage.turn_streamed, self.usage.turn_active_ms) = (0, 0, 0, 0, 0);
         self.emit(Ev::TurnStart);
         // The chat is made up front, so its id is known even if the first run is interrupted
         // before it reports one (else the next turn would start over).
@@ -495,6 +495,8 @@ impl Bridge {
     fn on_line(&mut self, v: &Value) {
         match v["type"].as_str().unwrap_or("") {
             "system" if v["subtype"] == "init" => {
+                // Start timing once the CLI initialized (skipping `create-chat` and process cold-start).
+                self.turn.window_start(std::time::Instant::now());
                 if let Some(s) = v["session_id"].as_str() {
                     if self.chat.as_deref() != Some(s) {
                         self.chat = Some(s.to_string());
@@ -557,13 +559,16 @@ impl Bridge {
                 let u = &v["usage"];
                 let n = |k: &str| u[k].as_u64().unwrap_or(0);
                 let input = n("inputTokens") + n("cacheReadTokens") + n("cacheWriteTokens");
+                let output = n("outputTokens");
+                self.turn.turn_done_window(output, std::time::Instant::now());
                 self.usage.input += input;
                 self.usage.cached += n("cacheReadTokens");
-                self.usage.output += n("outputTokens");
-                self.usage.turn = n("outputTokens");
+                self.usage.output += output;
+                self.usage.turn = output;
                 self.usage.turn_input = input;
                 self.usage.turn_cached = n("cacheReadTokens");
                 self.usage.turn_streamed = self.turn.streamed_total();
+                self.usage.turn_active_ms = self.turn.active_ms();
                 self.emit(Ev::Usage(self.usage.clone()));
                 if v["is_error"].as_bool() == Some(true) {
                     let text = v["result"].as_str().filter(|s| !s.is_empty()).unwrap_or("Cursor reported an error.");
@@ -584,6 +589,7 @@ impl Bridge {
         u.turn = self.turn.now();
         u.output += u.turn;
         u.turn_streamed = self.turn.streamed_total();
+        u.turn_active_ms = self.turn.active_ms();
         self.emit(Ev::Usage(u));
     }
 
@@ -593,6 +599,7 @@ impl Bridge {
         let args = &body["args"];
         match v["subtype"].as_str() {
             Some("started") => {
+                self.turn.window_pause(std::time::Instant::now());
                 // A message's text ends where its tools start.
                 self.text = None;
                 self.reasoning = None;
@@ -607,6 +614,9 @@ impl Bridge {
             }
             Some("completed") => {
                 self.calls.remove(&id);
+                if self.calls.is_empty() {
+                    self.turn.window_start(std::time::Instant::now());
+                }
                 let (ok, output, diff) = outcome(key, args, &body["result"]);
                 if key == "updateTodosToolCall" {
                     if let Some(todos) = todos(&body["result"]["success"]["todos"]) {
@@ -823,5 +833,53 @@ mod tests {
         assert!(edit.2.is_some_and(|d| d.contains("-a") && d.contains("+b")));
         assert_eq!(display_name("shellToolCall", &json!({})), "Bash");
         assert_eq!(display_name("fooBarToolCall", &json!({})), "FooBar");
+    }
+
+    #[test]
+    fn active_window_times_llm_steps_and_excludes_tool_runs() {
+        let (me, _in_rx) = channel();
+        let (tx, rx) = channel();
+        let mut b = Bridge {
+            events: tx,
+            me,
+            cwd: "/tmp".into(),
+            model: "auto".into(),
+            effort: None,
+            mode: Mode::Yolo,
+            system: None,
+            chat: Some("c1".into()),
+            proc: None,
+            run: 1,
+            busy: true,
+            finished: false,
+            queue: Vec::new(),
+            seq: 0,
+            text: None,
+            reasoning: None,
+            calls: HashMap::new(),
+            noise: String::new(),
+            explained_ask: true,
+            usage: Usage::default(),
+            turn: TurnTokens::default(),
+        };
+        // Wait before system/init (simulated cold-start) is excluded.
+        b.on_line(&json!({ "type": "system", "subtype": "init", "session_id": "c1", "model": "gpt-5.5" }));
+        b.on_line(&json!({ "type": "thinking", "subtype": "delta", "text": "a".repeat(120) }));
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        b.on_line(&json!({ "type": "assistant", "timestamp_ms": 1, "message": { "content": [{ "type": "text", "text": "b".repeat(120) }] } }));
+        let live = rx.try_iter().filter_map(|e| if let Ev::Usage(u) = e { Some(u) } else { None }).last().unwrap();
+        assert_eq!(live.turn_streamed, 30, "live burst excludes chunk 1 fencepost");
+        assert!(live.turn_active_ms >= 100, "live turn_active_ms reported: {}", live.turn_active_ms);
+
+        // Tool run pauses the active window.
+        b.on_line(&json!({ "type": "tool_call", "subtype": "started", "call_id": "t1", "tool_call": { "shellToolCall": { "args": { "command": "ls" } } } }));
+        std::thread::sleep(std::time::Duration::from_millis(160));
+        b.on_line(&json!({ "type": "tool_call", "subtype": "completed", "call_id": "t1", "tool_call": { "shellToolCall": { "args": { "command": "ls" }, "result": { "success": { "exitCode": 0, "stdout": "" } } } } }));
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        b.on_line(&json!({ "type": "result", "usage": { "inputTokens": 100, "cacheReadTokens": 0, "cacheWriteTokens": 0, "outputTokens": 200 } }));
+        let done = rx.try_iter().filter_map(|e| if let Ev::Usage(u) = e { Some(u) } else { None }).last().unwrap();
+        assert_eq!(done.turn_streamed, 200);
+        assert!(done.turn_active_ms >= 150, "expected >=150ms active window, got {}ms", done.turn_active_ms);
+        assert!(done.turn_active_ms < 280, "tool run (160ms) must be excluded, got {}ms", done.turn_active_ms);
     }
 }

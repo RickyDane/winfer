@@ -802,6 +802,8 @@ struct Bridge {
     usage: Usage,
     /// The running turn's steps reported their usage, so its `result` usage (their sum) is already counted.
     step_usage: bool,
+    /// Cumulative exact output tokens reported by finished steps in the running turn.
+    turn_done_tokens: u64,
     turn: TurnTokens,
     mode: Mode,
     bg_owner: String,
@@ -847,8 +849,11 @@ impl Bridge {
                 } else {
                     self.busy = true;
                     self.turn = TurnTokens::default();
+                    self.turn_done_tokens = 0;
+                    self.step_usage = false;
                     self.usage.turn_input = 0;
                     self.usage.turn_cached = 0;
+                    self.turn.request_started(std::time::Instant::now());
                     self.emit(Ev::TurnStart);
                 }
                 self.send(proc, &msg);
@@ -1554,7 +1559,8 @@ impl Bridge {
                 self.settle_subagents_on_result(ok);
                 // The result's usage is the whole turn's: the sum of its model requests. Counting it
                 // again would double the totals and make the context the sum of every request's prompt.
-                if !r["usage"].is_null() && !std::mem::take(&mut self.step_usage) {
+                let had_step_usage = std::mem::take(&mut self.step_usage);
+                if !r["usage"].is_null() && !had_step_usage {
                     self.on_usage(&r["usage"]);
                 }
                 if !ok {
@@ -1563,6 +1569,11 @@ impl Bridge {
                 }
                 if self.queued > 0 {
                     self.queued -= 1;
+                    self.turn = TurnTokens::default();
+                    self.turn_done_tokens = 0;
+                    self.usage.turn_input = 0;
+                    self.usage.turn_cached = 0;
+                    self.turn.request_started(std::time::Instant::now());
                 } else if self.busy {
                     self.end_turn("Ended with the turn.");
                 }
@@ -1582,8 +1593,15 @@ impl Bridge {
         // agy starts a turn on its own sometimes (a finished background command); show it working.
         if !self.busy && s["step_type"] != "user_input" && running {
             self.busy = true;
+            self.turn = TurnTokens::default();
+            self.turn_done_tokens = 0;
+            self.step_usage = false;
+            self.usage.turn_input = 0;
+            self.usage.turn_cached = 0;
+            self.turn.request_started(std::time::Instant::now());
             self.emit(Ev::TurnStart);
         }
+        let mut call_completed = false;
         match s["step_type"].as_str().unwrap_or("") {
             "agent_response" => {
                 if let Some(text) = s["text_delta"].as_str().filter(|t| !t.is_empty()) {
@@ -1593,7 +1611,10 @@ impl Bridge {
                     self.emit(Ev::TextDelta { id: format!("t{index}"), text: text.to_string() });
                 }
             }
-            "subagent" => self.on_subagent_step(s, index, state, running),
+            "subagent" => {
+                self.on_subagent_step(s, index, state, running);
+                call_completed = !running;
+            }
             "system_message" => {
                 self.poll_swarm();
                 self.poll_subagents();
@@ -1630,6 +1651,7 @@ impl Bridge {
                         (new != old).then(|| diff::unified(&crate::harness::tools::short_path(&path), &old, &new))
                     });
                     self.emit(Ev::ToolEnd { id, ok, output, diff });
+                    call_completed = true;
                 }
             }
             _ => {
@@ -1638,9 +1660,14 @@ impl Bridge {
                 }
             }
         }
+        // Apply step usage before opening the next request after a completed tool/subagent so a
+        // DONE tool/subagent update carrying `usage` cannot close a freshly opened 0ms request.
         if !s["usage"].is_null() {
             self.step_usage = true;
             self.on_usage(&s["usage"]);
+        }
+        if call_completed && self.busy && self.calls.is_empty() && !self.turn.has_request() {
+            self.turn.request_started(std::time::Instant::now());
         }
     }
 
@@ -1666,8 +1693,11 @@ impl Bridge {
         let cached = n("cache_read_tokens", "cacheReadTokens");
         let cache_write = n("cache_creation_tokens", "cacheCreationTokens").max(n("cache_write_tokens", "cacheWriteTokens"));
         let input = raw_input + cached + cache_write;
-        let total = self.turn.now();
-        self.turn.exact(total + output);
+        // `agy` does not stream thinking or tool-call argument deltas, so always time from
+        // `request_started` (`from_start = true`) to prevent hidden-token inflation.
+        self.turn.request_done(output, std::time::Instant::now(), true);
+        self.turn_done_tokens += output;
+        self.turn.exact(self.turn_done_tokens);
         let us = &mut self.usage;
         us.context = input + output;
         us.input += input;
@@ -1863,6 +1893,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         restart: false,
         usage: Usage { window: window(&opts.model), ..Default::default() },
         step_usage: false,
+        turn_done_tokens: 0,
         turn: TurnTokens::default(),
         mode: opts.mode,
         bg_owner: opts.bg_owner.clone(),
@@ -2004,7 +2035,7 @@ mod tests {
         Bridge {
             events: tx, session: None, model: model.into(), system: None, busy: true, queued: 0,
             calls: HashMap::new(), subagents: HashMap::new(), brain_dir: None, swarm: SwarmState::default(),
-            restart: false, usage: Usage::default(), step_usage: false,
+            restart: false, usage: Usage::default(), step_usage: false, turn_done_tokens: 0,
             turn: TurnTokens::default(), mode: Mode::Ask, bg_owner: String::new(), asks: Arc::default(),
             ultracode: false, swarm_invoked: false, swarm_exit_pending: false,
         }
@@ -2496,5 +2527,74 @@ mod tests {
         b.on_line(&json!({ "event": "result", "result": { "status": "SUCCESS", "usage": { "input_tokens": 100, "output_tokens": 5 } } }));
         let Some(Ev::Usage(u)) = rx.try_iter().filter(|e| matches!(e, Ev::Usage(_))).last() else { panic!("expected Usage event") };
         assert_eq!(u.context, 105);
+    }
+
+    #[test]
+    fn timed_steps_exclude_tool_wait_and_do_not_double_count_streamed_turn_tokens() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut b = test_bridge(tx, "gemini-4-neon");
+        b.turn.request_started(std::time::Instant::now());
+        // Step 1 streams 400 chars (~100 est. tokens) over ~80ms, then finishes with 120 exact tokens.
+        std::thread::sleep(Duration::from_millis(80));
+        b.on_line(&json!({ "event": "step_update", "step_update": { "step_index": 1, "step_type": "agent_response", "state": "GENERATING", "text_delta": "x".repeat(400) } }));
+        b.on_line(&json!({ "event": "step_update", "step_update": {
+            "step_index": 1, "step_type": "agent_response", "state": "DONE",
+            "usage": { "input_tokens": 1_000, "output_tokens": 120 } } }));
+        let u1 = rx.try_iter().filter_map(|e| if let Ev::Usage(u) = e { Some(u) } else { None }).last().unwrap();
+        assert_eq!(u1.turn, 120, "exact step output must replace (not add onto) streamed estimate");
+        assert_eq!(u1.turn_streamed, 120);
+        assert!(u1.turn_active_ms >= 60, "step 1 should be timed from request_started, got {}ms", u1.turn_active_ms);
+        // Tool step runs for 120ms (excluded from active_ms), then opens Request 2 on completion.
+        b.on_line(&json!({ "event": "step_update", "step_update": {
+            "step_index": 2, "step_type": "tool", "state": "RUNNING",
+            "tool_info": { "name": "read_file", "parameters": { "path": "a.rs" } } } }));
+        std::thread::sleep(Duration::from_millis(120));
+        b.on_line(&json!({ "event": "step_update", "step_update": {
+            "step_index": 2, "step_type": "tool", "state": "DONE",
+            "tool_info": { "name": "read_file", "parameters": { "path": "a.rs" }, "output": "ok" } } }));
+        assert!(b.turn.has_request(), "tool completion must open the next model request");
+        std::thread::sleep(Duration::from_millis(60));
+        b.on_line(&json!({ "event": "step_update", "step_update": {
+            "step_index": 3, "step_type": "agent_response", "state": "DONE",
+            "usage": { "input_tokens": 1_200, "output_tokens": 80 } } }));
+        let u2 = rx.try_iter().filter_map(|e| if let Ev::Usage(u) = e { Some(u) } else { None }).last().unwrap();
+        assert_eq!(u2.turn, 200);
+        assert_eq!(u2.turn_streamed, 200);
+        assert!(u2.turn_active_ms >= u1.turn_active_ms + 45, "step 2 time counted: {} -> {}ms", u1.turn_active_ms, u2.turn_active_ms);
+        assert!(u2.turn_active_ms < u1.turn_active_ms + 130, "tool runtime excluded: {} -> {}ms", u1.turn_active_ms, u2.turn_active_ms);
+    }
+
+    #[test]
+    fn subagent_completion_opens_next_request_and_null_result_usage_does_not_leak_step_flag() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut b = test_bridge(tx, "gemini-4-neon");
+        b.turn.request_started(std::time::Instant::now());
+        std::thread::sleep(Duration::from_millis(50));
+        // Step 1 finishes with usage, then a subagent step runs and completes.
+        b.on_line(&json!({ "event": "step_update", "step_update": {
+            "step_index": 1, "step_type": "agent_response", "state": "DONE",
+            "usage": { "input_tokens": 500, "output_tokens": 50 } } }));
+        b.on_line(&json!({ "event": "step_update", "step_update": {
+            "step_index": 2, "step_type": "subagent", "state": "RUNNING",
+            "subagent_info": { "subagents": [{ "type_name": "explorer", "conversation_id": "sub-1" }] } } }));
+        b.on_line(&json!({ "event": "step_update", "step_update": {
+            "step_index": 2, "step_type": "subagent", "state": "DONE",
+            "subagent_info": { "subagents": [{ "type_name": "explorer", "conversation_id": "sub-1" }] } } }));
+        assert!(b.turn.has_request(), "subagent step completion must open next model request");
+        // Queued turn rollover after a result with null usage must reset step_usage and turn_input/turn_cached.
+        b.queued = 1;
+        b.on_line(&json!({ "event": "result", "result": { "status": "SUCCESS" } }));
+        assert!(!b.step_usage, "null result usage must not leak step_usage into queued turn");
+        assert_eq!((b.usage.turn_input, b.usage.turn_cached), (0, 0));
+        // A DONE tool update carrying usage must process usage BEFORE opening the next request.
+        std::thread::sleep(Duration::from_millis(50));
+        b.on_line(&json!({ "event": "step_update", "step_update": {
+            "step_index": 3, "step_type": "tool", "state": "DONE",
+            "tool_info": { "name": "read_file", "parameters": { "path": "x.rs" }, "output": "ok" },
+            "usage": { "input_tokens": 200, "output_tokens": 40 } } }));
+        let u = rx.try_iter().filter_map(|e| if let Ev::Usage(u) = e { Some(u) } else { None }).last().unwrap();
+        assert_eq!(u.turn_streamed, 40);
+        assert!(u.turn_active_ms >= 35, "tool DONE usage must close the open request, got {}ms", u.turn_active_ms);
+        assert!(b.turn.has_request(), "and open the next request after applying usage");
     }
 }

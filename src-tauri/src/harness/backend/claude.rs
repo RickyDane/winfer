@@ -769,6 +769,7 @@ impl Bridge {
             Cmd::Compact => {
                 self.busy = true;
                 self.emit(Ev::TurnStart);
+                self.live.turn.request_started(std::time::Instant::now());
                 let _ = proc.write(&user_message(&UserMsg { text: "/compact".into(), images: Vec::new(), skill: None }));
             }
             Cmd::SetCompaction { trim, compact } => {
@@ -1844,6 +1845,7 @@ mod tests {
         let (mut b, rx) = bridge();
         let ev = |e: Value| json!({ "type": "stream_event", "event": e });
         let outputs = |rx: &std::sync::mpsc::Receiver<Ev>| rx.try_iter().filter_map(|e| if let Ev::Usage(u) = e { Some(u.turn) } else { None }).collect::<Vec<_>>();
+        b.live.turn.request_started(std::time::Instant::now());
         b.on_line(&ev(json!({ "type": "message_start", "message": { "id": "m1", "usage": { "input_tokens": 10, "cache_read_input_tokens": 90, "output_tokens": 2 } } })));
         b.on_line(&ev(json!({ "type": "content_block_start", "index": 0, "content_block": { "type": "text" } })));
         b.on_line(&ev(json!({ "type": "content_block_delta", "index": 0, "delta": { "type": "text_delta", "text": "x".repeat(400) } })));
@@ -1859,6 +1861,22 @@ mod tests {
         assert_eq!(us.iter().map(|u| u.turn).collect::<Vec<_>>(), vec![130, 3], "the next turn counts from zero");
         assert_eq!(us.iter().map(|u| u.output).collect::<Vec<_>>(), vec![130, 133], "the session's output adds up");
         assert!(us[1].window == 1000 && us[1].cost == Some(0.1));
+    }
+
+    #[test]
+    fn implicit_burst_without_request_start_is_dropped_from_pace() {
+        let (mut b, _rx) = bridge();
+        let ev = |e: Value| json!({ "type": "stream_event", "event": e });
+        // Autonomous wake-up (no prior Cmd::Send / request_started) delivering a 400-token burst
+        // instantaneously: must be dropped from streamed_total/active_ms rather than inflating tok/s.
+        b.on_line(&ev(json!({ "type": "message_start", "message": { "id": "m1", "usage": { "input_tokens": 10, "output_tokens": 1 } } })));
+        b.on_line(&ev(json!({ "type": "content_block_start", "index": 0, "content_block": { "type": "text" } })));
+        for _ in 0..4 {
+            b.on_line(&ev(json!({ "type": "content_block_delta", "index": 0, "delta": { "type": "text_delta", "text": "x".repeat(400) } })));
+        }
+        b.on_line(&ev(json!({ "type": "message_delta", "usage": { "output_tokens": 400 } })));
+        b.on_line(&ev(json!({ "type": "message_stop" })));
+        assert_eq!((b.live.turn.streamed_total(), b.live.turn.active_ms()), (0, 0));
     }
 
     #[test]

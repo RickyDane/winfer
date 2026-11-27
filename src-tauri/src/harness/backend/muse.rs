@@ -570,7 +570,7 @@ impl Bridge {
         self.text_seg = 0;
         self.noise.clear();
         self.turn = TurnTokens::default();
-        (self.usage.turn, self.usage.turn_input, self.usage.turn_cached) = (0, 0, 0);
+        (self.usage.turn, self.usage.turn_input, self.usage.turn_cached, self.usage.turn_streamed, self.usage.turn_active_ms) = (0, 0, 0, 0, 0);
         self.emit(Ev::TurnStart);
         let session = match &self.session {
             Some(s) => s.clone(),
@@ -663,6 +663,7 @@ impl Bridge {
         let l = &mut self.usage;
         l.turn = self.turn.now();
         l.turn_streamed = self.turn.streamed_total();
+        l.turn_active_ms = self.turn.active_ms();
         let u = l.clone();
         self.emit(Ev::Usage(u));
     }
@@ -715,7 +716,7 @@ impl Bridge {
         }
         if let Some(text) = text_delta(v) {
             self.streamed = true;
-            if self.turn.streamed(&text) {
+            if self.turn.stream_paced(&text) {
                 self.emit_usage();
             }
             self.emit(Ev::TextDelta { id: self.text_id(), text });
@@ -743,6 +744,10 @@ impl Bridge {
         }
         if let Some((ok, text)) = terminal(v) {
             self.finished = true;
+            self.turn.stream_pause();
+            if self.turn.active_ms() != self.usage.turn_active_ms || self.turn.streamed_total() != self.usage.turn_streamed {
+                self.emit_usage();
+            }
             for (id, _) in std::mem::take(&mut self.calls) {
                 // Their result records may still follow in the log: let them land.
                 self.ended.insert(id.clone(), ok);
@@ -776,6 +781,7 @@ impl Bridge {
         if self.calls.contains_key(&id) {
             return;
         }
+        self.turn.stream_pause();
         // A message's text ends where its tools start: the next delta is a new block.
         self.text_seg += 1;
         let (raw, input) = self
@@ -948,6 +954,71 @@ mod tests {
         assert!(lean.contains(&"--no-foreign-personal-context".to_string()));
         assert!(lean.windows(2).any(|w| w == ["--context-compaction-soft-threshold", "0.75"]));
         assert!(lean.windows(2).any(|w| w == ["--context-compaction-hard-threshold", "0.9"]));
+    }
+
+    #[test]
+    fn stream_paced_times_visible_deltas_without_mixing_hidden_run_usage() {
+        let (me, _in_rx) = channel();
+        let (tx, rx) = channel();
+        let mut b = Bridge {
+            events: tx,
+            me,
+            cwd: "/tmp".into(),
+            model: "muse-spark-1.3".into(),
+            effort: Some("ultra".into()),
+            mode: Mode::Yolo,
+            system: None,
+            session: Some("s1".into()),
+            proc: None,
+            run: 1,
+            busy: true,
+            finished: false,
+            queue: Vec::new(),
+            streamed: false,
+            calls: HashMap::new(),
+            log_tail: None,
+            log_pos: Arc::new(std::sync::Mutex::new(0)),
+            text_seg: 0,
+            inputs: HashMap::new(),
+            results: HashMap::new(),
+            ended: HashMap::new(),
+            task_calls: HashMap::new(),
+            lean: false,
+            trim_at: 0,
+            compact_at: 0,
+            explained_subagent: false,
+            noise: String::new(),
+            explained_ask: true,
+            usage: Usage::default(),
+            turn: TurnTokens::default(),
+        };
+        let delta = |n: usize| json!({"payload_type": "run.output.delta", "payload": {"text": "x".repeat(n)}});
+        b.on_record(&delta(120));
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        b.on_record(&delta(120));
+        let live = rx.try_iter().filter_map(|e| if let Ev::Usage(u) = e { Some(u) } else { None }).last().unwrap();
+        assert_eq!(live.turn_streamed, 30, "excludes chunk 1 fencepost");
+        assert!(live.turn_active_ms >= 100, "stream_paced emits turn_active_ms: {}", live.turn_active_ms);
+
+        // Tool start pauses the burst so tool runtime is never counted.
+        b.on_record(&json!({"payload_type": "tool_batch.effect.started", "payload": {"record": {"call_id": "c1", "tool_name": "bash"}}}));
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        b.on_record(&json!({"payload_type": "tool_batch.effect.terminal", "payload": {"record": {"call_id": "c1", "outcome": {"kind": "completed"}}}}));
+
+        // Second burst after tool completes.
+        b.on_record(&delta(120));
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        b.on_record(&delta(120));
+
+        // `run.usage` carries hidden reasoning + tool-arg tokens (e.g. 5000): updates exact `turn`/`output`
+        // without overwriting stream-paced `turn_streamed` or inflating tok/s.
+        b.on_record(&json!({"payload_type": "run.usage", "payload": {"models": [{"model": "muse-spark-1.3", "input_tokens": 500, "cached_tokens": 100, "output_tokens": 5000}]}}));
+        b.on_record(&json!({"payload_type": "run.terminal.completed", "payload": {"text": "done"}}));
+        let done = rx.try_iter().filter_map(|e| if let Ev::Usage(u) = e { Some(u) } else { None }).last().unwrap();
+        assert_eq!(done.turn, 5000);
+        assert_eq!(done.output, 5000);
+        assert_eq!(done.turn_streamed, 60, "hidden run.usage tokens must not overwrite stream-paced turn_streamed");
+        assert!(done.turn_active_ms >= 200 && done.turn_active_ms < 360, "expected ~240ms across two bursts (excluding 150ms tool), got {}ms", done.turn_active_ms);
     }
 }
 

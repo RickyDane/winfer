@@ -837,10 +837,12 @@ fn request_once(shared: &Shared, tools_on: bool, sub: Option<&Sub>, cap: Option<
             }
         };
         // The turn's output so far, estimated from the text until the response reports its count
-        // (a subagent's counts too: its tokens add to the totals).
-        let streamed = |d: &str| {
+        // (a subagent's counts too: its tokens add to the totals). `pace = false` updates the
+        // displayed token count without advancing tok/s pacing (used for reasoning summaries,
+        // which arrive in fast bursts after hidden thinking).
+        let streamed_paced = |d: &str, pace: bool| {
             let mut st = shared.state.lock().unwrap();
-            let moved = if sub.is_none() { st.turn.streamed(d) } else { st.turn.streamed_sub(d) };
+            let moved = if pace && sub.is_none() { st.turn.streamed(d) } else { st.turn.streamed_sub(d) };
             if moved {
                 st.usage.turn = st.turn.now();
                 st.usage.turn_streamed = st.turn.streamed_total();
@@ -848,6 +850,7 @@ fn request_once(shared: &Shared, tools_on: bool, sub: Option<&Sub>, cap: Option<
                 emit(Ev::Usage(st.usage.clone()));
             }
         };
+        let streamed = |d: &str| streamed_paced(d, true);
         let id = ev["item_id"].as_str().unwrap_or("").to_string();
         match ev["type"].as_str().unwrap_or("") {
             "response.output_text.delta" => {
@@ -866,7 +869,7 @@ fn request_once(shared: &Shared, tools_on: bool, sub: Option<&Sub>, cap: Option<
             "response.reasoning_summary_text.delta" => {
                 let d = ev["delta"].as_str().unwrap_or("");
                 reasoning_summary = true;
-                streamed(d);
+                streamed_paced(d, false);
                 stream(Ev::ReasoningDelta { id, text: d.into() });
             }
             "response.output_item.added" => {
@@ -1614,6 +1617,18 @@ fn summarize(shared: &Shared) -> bool {
 
 fn compact(shared: &Shared) {
     let _ = shared.events.send(Ev::TurnStart);
+    {
+        let mut st = shared.state.lock().unwrap();
+        st.turn = TurnTokens::default();
+        st.turn_base = st.usage.output;
+        st.turn_input_base = st.usage.input;
+        st.turn_cached_base = st.usage.cached;
+        st.usage.turn = 0;
+        st.usage.turn_input = 0;
+        st.usage.turn_cached = 0;
+        st.usage.turn_streamed = 0;
+        st.usage.turn_active_ms = 0;
+    }
     if summarize(shared) {
         let st = shared.state.lock().unwrap();
         save_items(&shared.session, &st.items);

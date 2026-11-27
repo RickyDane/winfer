@@ -419,7 +419,10 @@ impl Bridge {
                 prompt.push(json!({ "type": "image", "mimeType": media, "data": data }));
             }
         }
+        self.calls.clear();
+        (self.usage.turn, self.usage.turn_input, self.usage.turn_cached, self.usage.turn_streamed, self.usage.turn_active_ms) = (0, 0, 0, 0, 0);
         self.turn_tokens = TurnTokens::default();
+        self.turn_tokens.window_start(std::time::Instant::now());
         let session = self.session.clone().unwrap_or_default();
         self.prompt = Some(self.request("session/prompt", json!({ "sessionId": session, "prompt": prompt }), Pending::Prompt));
     }
@@ -438,6 +441,9 @@ impl Bridge {
             None => json!({ "outcome": { "outcome": "cancelled" } }),
         };
         self.respond(ask.rpc, outcome);
+        if self.prompt.is_some() && self.calls.is_empty() && self.asks.is_empty() {
+            self.turn_tokens.window_start(std::time::Instant::now());
+        }
     }
 
     fn on_message(&mut self, v: &Value) {
@@ -525,17 +531,22 @@ impl Bridge {
                 if let Some(e) = error {
                     self.emit(Ev::Error(e));
                 }
+                let now = std::time::Instant::now();
                 let u = &result["usage"];
                 if u.is_object() {
                     let n = |k: &str| u[k].as_u64().unwrap_or(0);
                     let input = n("inputTokens") + n("cachedReadTokens") + n("cachedWriteTokens");
+                    let output = n("outputTokens");
                     self.usage.input += input;
                     self.usage.cached += n("cachedReadTokens");
-                    self.usage.output += n("outputTokens");
+                    self.usage.output += output;
                     self.usage.turn_input = input;
                     self.usage.turn_cached = n("cachedReadTokens");
-                    self.turn_tokens.exact(n("outputTokens"));
+                    self.turn_tokens.exact(output);
+                    self.turn_tokens.turn_done_window(output, now);
                     self.emit_usage();
+                } else {
+                    self.turn_tokens.window_pause(now);
                 }
                 match result["stopReason"].as_str() {
                     Some("max_tokens") => self.emit(Ev::Notice("The model hit its output limit.".into())),
@@ -543,10 +554,11 @@ impl Bridge {
                     Some("refusal") => self.emit(Ev::Notice("The model declined to continue.".into())),
                     _ => {}
                 }
-                // Prompts it never answered end with the turn.
+                // Prompts it never answered and unfinished calls end with the turn.
                 for (_, ask) in std::mem::take(&mut self.asks) {
                     self.respond(ask.rpc, json!({ "outcome": { "outcome": "cancelled" } }));
                 }
+                self.calls.clear();
                 self.busy = false;
                 self.emit(Ev::TurnDone);
             }
@@ -565,6 +577,7 @@ impl Bridge {
         let mut u = self.usage.clone();
         u.turn = self.turn_tokens.now();
         u.turn_streamed = self.turn_tokens.streamed_total();
+        u.turn_active_ms = self.turn_tokens.active_ms();
         self.emit(Ev::Usage(u));
     }
 
@@ -573,6 +586,7 @@ impl Bridge {
             self.outbox.push(json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32601, "message": format!("winfer code doesn't support {method}") } }));
             return;
         }
+        self.turn_tokens.window_pause(std::time::Instant::now());
         let tool = &p["toolCall"];
         let call_id = tool["toolCallId"].as_str().unwrap_or("").to_string();
         self.track(tool, true);
@@ -661,7 +675,7 @@ impl Bridge {
             }
             "agent_thought_chunk" => {
                 let text = text();
-                if self.turn_tokens.streamed_sub(&text) {
+                if self.turn_tokens.streamed(&text) {
                     self.emit_usage();
                 }
                 self.emit(Ev::ReasoningDelta { id: id(), text });
@@ -714,6 +728,11 @@ impl Bridge {
         let Some(call) = self.calls.get_mut(id) else { return };
         let output = content_text(&u["content"]);
         let status = u["status"].as_str().unwrap_or("");
+        // `pending` arrives while the model is still streaming tool-call arguments; pause only once
+        // the tool actually starts executing (`in_progress`) or asks for permission (`on_request`).
+        if status == "in_progress" {
+            self.turn_tokens.window_pause(std::time::Instant::now());
+        }
         if status == "in_progress" && output.len() > call.shown && output.is_char_boundary(call.shown) {
             let chunk = output[call.shown..].to_string();
             call.shown = output.len();
@@ -728,6 +747,9 @@ impl Bridge {
         let output = if output.is_empty() { u["rawOutput"]["error"].as_str().unwrap_or("").to_string() } else { output };
         let diff = if ok { edit_diff(&call, u) } else { None };
         self.emit(Ev::ToolEnd { id: id.to_string(), ok, output, diff });
+        if self.prompt.is_some() && self.calls.is_empty() && self.asks.is_empty() {
+            self.turn_tokens.window_start(std::time::Instant::now());
+        }
     }
 }
 
@@ -901,5 +923,68 @@ mod tests {
         let config: Value = serde_json::from_str(&config_env(Some(r#"{"theme":"dark","permission":{"read":"allow"}}"#))).unwrap();
         assert_eq!(config["theme"], "dark");
         assert_eq!(config["permission"], json!({ "read": "allow", "edit": "ask", "bash": "ask", "webfetch": "ask" }));
+    }
+
+    #[test]
+    fn active_window_counts_thoughts_and_pauses_for_tools_and_approvals() {
+        let (mut b, rx) = bridge(Mode::Ask);
+        b.on_cmd(Cmd::Send(UserMsg { text: "check".into(), ..Default::default() }));
+        let prompt = b.outbox.pop().unwrap();
+        // Main-session thoughts feed `streamed()` (not `streamed_sub()`).
+        b.on_message(&update(json!({ "sessionUpdate": "agent_thought_chunk", "messageId": "m1", "content": { "type": "text", "text": "t".repeat(120) } })));
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        b.on_message(&update(json!({ "sessionUpdate": "agent_thought_chunk", "messageId": "m1", "content": { "type": "text", "text": "u".repeat(120) } })));
+        let live = rx.try_iter().filter_map(|e| if let Ev::Usage(u) = e { Some(u) } else { None }).last().unwrap();
+        assert_eq!(live.turn_streamed, 30, "thought chunks count toward main-agent turn_streamed (excluding chunk 1)");
+        assert!(live.turn_active_ms >= 100, "live turn_active_ms reported: {}", live.turn_active_ms);
+
+        // Permission prompt + tool execution pause the active window.
+        let req = json!({ "jsonrpc": "2.0", "id": 9, "method": "session/request_permission", "params": { "sessionId": "ses_1",
+            "toolCall": { "toolCallId": "c1", "name": "shell", "kind": "execute", "rawInput": { "command": "pwd" } },
+            "options": [{ "optionId": "once", "kind": "allow_once" }] } });
+        b.on_message(&req);
+        std::thread::sleep(std::time::Duration::from_millis(90));
+        b.on_cmd(Cmd::Approve("p9".into(), Decision::Allow));
+        b.on_message(&update(json!({ "sessionUpdate": "tool_call_update", "toolCallId": "c1", "status": "in_progress", "content": [] })));
+        std::thread::sleep(std::time::Duration::from_millis(90));
+        b.on_message(&update(json!({ "sessionUpdate": "tool_call_update", "toolCallId": "c1", "status": "completed", "content": [] })));
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        b.on_message(&json!({ "jsonrpc": "2.0", "id": prompt["id"], "result": { "stopReason": "end_turn", "usage": { "inputTokens": 100, "outputTokens": 180, "cachedReadTokens": 0 } } }));
+        let done = rx.try_iter().filter_map(|e| if let Ev::Usage(u) = e { Some(u) } else { None }).last().unwrap();
+        assert_eq!(done.turn_streamed, 180);
+        assert!(done.turn_active_ms >= 150, "expected >=150ms active window, got {}ms", done.turn_active_ms);
+        assert!(done.turn_active_ms < 300, "approval+tool pause (180ms) must be excluded, got {}ms", done.turn_active_ms);
+    }
+
+    #[test]
+    fn pending_tool_keeps_window_open_and_aborted_turn_clears_calls() {
+        let (mut b, rx) = bridge(Mode::Yolo);
+        // Turn 1: a `pending` tool call (model still streaming args) is abandoned when the turn ends early.
+        b.on_cmd(Cmd::Send(UserMsg { text: "edit big file".into(), ..Default::default() }));
+        let p1 = b.outbox.pop().unwrap();
+        b.on_message(&update(json!({ "sessionUpdate": "tool_call", "toolCallId": "c_stale", "name": "write", "kind": "edit", "status": "pending", "rawInput": {} })));
+        std::thread::sleep(std::time::Duration::from_millis(80));
+        b.on_message(&json!({ "jsonrpc": "2.0", "id": p1["id"], "result": { "stopReason": "cancelled", "usage": { "inputTokens": 50, "outputTokens": 120, "cachedReadTokens": 0 } } }));
+        let u1 = rx.try_iter().filter_map(|e| if let Ev::Usage(u) = e { Some(u) } else { None }).last().unwrap();
+        assert_eq!(u1.turn_streamed, 120);
+        assert!(u1.turn_active_ms >= 65, "pending tool arg streaming must count toward window_active, got {}ms", u1.turn_active_ms);
+        assert!(b.calls.is_empty(), "aborted turn must clear unfinished tool calls");
+
+        // Turn 2: tool execution pauses and resumes cleanly (not blocked by Turn 1's stale call).
+        b.on_cmd(Cmd::Send(UserMsg { text: "next".into(), ..Default::default() }));
+        let p2 = b.outbox.pop().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(40));
+        b.on_message(&update(json!({ "sessionUpdate": "tool_call", "toolCallId": "c2", "name": "shell", "kind": "execute", "status": "pending", "rawInput": {} })));
+        std::thread::sleep(std::time::Duration::from_millis(40));
+        b.on_message(&update(json!({ "sessionUpdate": "tool_call_update", "toolCallId": "c2", "status": "in_progress", "rawInput": { "command": "ls" } })));
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        b.on_message(&update(json!({ "sessionUpdate": "tool_call_update", "toolCallId": "c2", "status": "completed", "content": [] })));
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        b.on_message(&json!({ "jsonrpc": "2.0", "id": p2["id"], "result": { "stopReason": "end_turn", "usage": { "inputTokens": 20, "outputTokens": 100, "cachedReadTokens": 0 } } }));
+        let u2 = rx.try_iter().filter_map(|e| if let Ev::Usage(u) = e { Some(u) } else { None }).last().unwrap();
+        assert_eq!(u2.turn_streamed, 100);
+        assert_eq!(u2.turn_input, 20);
+        assert!(u2.turn_active_ms >= 120, "Turn 2 active window (40+40+60ms) must resume after tool, got {}ms", u2.turn_active_ms);
+        assert!(u2.turn_active_ms < 230, "Turn 2 in_progress tool (120ms) must be excluded, got {}ms", u2.turn_active_ms);
     }
 }
