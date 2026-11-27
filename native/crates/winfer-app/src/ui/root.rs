@@ -804,8 +804,9 @@ impl Root {
                 let (name, line) = crate::code::links::split_line(href);
                 // Agents write spaces in link targets as %20: look up the real path.
                 let path = crate::ui::viewer::percent_decode(name.trim_start_matches("file://"));
-                // A file the chat named: straight into the viewer.
-                if std::path::Path::new(&path).is_absolute() && std::path::Path::new(&path).is_file() {
+                let is_remote = this.state.read(cx).pane(&pane).is_some_and(|p| p.remote.is_some());
+                // A local file the chat named: straight into the viewer.
+                if !is_remote && std::path::Path::new(&path).is_absolute() && std::path::Path::new(&path).is_file() {
                     this.viewer.update(cx, |v, cx| v.open(path, line, false, cx));
                     return;
                 }
@@ -958,12 +959,59 @@ impl Root {
         match link {
             terminal::Link::Web(url) => self.execute(Command::BrowserOpen { url, new_tab: true }, window, cx),
             terminal::Link::File { path, line } => {
-                let s = self.state.read(cx);
-                let (cwd, roots) = match s.pane(&pane_id) {
-                    Some(p) => (p.cwd.clone(), s.workspaces.iter().find(|w| w.id == p.workspace_id).map(|w| vec![w.root_dir.clone()])),
-                    None => (self.side_terminal_pane(&pane_id, cx).map_or_else(|| "~".to_string(), |p| p.cwd), None),
+                let (remote, cwd, roots) = {
+                    let s = self.state.read(cx);
+                    match s.pane(&pane_id) {
+                        Some(p) if p.remote.is_some() => {
+                            let r = p.remote.clone().unwrap();
+                            let mirror = self.connect.mirrors.get(&r.peer);
+                            let rpane = mirror.and_then(|m| m.panes.iter().find(|rp| rp.id == r.pane));
+                            let ws_root = rpane
+                                .and_then(|rp| mirror?.workspace_roots.get(&rp.workspace_id).cloned())
+                                .or_else(|| {
+                                    s.workspaces
+                                        .iter()
+                                        .find(|w| w.id == p.workspace_id)
+                                        .and_then(|w| w.remote.as_ref())
+                                        .and_then(|rw| mirror?.workspace_roots.get(&rw.workspace).cloned())
+                                });
+                            let cwd = self
+                                .code_models
+                                .get(&pane_id)
+                                .and_then(|m| m.read(cx).state.cwd.clone())
+                                .filter(|c| !c.is_empty())
+                                .or_else(|| rpane.map(|rp| rp.cwd.clone()).filter(|c| !c.is_empty()))
+                                .or_else(|| ws_root.clone())
+                                .unwrap_or_else(|| "~".to_string());
+                            let roots = ws_root.map(|root| vec![root]);
+                            (Some(r), cwd, roots)
+                        }
+                        Some(p) => (None, p.cwd.clone(), s.workspaces.iter().find(|w| w.id == p.workspace_id).map(|w| vec![w.root_dir.clone()])),
+                        None => (None, self.side_terminal_pane(&pane_id, cx).map_or_else(|| "~".to_string(), |p| p.cwd), None),
+                    }
                 };
                 let is_absolute = path.starts_with('/') || path.starts_with('~');
+                if let Some(remote) = remote {
+                    cx.spawn(async move |this, cx| {
+                        let query = path.clone();
+                        let res = winfer_core::connect_files::call(
+                            &remote.peer,
+                            "resolve",
+                            serde_json::json!({ "cwd": cwd, "path": query, "roots": roots }),
+                        )
+                        .await;
+                        let _ = this.update(cx, |this, cx| match res {
+                            Ok(v) => match v["path"].as_str() {
+                                Some(found) => this.viewer.update(cx, |v, cx| v.open_remote(&remote.peer, found.to_string(), line, false, cx)),
+                                None if is_absolute => this.toast(format!("Couldn't find {path} on {}", remote.machine), cx),
+                                None => {}
+                            },
+                            Err(e) => this.toast(e, cx),
+                        });
+                    })
+                    .detach();
+                    return;
+                }
                 cx.spawn(async move |this, cx| {
                     let query = path.clone();
                     let found = tauri::async_runtime::spawn(async move { winfer_backend::files::files_resolve(cwd, vec![query], roots).await }).await.ok().and_then(|r| r.into_iter().next().flatten());

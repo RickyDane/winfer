@@ -262,7 +262,7 @@ impl Host {
         json!({
             "id": pane.id, "title": s.pane_label(pane),
             "workspace": s.workspaces.iter().find(|w| w.id == pane.workspace_id).map_or("", |w| w.name.as_str()),
-            "workspaceId": pane.workspace_id, "archived": pane.archived,
+            "workspaceId": pane.workspace_id, "archived": pane.archived, "cwd": pane.cwd,
             "provider": if pane.provider == "shell" { None } else { Some(pane.provider.clone()) },
             "status": status_text, "message": message, "request": request, "reply": reply,
             "config": crate::chats::config(&pane.id).map(|(c, _)| c),
@@ -274,7 +274,7 @@ impl Host {
     fn mirror(&self) -> Value {
         let s = self.state.lock();
         let panes: Vec<Value> = s.workspaces.iter().flat_map(ordered).map(|p| Self::pane_json(&s, p)).collect();
-        let workspaces: Vec<Value> = s.workspaces.iter().map(|w| json!({ "id": w.id, "name": w.name, "active": w.id == s.active_workspace_id })).collect();
+        let workspaces: Vec<Value> = s.workspaces.iter().map(|w| json!({ "id": w.id, "name": w.name, "rootDir": winfer_core::folders::expand(&w.root_dir).to_string_lossy(), "active": w.id == s.active_workspace_id })).collect();
         let providers: Vec<Value> = s.providers.iter().filter(|p| p.installed && p.id != "shell").map(|p| json!({ "id": p.id, "name": p.name })).collect();
         let server = json!({
             "version": crate::update::VERSION, "latest": crate::update::latest_known(), "update": crate::update::available(),
@@ -1104,6 +1104,33 @@ impl Host {
                 }
             }
             "spawn_agent" => self.remote_tool("", tool, a),
+            "open_file" => {
+                let path = a["path"].as_str().unwrap_or_default().trim().to_string();
+                if path.is_empty() {
+                    Err("path is empty".into())
+                } else {
+                    let (cwd, ws_id, roots) = {
+                        let s = self.state.lock();
+                        let pane = s.pane(me);
+                        let ws = pane.and_then(|p| s.workspaces.iter().find(|w| w.id == p.workspace_id)).or(s.workspaces.first());
+                        let cwd = pane.map(|p| p.cwd.clone()).filter(|c| !c.is_empty()).or_else(|| ws.map(|w| w.root_dir.clone())).unwrap_or_else(|| "~".into());
+                        let roots = ws.map(|w| vec![w.root_dir.clone()]);
+                        (cwd, ws.map(|w| w.id.clone()), roots)
+                    };
+                    let found = tauri::async_runtime::block_on(winfer_backend::files::files_resolve(cwd.clone(), vec![path.clone()], roots))
+                        .into_iter()
+                        .next()
+                        .flatten();
+                    match found {
+                        Some(found) => {
+                            let line = a["line"].as_u64();
+                            connect::broadcast(&json!({ "t": "file.open", "path": found, "line": line, "workspaceId": ws_id }));
+                            Ok(format!("Sent {found} to connected winfer desktops to show in the file viewer."))
+                        }
+                        None => Err(format!("No file at {path} (relative paths start from {cwd}).")),
+                    }
+                }
+            }
             "notify_user" => Ok("Noted (a winfer server shows it on the machines it's paired with as the pane's status).".into()),
             _ => Err(format!("{tool} isn't available on a winfer server yet.")),
         };
@@ -1167,6 +1194,10 @@ fn screen_thread(pane_id: &str) -> Value {
 
 pub(crate) fn write_chat(pane_id: &str, cmd: &Cmd) {
     let line = format!("{}\n", cmd.json());
+    let echo = connect_term::chat_echo(&line);
+    if !echo.is_empty() {
+        connect_term::tap(pane_id, echo.as_bytes(), true);
+    }
     let id = pane_id.to_string();
     backend::background(move || {
         let _ = pty::pty_write(backend::app().state(), id, line);

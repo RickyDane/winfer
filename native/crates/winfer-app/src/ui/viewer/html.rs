@@ -1,18 +1,23 @@
 //! Rendered HTML files and videos: a wry webview placed over the viewer's body. The page and the
-//! files next to it (styles, scripts, images, media) come from disk through the `winferfile`
-//! protocol, limited to the page's own folder; web links open in the system browser.
+//! files next to it (styles, scripts, images, media) come from disk (or over Winfer Connect for
+//! remote files) through the `winferfile` protocol, limited to the page's own folder; web links
+//! open in the system browser.
 
-use super::{Content, ViewerPanel, expand, extension, video};
+use super::{Content, ViewerPanel, expand, extension, percent_decode, video};
 use crate::theme::Colors;
+use base64::Engine as _;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use parking_lot::Mutex;
+use serde_json::json;
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use wry::{NewWindowResponse, Rect, WebView, WebViewBuilder, dpi};
+use winfer_core::connect_files;
+use wry::{NewWindowResponse, Rect, RequestAsyncResponder, WebView, WebViewBuilder, dpi};
 
 const SCHEME: &str = "winferfile";
+const REMOTE_PREFIX: &str = "/__remote__/";
 
 /// The main window's raw handle, so the webview can be built while nothing borrows the window.
 struct ParentWindow(wry::raw_window_handle::RawWindowHandle);
@@ -37,13 +42,25 @@ const LINKS_JS: &str = r#"document.addEventListener('click', function (e) {
   }
 });"#;
 
+#[derive(Clone, Debug)]
+enum HtmlRoot {
+    Local(PathBuf),
+    Remote { peer: String, dir: String },
+}
+
+impl Default for HtmlRoot {
+    fn default() -> Self {
+        Self::Local(PathBuf::new())
+    }
+}
+
 #[derive(Default)]
 pub(super) struct HtmlView {
     webview: Option<WebView>,
     starting: bool,
     failed: Option<String>,
     /// The folder the protocol serves from: the shown page's.
-    root: Arc<Mutex<PathBuf>>,
+    root: Arc<Mutex<HtmlRoot>>,
     /// The page and modification time the webview shows.
     pub(super) loaded: Option<(String, u64)>,
     bounds: Bounds<Pixels>,
@@ -63,10 +80,49 @@ fn origin() -> String {
     if cfg!(any(target_os = "windows", target_os = "android")) { format!("http://{SCHEME}.localhost") } else { format!("{SCHEME}://localhost") }
 }
 
+fn percent_encode_segment(seg: &str) -> String {
+    let mut out = String::with_capacity(seg.len());
+    for b in seg.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~' | b':') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+fn encode_remote_url_path(peer: &str, remote_path: &str) -> String {
+    let normalized = remote_path.replace('\\', "/");
+    let stripped = normalized.trim_start_matches('/');
+    let encoded: Vec<String> = stripped.split('/').map(percent_encode_segment).collect();
+    format!("{REMOTE_PREFIX}{peer}/{}", encoded.join("/"))
+}
+
+/// Decodes a `/__remote__/<peer>/<path>` URI path back into `(peer, remote_path)`.
+fn remote_for(uri_path: &str) -> Option<(String, String)> {
+    let rest = uri_path.strip_prefix(REMOTE_PREFIX)?;
+    let (peer, raw) = rest.split_once('/')?;
+    if peer.is_empty() || raw.is_empty() {
+        return None;
+    }
+    let decoded = percent_decode(raw);
+    let bytes = decoded.as_bytes();
+    let path = if bytes.len() >= 2 && bytes[1] == b':' {
+        decoded
+    } else {
+        format!("/{decoded}")
+    };
+    Some((peer.to_string(), path))
+}
+
 /// A page's URL; a video's is that of its player page.
-fn page_url(path: &str) -> Option<String> {
-    let query = if video::is_video(path) { format!("?{}", video::PLAYER) } else { String::new() };
-    url::Url::from_file_path(expand(path)).ok().map(|u| format!("{}{}{query}", origin(), u.path()))
+fn page_url(doc: &str) -> Option<String> {
+    let query = if video::is_video(doc) { format!("?{}", video::PLAYER) } else { String::new() };
+    match connect_files::split_doc(doc) {
+        (Some(peer), rpath) => Some(format!("{}{}{query}", origin(), encode_remote_url_path(peer, rpath))),
+        (None, local) => url::Url::from_file_path(expand(local)).ok().map(|u| format!("{}{}{query}", origin(), u.path())),
+    }
 }
 
 /// The file a protocol URL path names (percent-decoded, drive letters kept on Windows).
@@ -111,8 +167,8 @@ fn respond(mime: &str, status: u16, body: Vec<u8>) -> wry::http::Response<Cow<'s
     wry::http::Response::builder().status(status).header("Content-Type", mime).header("Cache-Control", "no-store").body(Cow::Owned(body)).unwrap()
 }
 
-/// Serves a file under `root`, or the part of it a `Range` header asks for; anything outside it
-/// (`..`, symlinks out) is refused.
+/// Serves a local file under `root`, or the part of it a `Range` header asks for; anything outside
+/// it (`..`, symlinks out) is refused.
 fn serve(root: &Path, uri_path: &str, query: Option<&str>, range: Option<&str>) -> wry::http::Response<Cow<'static, [u8]>> {
     let Some(file) = file_for(uri_path).and_then(|f| f.canonicalize().ok()) else {
         return respond("text/plain", 404, b"Not found".to_vec());
@@ -130,10 +186,114 @@ fn serve(root: &Path, uri_path: &str, query: Option<&str>, range: Option<&str>) 
     served.unwrap_or_else(|e| respond("text/plain", 404, e.to_string().into_bytes()))
 }
 
+/// Parses a direct `bytes=start-end` or `bytes=start-` range (not suffix ranges).
+fn parse_direct_range(header: &str) -> Option<(u64, Option<u64>)> {
+    let (from, to) = header.trim().strip_prefix("bytes=")?.split(',').next()?.trim().split_once('-')?;
+    if from.is_empty() {
+        return None;
+    }
+    let start: u64 = from.parse().ok()?;
+    let end = if to.is_empty() { None } else { Some(to.parse().ok()?) };
+    Some((start, end))
+}
+
+fn serve_remote_async(
+    peer: String,
+    dir: String,
+    uri_path: String,
+    query: Option<String>,
+    range: Option<String>,
+    responder: RequestAsyncResponder,
+) {
+    let Some((req_peer, req_path)) = remote_for(&uri_path) else {
+        responder.respond(respond("text/plain", 404, b"Not found".to_vec()));
+        return;
+    };
+    if req_peer != peer {
+        responder.respond(respond("text/plain", 403, b"Outside the page's folder".to_vec()));
+        return;
+    }
+    if query.as_deref() == Some(video::PLAYER) && video::is_video(&req_path) {
+        responder.respond(respond("text/html; charset=utf-8", 200, video::player_page(&uri_path).into_bytes()));
+        return;
+    }
+    let mime = mime_for(Path::new(&req_path));
+    tauri::async_runtime::spawn(async move {
+        let reply = if let Some(range_hdr) = range {
+            serve_remote_range(&peer, &dir, &req_path, mime, &range_hdr).await
+        } else {
+            match connect_files::call(&peer, "read_bytes", json!({ "path": req_path, "root": dir })).await {
+                Ok(v) => match v["data"].as_str().and_then(|d| base64::engine::general_purpose::STANDARD.decode(d).ok()) {
+                    Some(bytes) => respond(mime, 200, bytes),
+                    None => respond("text/plain", 500, b"Invalid response".to_vec()),
+                },
+                Err(e) if e.contains("Outside") => respond("text/plain", 403, e.into_bytes()),
+                Err(e) => respond("text/plain", 404, e.into_bytes()),
+            }
+        };
+        responder.respond(reply);
+    });
+}
+
+async fn serve_remote_range(peer: &str, dir: &str, path: &str, mime: &str, header: &str) -> wry::http::Response<Cow<'static, [u8]>> {
+    let (start, want_len) = match parse_direct_range(header) {
+        Some((s, Some(e))) if e >= s => (s, (e - s + 1).min(video::CHUNK)),
+        Some((_, Some(_))) => return respond("text/plain", 416, Vec::new()),
+        Some((s, None)) => (s, video::CHUNK),
+        None => {
+            // Suffix range (e.g. `bytes=-500`): ask size first.
+            let Ok(st) = connect_files::call(peer, "stat", json!({ "path": path })).await else {
+                return respond("text/plain", 404, b"Not found".to_vec());
+            };
+            let total = st["size"].as_u64().unwrap_or(0);
+            let Some((s, e)) = video::byte_range(header, total) else {
+                return wry::http::Response::builder()
+                    .status(416)
+                    .header("Content-Type", mime)
+                    .header("Content-Range", format!("bytes */{total}"))
+                    .body(Cow::Owned(Vec::new()))
+                    .unwrap();
+            };
+            (s, e - s + 1)
+        }
+    };
+    let res = connect_files::call(peer, "read_bytes", json!({ "path": path, "root": dir, "offset": start, "len": want_len })).await;
+    let Ok(v) = res else {
+        let err = res.unwrap_err();
+        let status = if err.contains("Outside") { 403 } else { 404 };
+        return respond("text/plain", status, err.into_bytes());
+    };
+    let total = v["size"].as_u64().unwrap_or(0);
+    let Some(bytes) = v["data"].as_str().and_then(|d| base64::engine::general_purpose::STANDARD.decode(d).ok()) else {
+        return respond("text/plain", 500, b"Invalid response".to_vec());
+    };
+    if total == 0 || start >= total || bytes.is_empty() {
+        return wry::http::Response::builder()
+            .status(416)
+            .header("Content-Type", mime)
+            .header("Content-Range", format!("bytes */{total}"))
+            .body(Cow::Owned(Vec::new()))
+            .unwrap();
+    }
+    let end = start + bytes.len() as u64 - 1;
+    wry::http::Response::builder()
+        .status(206)
+        .header("Content-Type", mime)
+        .header("Cache-Control", "no-store")
+        .header("Accept-Ranges", "bytes")
+        .header("Content-Range", format!("bytes {start}-{end}/{total}"))
+        .header("Content-Length", bytes.len())
+        .body(Cow::Owned(bytes))
+        .unwrap()
+}
+
 impl ViewerPanel {
-    /// The page the webview should show: a video, or an HTML file rendered (not its source or
-    /// editor).
+    /// The page the webview should show: a video, or an HTML file rendered (not its source,
+    /// editor, diff, or while browsing remote files).
     fn wanted_html(&self) -> Option<(String, u64)> {
+        if self.remote_browser.is_some() {
+            return None;
+        }
         let path = self.shown.as_ref()?;
         match &self.content {
             Content::Video { modified } if video::is_video(path) => Some((path.clone(), *modified)),
@@ -163,7 +323,13 @@ impl ViewerPanel {
         if let (Some(webview), Some((path, modified))) = (&self.html.webview, &want) {
             if self.html.loaded.as_ref() != Some(&(path.clone(), *modified)) {
                 let same_page = self.html.loaded.as_ref().is_some_and(|(p, _)| p == path);
-                *self.html.root.lock() = PathBuf::from(expand(path)).parent().map(Path::to_path_buf).unwrap_or_default();
+                *self.html.root.lock() = match connect_files::split_doc(path) {
+                    (Some(peer), rpath) => HtmlRoot::Remote {
+                        peer: peer.to_string(),
+                        dir: connect_files::remote_parent(rpath).unwrap_or_else(|| "/".to_string()),
+                    },
+                    (None, local) => HtmlRoot::Local(PathBuf::from(expand(local)).parent().map(Path::to_path_buf).unwrap_or_default()),
+                };
                 // Reloading the same page keeps its scroll position.
                 let _ = if same_page { webview.reload() } else { page_url(path).map_or(Ok(()), |url| webview.load_url(&url)) };
                 self.html.loaded = Some((path.clone(), *modified));
@@ -209,10 +375,19 @@ impl ViewerPanel {
             let popup = tx.clone();
             let built = parent.map_err(|err| err.to_string()).and_then(|parent| {
                 WebViewBuilder::new()
-                    .with_custom_protocol(SCHEME.into(), move |_, request| {
+                    .with_asynchronous_custom_protocol(SCHEME.into(), move |_, request, responder| {
                         let root = root.lock().clone();
-                        let range = request.headers().get("range").and_then(|v| v.to_str().ok());
-                        serve(&root, request.uri().path(), request.uri().query(), range)
+                        let uri_path = request.uri().path().to_string();
+                        let query = request.uri().query().map(str::to_string);
+                        let range = request.headers().get("range").and_then(|v| v.to_str().ok()).map(str::to_string);
+                        match root {
+                            HtmlRoot::Local(dir) => {
+                                responder.respond(serve(&dir, &uri_path, query.as_deref(), range.as_deref()));
+                            }
+                            HtmlRoot::Remote { peer, dir } => {
+                                serve_remote_async(peer, dir, uri_path, query, range, responder);
+                            }
+                        }
                     })
                     .with_ipc_handler(move |request| {
                         let _ = tx.try_send(request.into_body());
@@ -244,13 +419,16 @@ impl ViewerPanel {
             if !matches!(ok, Ok(true)) {
                 return;
             }
-            // Links to other sites (and popups) go to the system browser; local pages open as tabs.
+            // Links to other sites (and popups) go to the system browser; local/remote pages open as tabs.
             while let Ok(url) = rx.recv().await {
-                let local = url.strip_prefix(&origin()).and_then(|p| file_for(p.split(['?', '#']).next().unwrap_or(p)));
-                let done = this.update(cx, |this, cx| match local {
-                    Some(file) => this.open(file.display().to_string(), None, false, cx),
-                    None if url.starts_with("http://") || url.starts_with("https://") || url.starts_with("mailto:") => cx.open_url(&url),
-                    None => {}
+                let path_part = url.strip_prefix(&origin()).map(|p| p.split(['?', '#']).next().unwrap_or(p));
+                let remote = path_part.and_then(remote_for);
+                let local = if remote.is_none() { path_part.and_then(file_for) } else { None };
+                let done = this.update(cx, |this, cx| match (remote, local) {
+                    (Some((peer, rpath)), _) => this.open_remote(&peer, rpath, None, false, cx),
+                    (_, Some(file)) => this.open(file.display().to_string(), None, false, cx),
+                    (None, None) if url.starts_with("http://") || url.starts_with("https://") || url.starts_with("mailto:") => cx.open_url(&url),
+                    _ => {}
                 });
                 if done.is_err() {
                     break;
@@ -286,12 +464,14 @@ impl ViewerPanel {
 
 #[cfg(test)]
 mod tests {
-    use super::{file_for, is_html, page_url, serve};
+    use super::{file_for, is_html, page_url, remote_for, serve};
+    use winfer_core::connect_files::remote_doc;
 
     #[test]
     fn recognizes_html_files() {
         assert!(is_html("/a/index.html"));
         assert!(is_html("/a/PAGE.HTM"));
+        assert!(is_html(&remote_doc("p1", "/a/index.html")));
         assert!(!is_html("/a/notes.md"));
     }
 
@@ -302,6 +482,11 @@ mod tests {
         assert_eq!(url, "winferfile://localhost/tmp/my%20site/index.html");
         let path = url.strip_prefix("winferfile://localhost").unwrap();
         assert_eq!(file_for(path).unwrap().display().to_string(), "/tmp/my site/index.html");
+
+        let rurl = page_url(&remote_doc("peer1", "/home/u/my site/index.html")).unwrap();
+        assert_eq!(rurl, "winferfile://localhost/__remote__/peer1/home/u/my%20site/index.html");
+        let rpath = rurl.strip_prefix("winferfile://localhost").unwrap();
+        assert_eq!(remote_for(rpath), Some(("peer1".to_string(), "/home/u/my site/index.html".to_string())));
     }
 
     #[test]

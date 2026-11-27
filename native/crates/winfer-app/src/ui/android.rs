@@ -192,6 +192,21 @@ fn machines() -> Vec<(String, String)> {
     crate::connect::get().map(|c| c.status().peers.into_iter().filter(|p| p.link.via.is_some()).map(|p| (p.peer_id, p.name)).collect()).unwrap_or_default()
 }
 
+/// A machine's icon: a server's, else by what computer it said it is, else (an older winfer, or
+/// offline) by what its name says.
+fn machine_icon(form: Option<&str>, name: &str, server: bool) -> Icon {
+    if server {
+        return Icon::new(IconName::Server);
+    }
+    match form.or_else(|| winfer_core::machine::mac_form(name)) {
+        Some("laptop") => Icon::new(IconName::Laptop),
+        Some("mac-studio") => Icon::empty().path("devices/mac-studio.svg"),
+        Some("mac-mini") => Icon::empty().path("devices/mac-mini.svg"),
+        Some("mac-pro") => Icon::new(IconName::PcCase),
+        _ => Icon::new(IconName::Monitor),
+    }
+}
+
 pub struct AndroidPanel {
     state: Entity<AppState>,
     visible: bool,
@@ -206,6 +221,9 @@ pub struct AndroidPanel {
     hosted: Option<Hosted>,
     /// Machines whose device list is being read.
     listing: HashSet<Option<String>>,
+    /// What computer each machine is (None: this one), for its icon; no value while asking or
+    /// when it can't tell.
+    forms: HashMap<Option<String>, Option<String>>,
     restart: u64,
     latest: Arc<Mutex<Option<Arc<RenderImage>>>>,
     shown: Option<Arc<RenderImage>>,
@@ -416,7 +434,7 @@ impl AndroidPanel {
         let poll = cx.spawn(async move |this, cx| {
             loop {
                 let Ok((visible, machine, phone)) = this.update(cx, |this, _| (this.live(), this.machine.clone(), this.phone)) else { break };
-                if visible && this.update(cx, |this, cx| this.refresh(machine.clone(), cx)).is_err() {
+                if visible && this.update(cx, |this, cx| { this.ask_forms(cx); this.refresh(machine.clone(), cx) }).is_err() {
                     break;
                 }
                 // A phone shows this machine's devices, even while the panel shows a paired one's.
@@ -427,7 +445,7 @@ impl AndroidPanel {
             }
         });
         let machine = state.read(cx).rest.get("deviceMachine").and_then(Value::as_str).map(str::to_string);
-        Self { state, visible: false, status: None, starting: None, error: None, mirror: None, machine, lists: HashMap::new(), hosted: None, listing: HashSet::new(), restart: 0, latest: Default::default(), shown: None, area: Bounds::default(), press: None, touching: false, last_move: None, scroll_pending: None, last_scroll: None, phone: false, phone_press: None, focus: cx.focus_handle(), _poll: poll }
+        Self { state, visible: false, status: None, starting: None, error: None, mirror: None, machine, lists: HashMap::new(), hosted: None, listing: HashSet::new(), forms: HashMap::new(), restart: 0, latest: Default::default(), shown: None, area: Bounds::default(), press: None, touching: false, last_move: None, scroll_pending: None, last_scroll: None, phone: false, phone_press: None, focus: cx.focus_handle(), _poll: poll }
     }
 
     /// Reads the device list of `machine` (None: this machine's adb devices and simulators).
@@ -461,6 +479,28 @@ impl AndroidPanel {
             }
         })
         .detach();
+    }
+
+    /// Asks this machine and each online one what computer it is.
+    fn ask_forms(&mut self, cx: &mut Context<Self>) {
+        let online: Vec<Option<String>> = std::iter::once(None).chain(machines().into_iter().map(|(id, _)| Some(id))).collect();
+        // One that couldn't tell is asked again once it reconnects (it may have updated).
+        self.forms.retain(|machine, form| form.is_some() || online.contains(machine));
+        for machine in online {
+            if self.forms.contains_key(&machine) {
+                continue;
+            }
+            self.forms.insert(machine.clone(), None);
+            cx.spawn(async move |this, cx| {
+                let answer = connect_devices::call(machine.as_deref(), "host", json!({})).await;
+                let form = answer.ok().and_then(|v| v["form"].as_str().map(str::to_string));
+                let _ = this.update(cx, |this, cx| {
+                    this.forms.insert(machine, form);
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
     }
 
     /// Shows `machine`'s devices (None: this machine's).
@@ -523,6 +563,9 @@ impl AndroidPanel {
     pub fn set_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
         let was = self.live();
         self.visible = visible;
+        if visible {
+            self.ask_forms(cx);
+        }
         self.live_changed(was, cx);
     }
 
@@ -1232,19 +1275,23 @@ impl Render for AndroidPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let c = theme::colors(&self.state.read(cx).theme);
         let machines = machines();
-        let chip = |id: (&'static str, usize), on: bool| div().id(id).flex_shrink_0().truncate().rounded_md().border_1().px_1p5().py_0p5().cursor_pointer().when(on, |d| d.border_color(c.accent).text_color(c.fg)).when(!on, |d| d.border_color(c.edge).text_color(c.muted));
+        let chip = |id: (&'static str, usize), on: bool, icon: Icon| div().id(id).flex().flex_shrink_0().items_center().gap_1().truncate().rounded_md().border_1().px_1p5().py_0p5().cursor_pointer().when(on, |d| d.border_color(c.accent).text_color(c.fg)).when(!on, |d| d.border_color(c.edge).text_color(c.muted)).child(icon.size(px(12.0)));
+        let servers: HashSet<String> = crate::connect::get().map(|connect| connect.peers().into_iter().filter(|p| p.kind == winfer_connect::pairing::Kind::Server).map(|p| p.peer_id).collect()).unwrap_or_default();
+        let icon = |machine: Option<&String>, name: &str| {
+            let form = self.forms.get(&machine.cloned()).and_then(Option::as_deref);
+            machine_icon(form, name, machine.is_some_and(|m| servers.contains(m)))
+        };
         // Whose devices: this machine or a paired one (only offered while one is online).
         let switcher = (!machines.is_empty() || self.machine.is_some()).then(|| {
             let mut row = div().flex().h(px(30.0)).flex_shrink_0().items_center().gap_1().px_2().text_xs().overflow_hidden()
-                .child(Icon::new(IconName::Monitor).size(px(13.0)).text_color(c.subtle))
-                .child(chip(("machine", 0), self.machine.is_none()).on_click(cx.listener(|this, _, _, cx| this.pick_machine(None, cx))).child("This machine"));
+                .child(chip(("machine", 0), self.machine.is_none(), icon(None, "")).on_click(cx.listener(|this, _, _, cx| this.pick_machine(None, cx))).child("This machine"));
             let mut listed = machines.clone();
             if let Some(m) = self.machine.as_ref().filter(|m| !machines.iter().any(|(id, _)| id == *m)) {
                 listed.push((m.clone(), format!("{} (offline)", crate::connect::peer_name(m).unwrap_or_else(|| "machine".into()))));
             }
             for (i, (id, name)) in listed.into_iter().enumerate() {
                 let on = self.machine.as_deref() == Some(id.as_str());
-                row = row.child(chip(("machine", i + 1), on).on_click(cx.listener(move |this, _, _, cx| this.pick_machine(Some(id.clone()), cx))).child(name));
+                row = row.child(chip(("machine", i + 1), on, icon(Some(&id), &name)).on_click(cx.listener(move |this, _, _, cx| this.pick_machine(Some(id.clone()), cx))).child(name));
             }
             row
         });
@@ -1253,14 +1300,14 @@ impl Render for AndroidPanel {
         }
         let picks = self.picks();
         let current = self.current(cx);
-        let mut top = div().flex().h(px(36.0)).flex_shrink_0().items_center().gap_2().px_2().text_xs().child(Icon::new(IconName::Smartphone).size(px(13.0)).text_color(c.subtle));
+        let mut top = div().flex().h(px(36.0)).flex_shrink_0().items_center().gap_2().px_2().text_xs();
         if picks.is_empty() {
             top = top.child(div().flex_1().text_color(c.muted).child("No device"));
         } else {
             let mut row = div().flex_1().min_w_0().flex().gap_1().overflow_hidden();
             for (i, (pick, label)) in picks.into_iter().enumerate() {
                 let on = current.as_ref().is_some_and(|(p, _)| *p == pick);
-                row = row.child(chip(("device", i), on).on_click(cx.listener(move |this, _, _, cx| this.pick(&pick, cx))).child(label));
+                row = row.child(chip(("device", i), on, Icon::new(IconName::Smartphone)).on_click(cx.listener(move |this, _, _, cx| this.pick(&pick, cx))).child(label));
             }
             top = top.child(row);
         }

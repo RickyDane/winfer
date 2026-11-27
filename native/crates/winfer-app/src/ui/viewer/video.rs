@@ -12,7 +12,7 @@ const VIDEO: [&str; 4] = ["mp4", "m4v", "mov", "webm"];
 
 /// The most one range response holds: the player asks for the rest as it goes, so a long video
 /// is never read whole.
-const CHUNK: u64 = 1024 * 1024;
+pub(super) const CHUNK: u64 = 1024 * 1024;
 
 /// The query that asks for a video's player page instead of its bytes.
 pub(super) const PLAYER: &str = "player";
@@ -51,7 +51,7 @@ video.addEventListener('error', function () {{
 
 /// The first and last byte a `Range` header asks of a `len` byte file, at most `CHUNK` of them;
 /// `None` when it can't be satisfied. Of several ranges only the first is served.
-fn byte_range(header: &str, len: u64) -> Option<(u64, u64)> {
+pub(super) fn byte_range(header: &str, len: u64) -> Option<(u64, u64)> {
     let (from, to) = header.trim().strip_prefix("bytes=")?.split(',').next()?.trim().split_once('-')?;
     let last = len.checked_sub(1)?;
     let (start, end) = if from.is_empty() {

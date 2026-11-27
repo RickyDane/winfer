@@ -46,6 +46,7 @@ pub(super) struct Env {
     pub wg_scrolls: Rc<RefCell<HashMap<String, ScrollHandle>>>,
     pub now: u64,
     pub cwd: Option<String>,
+    pub remote: bool,
     /// When each row first appeared (ms), to play its entrance once.
     pub born: Rc<HashMap<String, u64>>,
     /// Width of a transcript row's content, in px.
@@ -1500,8 +1501,13 @@ pub(super) fn md_style(c: Colors) -> TextViewStyle {
 
 fn text_row(env: &Env, key: &str, text: &str, _streaming: bool) -> AnyElement {
     let c = env.c;
+    let body = if env.remote {
+        crate::code::links::linkify_remote(text)
+    } else {
+        crate::code::links::linkify(text, env.cwd.as_deref())
+    };
     enter(env, key, div().w_full().py(px(if env.compact { 4.0 } else { 8.0 })).px_0p5().text_size(px(13.5 * env.scale)).line_height(relative(1.62)).text_color(c.fg)
-        .child(TextView::markdown(SharedString::from(format!("cw-md-{key}")), SharedString::from(crate::code::links::linkify(text, env.cwd.as_deref()))).style(md_style(c)).selectable(true).on_link_click({
+        .child(TextView::markdown(SharedString::from(format!("cw-md-{key}")), SharedString::from(body)).style(md_style(c)).selectable(true).on_link_click({
             let view = env.view.clone();
             move |href, _, _, cx| {
                 let href = href.to_string();
@@ -2922,7 +2928,7 @@ impl CodeView {
                 body = body.child(div().font_family(mono.clone()).text_size(px(11.5)).text_color(c.muted).max_h(px(140.0)).overflow_hidden().whitespace_normal().child(a.detail.clone()));
             }
             if let Some(d) = a.diff.as_deref().filter(|d| !d.trim().is_empty()) {
-                let env = Env { c, mono: mono.clone(), scale: 1.0, compact: true, view: cx.entity().downgrade(), flipped: Rc::new(HashSet::new()), toggled: Rc::new(HashMap::new()), expand_thinking: false, expand_shell: false, images: self.images.clone(), wg_scrolls: self.wg_scrolls.clone(), now: 0, cwd: None, born: Rc::new(HashMap::new()), width: 600.0, height: self.pane_size.height / px(1.0) };
+                let env = Env { c, mono: mono.clone(), scale: 1.0, compact: true, view: cx.entity().downgrade(), flipped: Rc::new(HashSet::new()), toggled: Rc::new(HashMap::new()), expand_thinking: false, expand_shell: false, images: self.images.clone(), wg_scrolls: self.wg_scrolls.clone(), now: 0, cwd: None, remote: false, born: Rc::new(HashMap::new()), width: 600.0, height: self.pane_size.height / px(1.0) };
                 body = body.child(diff_block(&env, d, 400));
             }
             actions = div().flex().gap_2().child(decide("Allow", "Y", Decision::Allow, true, format!("allow-{id}"), model.clone(), id.clone())).child(decide("Always allow", "A", Decision::Always, false, format!("always-{id}"), model.clone(), id.clone())).child(decide("Deny", "N", Decision::Deny, false, format!("deny-{id}"), model.clone(), id.clone()));
@@ -3484,6 +3490,9 @@ impl Render for CodeView {
             let m = self.model.read(cx);
             (m.state.items.clone(), m.state.approvals.clone(), m.state.busy, m.state.exited.clone(), m.state.sheet)
         };
+        if !self.picks.is_empty() {
+            self.picks.retain(|id, _| approvals.iter().any(|a| a.id == *id));
+        }
         if self.live(cx) {
             self.tick(cx);
         }
@@ -3512,7 +3521,9 @@ impl Render for CodeView {
             self.list.scroll_to_end();
         }
         let away = !items.is_empty() && !self.list.is_following_tail() && self.list.is_scrolled_to_end() == Some(false);
-        let env = Env { c, mono: mono.clone(), scale, compact, view: cx.entity().downgrade(), flipped: Rc::new(self.flipped.clone()), toggled: Rc::new(self.toggled.clone()), expand_thinking, expand_shell, images: self.images.clone(), wg_scrolls: self.wg_scrolls.clone(), now, cwd: self.model.read(cx).state.cwd.clone(), born: Rc::new(self.born.clone()), width: (self.pane_size.width / px(1.0) - 32.0).max(240.0), height: self.pane_size.height / px(1.0) };
+        let pane_id = self.model.read(cx).pane_id.clone();
+        let remote = self.app.read(cx).pane(&pane_id).is_some_and(|p| p.remote.is_some());
+        let env = Env { c, mono: mono.clone(), scale, compact, view: cx.entity().downgrade(), flipped: Rc::new(self.flipped.clone()), toggled: Rc::new(self.toggled.clone()), expand_thinking, expand_shell, images: self.images.clone(), wg_scrolls: self.wg_scrolls.clone(), now, cwd: self.model.read(cx).state.cwd.clone(), remote, born: Rc::new(self.born.clone()), width: (self.pane_size.width / px(1.0) - 32.0).max(240.0), height: self.pane_size.height / px(1.0) };
         let model = self.model.clone();
         let rows = self.rows.clone();
         let transcript: AnyElement = if items.is_empty() {

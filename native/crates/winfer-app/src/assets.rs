@@ -1,4 +1,5 @@
-//! The app's assets: gpui-kit's icon set plus the providers' brand marks (`assets/providers`).
+//! The app's assets: gpui-kit's icon set plus the providers' brand marks (`assets/providers`),
+//! filled glyphs (`assets/solid`) and the computers Lucide has no icon for (`assets/devices`).
 
 use gpui_kit::{AssetSource, SharedString};
 use std::borrow::Cow;
@@ -21,20 +22,25 @@ const SOLID: &[(&str, &[u8])] = &[
     ("solid/mode-yolo.svg", include_bytes!("../assets/solid/mode-yolo.svg")),
 ];
 
+const DEVICES: &[(&str, &[u8])] = &[
+    ("devices/mac-studio.svg", include_bytes!("../assets/devices/mac-studio.svg")),
+    ("devices/mac-mini.svg", include_bytes!("../assets/devices/mac-mini.svg")),
+];
+
 marks!("agy", "claude", "codex", "cursor", "grok", "local", "muse", "openai", "opencode", "pi", "winfer");
 
 pub struct AppAssets;
 
 impl AssetSource for AppAssets {
     fn load(&self, path: &str) -> anyhow::Result<Option<Cow<'static, [u8]>>> {
-        if let Some((_, bytes)) = MARKS.iter().chain(SOLID).find(|(p, _)| *p == path) {
+        if let Some((_, bytes)) = MARKS.iter().chain(SOLID).chain(DEVICES).find(|(p, _)| *p == path) {
             return Ok(Some(Cow::Borrowed(bytes)));
         }
         gpui_kit::assets::AllAssets.load(path)
     }
 
     fn list(&self, path: &str) -> anyhow::Result<Vec<SharedString>> {
-        let mut out: Vec<SharedString> = MARKS.iter().chain(SOLID).filter(|(p, _)| p.starts_with(path)).map(|(p, _)| SharedString::from(*p)).collect();
+        let mut out: Vec<SharedString> = MARKS.iter().chain(SOLID).chain(DEVICES).filter(|(p, _)| p.starts_with(path)).map(|(p, _)| SharedString::from(*p)).collect();
         out.extend(gpui_kit::assets::AllAssets.list(path)?);
         Ok(out)
     }

@@ -299,7 +299,7 @@ impl Root {
         json!({
             "id": pane.id, "title": s.pane_label(pane),
             "workspace": s.workspaces.iter().find(|w| w.id == pane.workspace_id).map_or("", |w| w.name.as_str()),
-            "workspaceId": pane.workspace_id, "archived": pane.archived,
+            "workspaceId": pane.workspace_id, "archived": pane.archived, "cwd": pane.cwd,
             "provider": if pane.provider == "shell" { None } else { Some(pane.provider.clone()) },
             "status": status, "message": message, "updatedAt": updated, "request": request, "reply": reply, "config": config,
             "background": background,
@@ -310,7 +310,7 @@ impl Root {
         let s = self.state.read(cx);
         let panes: Vec<Value> = s.workspaces.iter().flat_map(ordered).map(|p| self.snapshot_pane(p, cx)).collect();
         // Not the workspaces holding other machines' tiles: those are theirs to show.
-        let workspaces: Vec<Value> = s.workspaces.iter().filter(|w| w.remote.is_none()).map(|w| json!({ "id": w.id, "name": w.name, "active": w.id == s.active_workspace_id })).collect();
+        let workspaces: Vec<Value> = s.workspaces.iter().filter(|w| w.remote.is_none()).map(|w| json!({ "id": w.id, "name": w.name, "rootDir": winfer_core::folders::expand(&w.root_dir).to_string_lossy(), "active": w.id == s.active_workspace_id })).collect();
         let providers: Vec<Value> = s.providers.iter().filter(|p| p.installed && p.id != "shell").map(|p| json!({ "id": p.id, "name": p.name })).collect();
         let compact_tools = s.rest.get("codeWeb").and_then(|v| v["compactTools"].as_bool()).unwrap_or(true);
         let show_bg_notes = s.rest.get("codeWeb").and_then(|v| v["showBgNotes"].as_bool()).unwrap_or(true);

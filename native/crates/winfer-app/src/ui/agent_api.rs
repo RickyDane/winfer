@@ -181,8 +181,47 @@ impl Root {
                 if path.is_empty() {
                     return Outcome::Done(Err("path is empty".to_string()));
                 }
+                let line = a["line"].as_u64().map(|l| l as usize);
                 let on_screen = self.state.read(cx).view() == View::Workspace && ws.id == self.state.read(cx).active_workspace_id;
-                self.tool_open_file(call.to_string(), path, me.cwd.clone(), a["line"].as_u64().map(|l| l as usize), on_screen, ws.id.clone(), who, me.provider.clone(), cx);
+                if let Some(machine) = a["machine"].as_str().map(str::trim).filter(|m| !m.is_empty()) {
+                    let (peer, name) = match self.online_machine(&serde_json::json!({ "machine": machine })) {
+                        Ok(m) => m,
+                        Err(e) => return Outcome::Done(Err(e)),
+                    };
+                    let roots: Vec<String> = winfer_core::connect_files::workspaces_of(&peer)
+                        .into_iter()
+                        .map(|w| w.root_dir)
+                        .filter(|r| !r.is_empty())
+                        .collect();
+                    let cwd = roots.first().cloned().unwrap_or_else(|| "~".to_string());
+                    let call = call.to_string();
+                    let ws_id = ws.id.clone();
+                    let provider = me.provider.clone();
+                    cx.spawn(async move |this, cx| {
+                        let resolved = winfer_core::connect_files::call(
+                            &peer,
+                            "resolve",
+                            serde_json::json!({ "cwd": cwd, "path": path, "roots": roots }),
+                        )
+                        .await;
+                        match resolved {
+                            Ok(v) => match v["path"].as_str().map(str::to_string) {
+                                Some(found) => {
+                                    let _ = this.update(cx, |this, cx| {
+                                        this.viewer.update(cx, |v, cx| v.open_remote(&peer, found.clone(), line, !on_screen, cx));
+                                        this.update_state(cx, |s| s.log_activity(&ws_id, format!("{who} opened {found} on {name}"), Some(provider)));
+                                        respond(&call, true, if on_screen { format!("Showing {found} on {name} in the file viewer.") } else { format!("Added {found} on {name} to the file viewer.") });
+                                    });
+                                }
+                                None => respond(&call, false, format!("No file at {path} on {name}.")),
+                            },
+                            Err(e) => respond(&call, false, e),
+                        }
+                    })
+                    .detach();
+                    return Outcome::Later;
+                }
+                self.tool_open_file(call.to_string(), path, me.cwd.clone(), line, on_screen, ws.id.clone(), who, me.provider.clone(), cx);
                 Outcome::Later
             }
             "ask_user" => {
@@ -363,10 +402,15 @@ impl Root {
         let s = self.state.read(cx);
         let Some(ws) = s.workspaces.iter().find(|w| w.panes.iter().any(|p| p.id == pane_id)) else { return };
         let ws_id = ws.id.clone();
-        let provider = ws.panes.iter().find(|p| p.id == pane_id).map(|p| p.provider.clone());
+        let pane = ws.panes.iter().find(|p| p.id == pane_id);
+        let provider = pane.map(|p| p.provider.clone());
+        let remote_peer = pane.and_then(|p| p.remote.as_ref().map(|r| r.peer.clone()));
         let on_screen = s.view() == View::Workspace && ws_id == s.active_workspace_id;
         let name = std::path::Path::new(&file).file_name().map_or_else(|| file.clone(), |n| n.to_string_lossy().into_owned());
-        self.viewer.update(cx, |v, cx| v.open(file, None, !on_screen, cx));
+        self.viewer.update(cx, |v, cx| match remote_peer {
+            Some(peer) => v.open_remote(&peer, file, None, !on_screen, cx),
+            None => v.open(file, None, !on_screen, cx),
+        });
         self.update_state(cx, |s| s.log_activity(&ws_id, format!("Plan ready for approval: {name}"), provider));
     }
 

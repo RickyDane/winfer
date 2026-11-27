@@ -237,17 +237,38 @@ impl ViewerPanel {
         }
         self.diff.key = Some(key.clone());
         let text = text.to_string();
+        let remote = winfer_core::connect_files::split_doc(&path).0.map(|p| (p.to_string(), winfer_core::connect_files::split_doc(&path).1.to_string()));
         self.diff.task = Some(cx.spawn(async move |this, cx| {
-            let result = backend::background(move || {
-                committed(&path).map(|base| match base {
-                    Base::NotGit => None,
-                    Base::Committed(old) => Some((compute(&old, &text), false)),
-                    Base::New => Some((compute("", &text), true)),
+            let result = match remote {
+                Some((peer, rpath)) => {
+                    match winfer_core::connect_files::call(&peer, "git_show", serde_json::json!({ "path": rpath })).await {
+                        Ok(v) => {
+                            let state = v["state"].as_str().unwrap_or_default().to_string();
+                            let old = v["text"].as_str().unwrap_or_default().to_string();
+                            backend::background(move || match state.as_str() {
+                                "not_git" => Ok(None),
+                                "committed" => Ok(Some((compute(&old, &text), false))),
+                                "new" => Ok(Some((compute("", &text), true))),
+                                _ => Err("Unexpected git_show response.".into()),
+                            })
+                            .await
+                            .map_err(|e| e.to_string())
+                            .and_then(|r| r)
+                        }
+                        Err(e) => Err(e),
+                    }
+                }
+                None => backend::background(move || {
+                    committed(&path).map(|base| match base {
+                        Base::NotGit => None,
+                        Base::Committed(old) => Some((compute(&old, &text), false)),
+                        Base::New => Some((compute("", &text), true)),
+                    })
                 })
-            })
-            .await
-            .map_err(|e| e.to_string())
-            .and_then(|r| r);
+                .await
+                .map_err(|e| e.to_string())
+                .and_then(|r| r),
+            };
             let _ = this.update(cx, |this, cx| {
                 if this.diff.key.as_ref() != Some(&key) {
                     return;

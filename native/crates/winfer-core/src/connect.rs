@@ -66,6 +66,7 @@ pub fn start(app: tauri::AppHandle, data_dir: &std::path::Path) {
             Event::PeerDown(peer) => {
                 crate::connect_term::drop_peer(&peer);
                 crate::connect_devices::peer_down(&peer);
+                crate::connect_files::peer_down(&peer);
                 if !server {
                     crate::connect_browser::peer_down(&app, &peer);
                 }
@@ -73,6 +74,7 @@ pub fn start(app: tauri::AppHandle, data_dir: &std::path::Path) {
                 app.emit("connect://peer", json!({"peer": peer, "up": false}))
             }
             Event::Message { peer, msg } if crate::connect_devices::intercept(&peer, &msg) => Ok(()),
+            Event::Message { peer, msg } if crate::connect_files::intercept(&peer, &msg) => Ok(()),
             Event::Message { peer, msg } if !server && crate::connect_browser::intercept(&app, &peer, &msg) => Ok(()),
             Event::Message { peer, msg } => app.emit("connect://message", json!({"peer": peer, "msg": msg})),
         };

@@ -523,7 +523,6 @@ impl Serve {
         }
         if let (Some(id), true) = (self.pending.first().cloned(), matches!(text, "y" | "n" | "1" | "3")) {
             let decision = if matches!(text, "y" | "1") { "allow" } else { "deny" };
-            out(&json!({ "type": "answered", "id": id }));
             self.on_line(&json!({ "type": "approve", "id": id, "decision": decision }).to_string());
             return;
         }
@@ -572,7 +571,8 @@ impl Serve {
                 hook("interrupted", json!({ "session_id": self.saved.id }));
             }
             "approve" => {
-                self.pending.retain(|p| *p != s("id"));
+                let id = s("id");
+                self.pending.retain(|p| *p != id);
                 let decision = match s("decision").as_str() {
                     "allow" => Decision::Allow,
                     "always" => Decision::Always,
@@ -581,13 +581,20 @@ impl Serve {
                 if decision != Decision::Deny {
                     hook("approved", json!({ "session_id": self.saved.id }));
                 }
-                self.send(Cmd::Approve(s("id"), decision));
+                if !id.is_empty() {
+                    out(&json!({ "type": "answered", "id": id }));
+                }
+                self.send(Cmd::Approve(id, decision));
             }
             "answer" => {
-                self.pending.retain(|p| *p != s("id"));
+                let id = s("id");
+                self.pending.retain(|p| *p != id);
                 let answers = v.get("answers").and_then(Value::as_array).map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
                 hook("approved", json!({ "session_id": self.saved.id }));
-                self.send(Cmd::Answer(s("id"), answers));
+                if !id.is_empty() {
+                    out(&json!({ "type": "answered", "id": id }));
+                }
+                self.send(Cmd::Answer(id, answers));
             }
             "set_model" => self.switch_model(&s("model")),
             "set_effort" => {

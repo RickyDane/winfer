@@ -6,6 +6,7 @@ use crate::backend;
 use crate::model::{AppState, Workspace};
 use crate::terminal::SESSIONS;
 use crate::theme::{self, Colors};
+use base64::Engine as _;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
 use gpui_kit::component::input::{Editor, EditorState, Position};
@@ -14,18 +15,22 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use regex::Regex;
+use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 use winfer_backend::files;
+use winfer_core::connect_files;
 
 mod diff;
 mod html;
+mod remote_browser;
 mod video;
 
 const IMAGE: [&str; 8] = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "ico"];
 const POLL: Duration = Duration::from_millis(1500);
+const REMOTE_POLL: Duration = Duration::from_millis(3000);
 
 static COMMENT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)<!--\s*@([\w.-]+):\s*(.*?)\s*-->").unwrap());
 
@@ -323,14 +328,17 @@ pub struct ViewerProject {
     pub id: String,
     pub name: String,
     pub root: Option<String>,
+    /// Paired machine id when this project's files live on a remote machine.
+    pub peer: Option<String>,
     pub docs: Vec<String>,
 }
 
-fn normalized(path: &str) -> String {
+pub(super) fn normalized(path: &str) -> String {
     path.replace('\\', "/").trim_end_matches('/').to_string()
 }
 
 /// Groups files by project: the most specific root wins, a worktree belongs to its project.
+/// Remote files are grouped by remote machine (and remote workspace when known).
 pub fn viewer_projects(docs: &[String], workspaces: &[Workspace]) -> Vec<ViewerProject> {
     // Only this machine's workspaces: a paired machine's can have the same folder (its own files).
     let mut roots: Vec<(&Workspace, String)> = workspaces
@@ -341,6 +349,25 @@ pub fn viewer_projects(docs: &[String], workspaces: &[Workspace]) -> Vec<ViewerP
     roots.sort_by_key(|(_, r)| std::cmp::Reverse(r.len()));
     let mut groups: Vec<ViewerProject> = Vec::new();
     for path in docs {
+        if let (Some(peer), rpath) = connect_files::split_doc(path) {
+            let file = normalized(rpath);
+            let mut remote_ws = connect_files::workspaces_of(peer);
+            remote_ws.sort_by_key(|w| std::cmp::Reverse(normalized(&w.root_dir).len()));
+            let owner = remote_ws.iter().find(|w| {
+                let r = normalized(&w.root_dir);
+                !r.is_empty() && file.starts_with(&format!("{r}/"))
+            });
+            let machine = crate::connect::peer_name(peer).unwrap_or_else(|| "Remote".to_string());
+            let (id, name, root) = match owner {
+                Some(w) => (format!("remote:{peer}:{}", w.id), format!("{machine} · {}", w.name), Some(w.root_dir.clone())),
+                None => (format!("remote:{peer}"), machine, None),
+            };
+            match groups.iter_mut().find(|g| g.id == id) {
+                Some(g) => g.docs.push(path.clone()),
+                None => groups.push(ViewerProject { id, name, root, peer: Some(peer.to_string()), docs: vec![path.clone()] }),
+            }
+            continue;
+        }
         let file = normalized(path);
         let owner = roots.iter().find(|(_, r)| file.starts_with(&format!("{r}/"))).map(|(w, _)| *w);
         let id = owner.map_or_else(|| "__other_files__".to_string(), |w| w.id.clone());
@@ -350,6 +377,7 @@ pub fn viewer_projects(docs: &[String], workspaces: &[Workspace]) -> Vec<ViewerP
                 id,
                 name: owner.map_or_else(|| "Other files".to_string(), |w| w.name.clone()),
                 root: owner.map(|w| w.root_dir.clone()),
+                peer: None,
                 docs: vec![path.clone()],
             }),
         }
@@ -365,12 +393,17 @@ pub(crate) fn expand(path: &str) -> String {
     }
 }
 
+fn doc_path(doc: &str) -> &str {
+    connect_files::split_doc(doc).1
+}
+
 fn extension(path: &str) -> String {
     file_name(path).rsplit_once('.').filter(|(stem, _)| !stem.is_empty()).map_or(String::new(), |(_, e)| e.to_lowercase())
 }
 
 fn file_name(path: &str) -> &str {
-    path.rsplit(['/', '\\']).next().unwrap_or(path)
+    let actual = doc_path(path);
+    actual.rsplit(['/', '\\']).next().unwrap_or(actual)
 }
 
 fn language_for(path: &str) -> String {
@@ -392,7 +425,7 @@ fn tab_label(path: &str, docs: &[String]) -> String {
     if docs.iter().filter(|d| file_name(d) == name).count() < 2 {
         return name.to_string();
     }
-    let parts: Vec<&str> = path.split(['/', '\\']).collect();
+    let parts: Vec<&str> = doc_path(path).split(['/', '\\']).collect();
     parts.len().checked_sub(2).map_or(name.to_string(), |i| format!("{}/{name}", parts[i]))
 }
 
@@ -411,6 +444,10 @@ fn link_target(href: &str, doc: &str) -> Option<(String, Option<usize>)> {
     };
     let decoded = percent_decode(raw);
     if decoded.is_empty() { return None; }
+    if let (Some(peer), rdoc) = connect_files::split_doc(doc) {
+        let resolved = connect_files::resolve_remote_link(rdoc, &decoded)?;
+        return Some((connect_files::remote_doc(peer, &resolved), line));
+    }
     let path = std::path::Path::new(&decoded);
     let full = if path.is_absolute() { path.to_path_buf() } else { std::path::Path::new(doc).parent()?.join(path) };
     Some((full.to_string_lossy().into_owned(), line))
@@ -471,11 +508,28 @@ pub(crate) fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+enum ViewerImage {
+    Local(PathBuf),
+    Loaded(Arc<Image>),
+}
+
+fn image_format_for(path: &str) -> ImageFormat {
+    match extension(path).as_str() {
+        "jpg" | "jpeg" => ImageFormat::Jpeg,
+        "gif" => ImageFormat::Gif,
+        "webp" => ImageFormat::Webp,
+        "bmp" => ImageFormat::Bmp,
+        "svg" => ImageFormat::Svg,
+        "ico" => ImageFormat::Ico,
+        _ => ImageFormat::Png,
+    }
+}
+
 enum Content {
     Loading,
     Failed(String),
     Text { text: SharedString, modified: u64, line_count: usize, comments: Vec<DocComment> },
-    Image(PathBuf),
+    Image(ViewerImage),
     Video { modified: u64 },
     Pdf { bytes: Arc<Vec<u8>>, pages: usize },
 }
@@ -514,6 +568,7 @@ pub struct ViewerPanel {
     mermaid_zoom: HashMap<usize, f32>,
     html: html::HtmlView,
     diff: diff::DiffView,
+    remote_browser: Option<remote_browser::RemoteFileBrowser>,
 }
 
 /// Which page of a PDF shows, how far in, and the rendered result.
@@ -541,12 +596,16 @@ impl ViewerPanel {
             diff.on = true;
             diff.split = mode == "split";
         }
-        Self { state, shown: None, content: Content::Loading, source: false, editor: None, editor_synced: None, editing: false, edit_base: 0, conflict: false, composing: None, comment_line: 0, jump: None, send_open: false, poll: None, pdf: PdfView::default(), mermaid_cache: HashMap::new(), mermaid_source: HashSet::new(), mermaid_zoom: HashMap::new(), html: Default::default(), diff }
+        Self { state, shown: None, content: Content::Loading, source: false, editor: None, editor_synced: None, editing: false, edit_base: 0, conflict: false, composing: None, comment_line: 0, jump: None, send_open: false, poll: None, pdf: PdfView::default(), mermaid_cache: HashMap::new(), mermaid_source: HashSet::new(), mermaid_zoom: HashMap::new(), html: Default::default(), diff, remote_browser: None }
     }
 
-    /// Shows `path` (absolute), opening its tab; `background` leaves the side panel as it is.
+    /// Shows `path` (absolute local path or `remote:<peer>:<path>`), opening its tab;
+    /// `background` leaves the side panel as it is.
     /// A file with a preview opens in it, whatever `line` says.
     pub fn open(&mut self, path: String, line: Option<usize>, background: bool, cx: &mut Context<Self>) {
+        if !background {
+            self.remote_browser = None;
+        }
         self.jump = line.map(|line| (path.clone(), line));
         self.source = false;
         self.state.update(cx, |s, cx| {
@@ -570,6 +629,21 @@ impl ViewerPanel {
             cx.notify();
         });
         // `sync` only redraws when another file is picked.
+        cx.notify();
+    }
+
+    /// Opens a file located on a paired remote machine in the right side panel.
+    pub fn open_remote(&mut self, peer: &str, path: String, line: Option<usize>, background: bool, cx: &mut Context<Self>) {
+        self.open(connect_files::remote_doc(peer, &path), line, background, cx);
+    }
+
+    /// A paired machine came back online: retry if we're currently showing a failed doc from it.
+    pub fn on_peer_up(&mut self, peer: &str, cx: &mut Context<Self>) {
+        if matches!(self.content, Content::Failed(_))
+            && self.shown.as_deref().and_then(|d| connect_files::split_doc(d).0) == Some(peer)
+        {
+            self.load(cx);
+        }
         cx.notify();
     }
 
@@ -600,11 +674,26 @@ impl ViewerPanel {
             self.poll = None;
             return;
         }
+        let remote = connect_files::split_doc(&path).0.map(|p| (p.to_string(), connect_files::split_doc(&path).1.to_string()));
+        let interval = if remote.is_some() { REMOTE_POLL } else { POLL };
         self.poll = Some(cx.spawn(async move |this, cx| {
             loop {
-                cx.background_executor().timer(POLL).await;
-                let p = path.clone();
-                let Ok(modified) = backend::background(move || files::files_modified(p)).await else { continue };
+                cx.background_executor().timer(interval).await;
+                let modified = match &remote {
+                    Some((peer, rpath)) => {
+                        match connect_files::call(peer, "stat", json!({ "path": rpath })).await {
+                            Ok(v) => v["modified"].as_u64(),
+                            Err(_) => continue,
+                        }
+                    }
+                    None => {
+                        let p = path.clone();
+                        match backend::background(move || files::files_modified(p)).await {
+                            Ok(m) => m,
+                            Err(_) => continue,
+                        }
+                    }
+                };
                 let stale = this.update(cx, |this, _| match &this.content {
                     Content::Text { modified: known, .. } => !this.editing && modified.is_some_and(|m| m != *known),
                     Content::Pdf { .. } => modified.is_some_and(|m| m != this.pdf.modified),
@@ -627,35 +716,101 @@ impl ViewerPanel {
             self.content = Content::Loading;
             return cx.notify();
         };
+        let remote = connect_files::split_doc(&path).0.map(|p| (p.to_string(), connect_files::split_doc(&path).1.to_string()));
         if IMAGE.contains(&extension(&path).as_str()) {
-            self.content = Content::Image(PathBuf::from(&path));
-            return cx.notify();
+            match remote {
+                None => {
+                    self.content = Content::Image(ViewerImage::Local(PathBuf::from(&path)));
+                    return cx.notify();
+                }
+                Some((peer, rpath)) => {
+                    if !matches!(self.content, Content::Image(_)) {
+                        self.content = Content::Loading;
+                    }
+                    cx.notify();
+                    cx.spawn(async move |this, cx| {
+                        let read = match connect_files::call(&peer, "read_bytes", json!({ "path": rpath })).await {
+                            Ok(v) => match v["data"].as_str().and_then(|d| base64::engine::general_purpose::STANDARD.decode(d).ok()) {
+                                Some(bytes) => Ok(Arc::new(Image::from_bytes(image_format_for(&rpath), bytes))),
+                                None => Err("Invalid image response from remote machine.".to_string()),
+                            },
+                            Err(e) => Err(e),
+                        };
+                        let _ = this.update(cx, |this, cx| {
+                            if this.shown.as_ref() != Some(&path) {
+                                return;
+                            }
+                            this.content = match read {
+                                Ok(image) => Content::Image(ViewerImage::Loaded(image)),
+                                Err(err) => Content::Failed(err),
+                            };
+                            cx.notify();
+                        });
+                    })
+                    .detach();
+                    return;
+                }
+            }
         }
         if extension(&path) == "pdf" {
             return self.load_pdf(path, cx);
         }
         // The player reads the file itself, a part at a time.
         if video::is_video(&path) {
-            self.content = match files::files_modified(expand(&path)) {
-                Some(modified) => Content::Video { modified },
-                None => Content::Failed(format!("can't open {path}")),
-            };
-            return cx.notify();
+            match remote {
+                None => {
+                    self.content = match files::files_modified(expand(&path)) {
+                        Some(modified) => Content::Video { modified },
+                        None => Content::Failed(format!("can't open {path}")),
+                    };
+                    return cx.notify();
+                }
+                Some((peer, rpath)) => {
+                    if !matches!(self.content, Content::Video { .. }) {
+                        self.content = Content::Loading;
+                    }
+                    cx.notify();
+                    cx.spawn(async move |this, cx| {
+                        let stat = connect_files::call(&peer, "stat", json!({ "path": rpath })).await;
+                        let _ = this.update(cx, |this, cx| {
+                            if this.shown.as_ref() != Some(&path) {
+                                return;
+                            }
+                            this.content = match stat {
+                                Ok(v) if v["exists"] == true && v["isFile"] == true => Content::Video { modified: v["modified"].as_u64().unwrap_or(0) },
+                                Ok(_) => Content::Failed(format!("can't open {rpath}")),
+                                Err(err) => Content::Failed(err),
+                            };
+                            cx.notify();
+                        });
+                    })
+                    .detach();
+                    return;
+                }
+            }
         }
         if matches!(self.content, Content::Failed(_)) {
             self.content = Content::Loading;
         }
         cx.spawn(async move |this, cx| {
-            let target = path.clone();
-            let read = tauri::async_runtime::spawn(async move {
-                let file = files::files_read_text(target).await?;
-                let v = serde_json::to_value(file).map_err(|e| e.to_string())?;
-                let text = v["text"].as_str().unwrap_or_default().to_string();
-                Ok::<_, String>((text, v["modified"].as_u64().unwrap_or(0)))
-            })
-            .await
-            .map_err(|e| e.to_string())
-            .and_then(|r| r);
+            let read = match remote {
+                Some((peer, rpath)) => connect_files::call(&peer, "read_text", json!({ "path": rpath })).await.map(|v| {
+                    let text = v["text"].as_str().unwrap_or_default().to_string();
+                    (text, v["modified"].as_u64().unwrap_or(0))
+                }),
+                None => {
+                    let target = path.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let file = files::files_read_text(target).await?;
+                        let v = serde_json::to_value(file).map_err(|e| e.to_string())?;
+                        let text = v["text"].as_str().unwrap_or_default().to_string();
+                        Ok::<_, String>((text, v["modified"].as_u64().unwrap_or(0)))
+                    })
+                    .await
+                    .map_err(|e| e.to_string())
+                    .and_then(|r| r)
+                }
+            };
             let _ = this.update(cx, |this, cx| {
                 if this.shown.as_ref() != Some(&path) {
                     return;
@@ -678,21 +833,45 @@ impl ViewerPanel {
         if !matches!(self.content, Content::Pdf { .. }) {
             self.content = Content::Loading;
         }
+        let remote = connect_files::split_doc(&path).0.map(|p| (p.to_string(), connect_files::split_doc(&path).1.to_string()));
         cx.spawn(async move |this, cx| {
-            let target = path.clone();
-            let read = backend::background(move || {
-                let modified = files::files_modified(target.clone()).unwrap_or(0);
-                let len = std::fs::metadata(expand(&target)).map_err(|e| format!("can't open {target}: {e}"))?.len();
-                if len > 200 * 1024 * 1024 {
-                    return Err(format!("{target} is too big"));
+            let read = match remote {
+                Some((peer, rpath)) => match connect_files::call(&peer, "read_bytes", json!({ "path": rpath })).await {
+                    Ok(v) => {
+                        let modified = v["modified"].as_u64().unwrap_or(0);
+                        let raw = v["data"].as_str().and_then(|d| base64::engine::general_purpose::STANDARD.decode(d).ok());
+                        match raw {
+                            Some(bytes) => {
+                                let bytes = Arc::new(bytes);
+                                let b = bytes.clone();
+                                backend::background(move || crate::pdf::page_count(&b))
+                                    .await
+                                    .map_err(|e| e.to_string())
+                                    .and_then(|r| r)
+                                    .map(|pages| (bytes, pages, modified))
+                            }
+                            None => Err("Invalid PDF response from remote machine.".to_string()),
+                        }
+                    }
+                    Err(e) => Err(e),
+                },
+                None => {
+                    let target = path.clone();
+                    backend::background(move || {
+                        let modified = files::files_modified(target.clone()).unwrap_or(0);
+                        let len = std::fs::metadata(expand(&target)).map_err(|e| format!("can't open {target}: {e}"))?.len();
+                        if len > 200 * 1024 * 1024 {
+                            return Err(format!("{target} is too big"));
+                        }
+                        let bytes = Arc::new(std::fs::read(expand(&target)).map_err(|e| e.to_string())?);
+                        let pages = crate::pdf::page_count(&bytes)?;
+                        Ok::<_, String>((bytes, pages, modified))
+                    })
+                    .await
+                    .map_err(|e| e.to_string())
+                    .and_then(|r| r)
                 }
-                let bytes = Arc::new(std::fs::read(expand(&target)).map_err(|e| e.to_string())?);
-                let pages = crate::pdf::page_count(&bytes)?;
-                Ok::<_, String>((bytes, pages, modified))
-            })
-            .await
-            .map_err(|e| e.to_string())
-            .and_then(|r| r);
+            };
             let _ = this.update(cx, |this, cx| {
                 if this.shown.as_ref() != Some(&path) {
                     return;
@@ -881,8 +1060,17 @@ impl ViewerPanel {
 
     /// Saves `text`; a changed file reports a conflict instead of being overwritten.
     fn write(&mut self, path: String, text: String, expected: Option<u64>, from_editor: bool, cx: &mut Context<Self>) {
+        let remote = connect_files::split_doc(&path).0.map(|p| (p.to_string(), connect_files::split_doc(&path).1.to_string()));
         cx.spawn(async move |this, cx| {
-            let saved = tauri::async_runtime::spawn(async move { files::files_write_text(path, text, expected).await }).await.map_err(|e| e.to_string()).and_then(|r| r);
+            let saved = match remote {
+                Some((peer, rpath)) => connect_files::call(&peer, "write_text", json!({ "path": rpath, "text": text, "expected": expected }))
+                    .await
+                    .map(|v| v["modified"].as_u64().unwrap_or(0)),
+                None => tauri::async_runtime::spawn(async move { files::files_write_text(path, text, expected).await })
+                    .await
+                    .map_err(|e| e.to_string())
+                    .and_then(|r| r),
+            };
             let _ = this.update(cx, |this, cx| {
                 match saved {
                     Ok(_) => {
@@ -892,7 +1080,12 @@ impl ViewerPanel {
                         this.conflict = false;
                         this.load(cx);
                     }
-                    Err(_) if from_editor => this.conflict = true,
+                    Err(err) if from_editor && err == "changed" => this.conflict = true,
+                    Err(err) if from_editor => {
+                        this.editing = false;
+                        this.conflict = false;
+                        this.content = Content::Failed(err);
+                    }
                     Err(err) => this.content = Content::Failed(err),
                 }
                 cx.notify();
@@ -929,9 +1122,10 @@ impl ViewerPanel {
 
     fn send_comments(&mut self, pane: String, count: usize, cx: &mut Context<Self>) {
         let Some(path) = self.shown.clone() else { return };
+        let display = doc_path(&path);
         self.send_open = false;
         let what = if count == 1 { "a review comment".to_string() } else { format!("{count} review comments") };
-        let text = format!("I left {what} in {path} (HTML comments like <!-- @user: … --> after the part they're about). Read the file, address them, and remove each comment once it's handled (or reply with <!-- @agent: … -->).");
+        let text = format!("I left {what} in {display} (HTML comments like <!-- @user: … --> after the part they're about). Read the file, address them, and remove each comment once it's handled (or reply with <!-- @agent: … -->).");
         if let Some(session) = SESSIONS.get(&pane) {
             session.send(&format!("\x1b[200~{text}\x1b[201~"));
             cx.spawn(async move |_, cx| {
@@ -1346,11 +1540,31 @@ impl ViewerPanel {
         };
         let editing = self.editing;
         let comments = if let Content::Text { comments, .. } = &self.content { comments.iter().filter(|c| c.author == "user").count() } else { 0 };
-        let shown = path.to_string();
-        let copy = path.to_string();
-        let reveal = path.to_string();
-        let open_in = path.to_string();
+        let (remote_peer, actual_path) = connect_files::split_doc(path);
+        let remote_label = remote_peer.map(|p| crate::connect::peer_name(p).unwrap_or_else(|| "Remote".to_string()));
+        let shown = actual_path.to_string();
+        let copy = actual_path.to_string();
+        let reveal = actual_path.to_string();
+        let open_in = actual_path.to_string();
+        let is_remote = remote_peer.is_some();
         let row = div().flex().items_center().gap_1().px_2().py_1()
+            .when_some(remote_label, |d, machine| {
+                d.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .flex_shrink_0()
+                        .rounded_sm()
+                        .bg(Hsla { a: 0.12, ..c.accent })
+                        .px_1p5()
+                        .py_0p5()
+                        .text_size(px(10.5))
+                        .text_color(c.accent)
+                        .child(Icon::new(IconName::Server).size(px(10.5)).text_color(c.accent))
+                        .child(machine),
+                )
+            })
             .child(div().flex_1().min_w_0().truncate().mx_1().text_size(px(11.0)).text_color(c.muted).child(shown));
         let row = if editing {
             row.when(self.conflict, |d| d.child(div().text_xs().text_color(c.warning).child("Changed on disk")))
@@ -1389,17 +1603,19 @@ impl ViewerPanel {
                 .child(button("viewer-reload", IconName::RotateCw, false).on_click(cx.listener(|this, _, _, cx| { this.html.loaded = None; this.refresh_diff(); this.load(cx); })))
         };
         row.child(button("viewer-copy", IconName::Copy, false).on_click(cx.listener(move |_, _, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copy.clone())))))
-            .child(button("viewer-reveal", IconName::FolderOpen, false).on_click(move |_, _, cx| cx.reveal_path(std::path::Path::new(&reveal))))
-            .child(button("viewer-open", IconName::ExternalLink, false).on_click(cx.listener(move |this, _, _, cx| {
-                let (path, editor) = (open_in.clone(), this.state.read(cx).editor.clone());
-                tauri::async_runtime::spawn(async move {
-                    let list = serde_json::to_value(winfer_backend::editors::editors_list().await).unwrap_or_default();
-                    if let Some(id) = editor.or_else(|| list.as_array()?.first()?["id"].as_str().map(str::to_string)) {
-                        let _ = winfer_backend::editors::editor_open(id, path).await;
-                    }
-                });
-                let _ = cx;
-            })))
+            .when(!is_remote, |d| {
+                d.child(button("viewer-reveal", IconName::FolderOpen, false).on_click(move |_, _, cx| cx.reveal_path(std::path::Path::new(&reveal))))
+                    .child(button("viewer-open", IconName::ExternalLink, false).on_click(cx.listener(move |this, _, _, cx| {
+                        let (path, editor) = (open_in.clone(), this.state.read(cx).editor.clone());
+                        tauri::async_runtime::spawn(async move {
+                            let list = serde_json::to_value(winfer_backend::editors::editors_list().await).unwrap_or_default();
+                            if let Some(id) = editor.or_else(|| list.as_array()?.first()?["id"].as_str().map(str::to_string)) {
+                                let _ = winfer_backend::editors::editor_open(id, path).await;
+                            }
+                        });
+                        let _ = cx;
+                    })))
+            })
     }
 }
 
@@ -1412,6 +1628,8 @@ impl Render for ViewerPanel {
         let font = crate::fonts::mono(cx);
         let groups = viewer_projects(&docs, &workspaces);
         let current = groups.iter().find(|g| active.as_ref().is_some_and(|a| g.docs.contains(a))).cloned();
+        let machines = remote_browser::online_machines();
+        let browsing = self.remote_browser.is_some();
         let mut top = div().flex().flex_col();
         if groups.len() > 1 {
             let mut projects = div().flex().items_center().gap_1().px_2().pt_1();
@@ -1419,9 +1637,13 @@ impl Render for ViewerPanel {
                 let id = g.id.clone();
                 let is_current = current.as_ref().is_some_and(|x| x.id == g.id);
                 projects = projects.child(
-                    div().id(SharedString::from(format!("project-{}", g.id))).rounded_md().px_2().py_0p5().text_size(px(11.0)).cursor_pointer()
+                    div().id(SharedString::from(format!("project-{}", g.id))).flex().items_center().gap_1().rounded_md().px_2().py_0p5().text_size(px(11.0)).cursor_pointer()
                         .text_color(if is_current { c.fg } else { c.muted }).when(is_current, |d| d.bg(c.active))
-                        .on_click(cx.listener(move |this, _, _, cx| this.select_project(&id, cx)))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.remote_browser = None;
+                            this.select_project(&id, cx);
+                        }))
+                        .when(g.peer.is_some(), |d| d.child(Icon::new(IconName::Server).size(px(10.5)).text_color(if is_current { c.accent } else { c.subtle })))
                         .child(g.name.clone()),
                 );
             }
@@ -1429,13 +1651,14 @@ impl Render for ViewerPanel {
         }
         let mut tabs = div().flex().items_center().gap_1().px_2().py_1();
         for path in current.as_ref().map_or_else(Vec::new, |g| g.docs.clone()) {
-            let is_active = active.as_ref() == Some(&path);
+            let is_active = !browsing && active.as_ref() == Some(&path);
             let label = tab_label(&path, &docs);
             let (select, close, middle) = (path.clone(), path.clone(), path.clone());
             tabs = tabs.child(
                 div().id(SharedString::from(format!("doc-{path}"))).flex().items_center().gap_1p5().max_w(px(180.0)).rounded_md().px_2().py_1().text_xs().cursor_pointer()
                     .text_color(if is_active { c.fg } else { c.muted }).when(is_active, |d| d.bg(c.active)).hover(move |d| d.bg(c.hover))
                     .on_click(cx.listener(move |this, _, _, cx| {
+                        this.remote_browser = None;
                         let path = select.clone();
                         this.state.update(cx, |s, cx| { s.viewer.active = Some(path); cx.notify(); });
                     }))
@@ -1452,14 +1675,59 @@ impl Render for ViewerPanel {
                     ),
             );
         }
-        tabs = tabs.child(div().flex_1()).child(
-            div().id("viewer-pick").rounded_sm().p_1().cursor_pointer().hover(move |d| d.bg(c.hover)).on_click(cx.listener(|this, _, _, cx| this.pick_files(cx)))
-                .child(Icon::new(IconName::FolderOpen).size(px(13.0)).text_color(c.subtle)),
-        );
+        tabs = tabs.child(div().flex_1())
+            .when(!machines.is_empty() || browsing, |d| {
+                d.child(
+                    div().id("viewer-remote-pick").rounded_sm().p_1().cursor_pointer()
+                        .text_color(if browsing { c.accent } else { c.subtle })
+                        .when(browsing, |d| d.bg(Hsla { a: 0.15, ..c.accent }))
+                        .hover(move |d| d.bg(c.hover).text_color(c.fg))
+                        .tooltip(|window, cx| Tooltip::new("Browse remote files").build(window, cx))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            if this.remote_browser.is_some() {
+                                this.close_remote_browser(cx);
+                            } else {
+                                this.browse_remote(None, None, window, cx);
+                            }
+                        }))
+                        .child(Icon::new(IconName::Server).size(px(13.0))),
+                )
+            })
+            .child(
+                div().id("viewer-pick").rounded_sm().p_1().cursor_pointer().hover(move |d| d.bg(c.hover))
+                    .tooltip(|window, cx| Tooltip::new("Open local file").build(window, cx))
+                    .on_click(cx.listener(|this, _, _, cx| this.pick_files(cx)))
+                    .child(Icon::new(IconName::FolderOpen).size(px(13.0)).text_color(c.subtle)),
+            );
         top = top.child(tabs);
 
+        if browsing {
+            self.sync_html(window, cx);
+            let browser = self.render_remote_browser(c, window, cx);
+            return div().size_full().flex().flex_col().child(top).child(browser).into_any_element();
+        }
+
         let Some(path) = active else {
-            return div().size_full().flex().flex_col().child(top).child(div().flex_1().flex().items_center().justify_center().text_xs().text_color(c.subtle).child("No file open")).into_any_element();
+            self.sync_html(window, cx);
+            let mut empty = div().flex_1().flex().flex_col().items_center().justify_center().gap_3().p_6().text_xs().text_color(c.subtle)
+                .child("No file open");
+            let mut actions = div().flex().flex_wrap().items_center().justify_center().gap_1p5();
+            actions = actions.child(
+                div().id("viewer-empty-local").flex().items_center().gap_1p5().rounded_md().border_1().border_color(c.edge).px_2p5().py_1().cursor_pointer().text_color(c.muted).hover(move |d| d.bg(c.hover).text_color(c.fg))
+                    .on_click(cx.listener(|this, _, _, cx| this.pick_files(cx)))
+                    .child(Icon::new(IconName::FolderOpen).size(px(12.0)))
+                    .child("Open local file"),
+            );
+            for (i, (peer_id, name, is_server)) in machines.into_iter().take(4).enumerate() {
+                actions = actions.child(
+                    div().id(("viewer-empty-remote", i)).flex().items_center().gap_1p5().rounded_md().border_1().border_color(c.edge).px_2p5().py_1().cursor_pointer().text_color(c.muted).hover(move |d| d.bg(c.hover).text_color(c.fg))
+                        .on_click(cx.listener(move |this, _, window, cx| this.browse_remote(Some(peer_id.clone()), None, window, cx)))
+                        .child(Icon::new(if is_server { IconName::Server } else { IconName::Monitor }).size(px(12.0)).text_color(c.accent))
+                        .child(format!("Browse {name}")),
+                );
+            }
+            empty = empty.child(actions);
+            return div().size_full().flex().flex_col().child(top).child(empty).into_any_element();
         };
         let ext = extension(&path);
         let is_markdown = matches!(ext.as_str(), "md" | "markdown" | "mdx");
@@ -1472,7 +1740,8 @@ impl Render for ViewerPanel {
             Content::Failed(err) => div().p_4().text_xs().text_color(c.danger).child(err.clone()).into_any_element(),
             Content::Pdf { pages, .. } => self.render_pdf_view(*pages, c, cx),
             Content::Video { .. } => self.render_html(c, cx),
-            Content::Image(p) => div().size_full().p_2().child(img(p.clone()).size_full().object_fit(ObjectFit::Contain)).into_any_element(),
+            Content::Image(ViewerImage::Local(p)) => div().size_full().p_2().child(img(p.clone()).size_full().object_fit(ObjectFit::Contain)).into_any_element(),
+            Content::Image(ViewerImage::Loaded(image)) => div().size_full().p_2().child(img(image.clone()).size_full().object_fit(ObjectFit::Contain)).into_any_element(),
             Content::Text { .. } if self.diff_shown() => self.render_diff(font.clone(), c, cx),
             Content::Text { text, .. } if !self.editing && is_markdown && !self.source => {
                 let text = text.clone();
@@ -1675,5 +1944,17 @@ mod link_tests {
         assert_eq!(link("src/x.rs:12"), path("/d/src/x.rs", Some(12)));
         assert_eq!(link("/e/x.rs#L3"), path("/e/x.rs", Some(3)));
         assert_eq!(link("file:///e/x.rs"), path("/e/x.rs", None));
+
+        // Remote markdown links stay on the same remote machine.
+        let rdoc = winfer_core::connect_files::remote_doc("peer1", "/srv/app/docs/PLAN.md");
+        assert_eq!(
+            link_target("../src/main.rs:42", &rdoc),
+            Some((winfer_core::connect_files::remote_doc("peer1", "/srv/app/src/main.rs"), Some(42)))
+        );
+        assert_eq!(
+            link_target("/etc/hosts", &rdoc),
+            Some((winfer_core::connect_files::remote_doc("peer1", "/etc/hosts"), None))
+        );
+        assert_eq!(link_target("https://example.com", &rdoc), None);
     }
 }

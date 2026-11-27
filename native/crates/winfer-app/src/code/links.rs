@@ -47,6 +47,42 @@ pub fn resolve(token: &str, cwd: Option<&str>) -> Option<(PathBuf, Option<usize>
 
 /// The markdown with each existing file in inline code made a link.
 pub fn linkify(text: &str, cwd: Option<&str>) -> String {
+    linkify_with(text, |token| {
+        let (path, line_no) = resolve(token, cwd)?;
+        Some(format!("{}{}", path.display(), line_no.map_or(String::new(), |l| format!(":{l}"))))
+    })
+}
+
+/// Whether an inline code token looks like a file path on a remote machine (where we can't stat
+/// synchronously on the local disk; clicking it resolves it over Winfer Connect).
+fn looks_like_remote_file(token: &str) -> bool {
+    if token.is_empty()
+        || token.len() > 300
+        || token.contains(char::is_whitespace)
+        || token.starts_with('-')
+        || token.contains("://")
+        || token.contains(['*', '<', '>', '|', '?', '(', ')', '[', ']', '{', '}', '=', ';', ',', '"', '\''])
+    {
+        return false;
+    }
+    let (name, _) = split_line(token);
+    if name.is_empty() || name.ends_with('/') || name.ends_with('\\') {
+        return false;
+    }
+    let has_sep = name.contains('/') || name.contains('\\');
+    let base = name.rsplit(['/', '\\']).next().unwrap_or(name);
+    let has_ext = base
+        .rsplit_once('.')
+        .is_some_and(|(stem, ext)| !stem.is_empty() && (1..=8).contains(&ext.len()) && ext.as_bytes()[0].is_ascii_alphabetic() && ext.chars().all(|c| c.is_ascii_alphanumeric()));
+    has_sep || has_ext
+}
+
+/// Like [`linkify`], for remote chat panes where files live on another machine.
+pub fn linkify_remote(text: &str) -> String {
+    linkify_with(text, |token| looks_like_remote_file(token).then(|| token.to_string()))
+}
+
+fn linkify_with(text: &str, resolve_href: impl Fn(&str) -> Option<String>) -> String {
     if !text.contains('`') {
         return text.to_string();
     }
@@ -74,11 +110,8 @@ pub fn linkify(text: &str, cwd: Option<&str>) -> String {
             };
             let token = &after[..close];
             out.push_str(&rest[..open]);
-            match resolve(token, cwd) {
-                Some((path, line_no)) => {
-                    let href = format!("{}{}", path.display(), line_no.map_or(String::new(), |l| format!(":{l}")));
-                    out.push_str(&format!("[`{token}`](<{href}>)"));
-                }
+            match resolve_href(token) {
+                Some(href) => out.push_str(&format!("[`{token}`](<{href}>)")),
                 None => {
                     out.push('`');
                     out.push_str(token);
@@ -123,5 +156,16 @@ mod tests {
         assert_eq!(split_line("a/b.rs#L12C3"), ("a/b.rs", Some(12)));
         assert_eq!(split_line("C:/x/b.rs:7"), ("C:/x/b.rs", Some(7)));
         assert_eq!(split_line("a/b.rs:x"), ("a/b.rs:x", None));
+    }
+
+    #[test]
+    fn remote_linkify_matches_file_paths_conservatively() {
+        let out = linkify_remote("See `src/main.rs:42`, `README.md`, `foo()`, `v1.2`, `--flag`, and `/etc/hosts`.");
+        assert!(out.contains("[`src/main.rs:42`](<src/main.rs:42>)"));
+        assert!(out.contains("[`README.md`](<README.md>)"));
+        assert!(out.contains("[`/etc/hosts`](</etc/hosts>)"));
+        assert!(out.contains("`foo()`") && !out.contains("[`foo()`]"));
+        assert!(out.contains("`v1.2`") && !out.contains("[`v1.2`]"));
+        assert!(out.contains("`--flag`") && !out.contains("[`--flag`]"));
     }
 }

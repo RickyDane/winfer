@@ -114,10 +114,10 @@ machine (sent at most every 20 s while active), so it holds back its notificatio
 | `term.exit` | host | `paneId`, `code`, `gone?` |
 
 A winfer code chat pane is a `winfer code --serve` process: its output is JSON lines, so the client runs the same
-chat model on the replayed and live bytes and writes its commands as `term.in`. The process doesn't echo the
-messages it's sent, so the host adds a `{"type":"user","text","images"}` line for each `send`/`steer`: from a
-client's `term.in` to its own view, the replay and the other clients (not the sender), and from its own composer
-to the replay and the clients.
+chat model on the replayed and live bytes and writes its commands as `term.in`. The host echoes `send`/`steer` as
+`{"type":"user","text","images"}` and `approve`/`answer` as `{"type":"answered","id"}`: from a client's `term.in` to
+its own view, the replay and the other clients (not the sender), and from its own composer to the replay and the
+clients.
 
 ### Agent tools
 
@@ -144,6 +144,8 @@ the user confirms) and `list_sign_ins`/`push_sign_in` (`account.push`). Not for 
 |---|---|---|
 | `server.update` | client | — → `ack {ok, version?, error?}`; the server updates to the newest release and restarts |
 | `fs.list` | client | `path` (`~` for home) → `fs {path, parent?, git, dirs: [{name, git}], truncated, error?}` |
+| `file.call` | client | `op` (`list`, `stat`, `read_text`, `write_text`, `read_bytes`, `resolve`, `git_show`), op fields → `ack {ok, value?, error?}` (remote file browsing, viewing, editing, diffing and link resolution in the desktop's Files side panel) |
+| `file.open` | server | `path`, `line?`, `workspaceId?` — asks connected desktops to open a file from this machine in their Files side panel (sent when a server agent calls `open_file`) |
 | `workspace.new` | client | `path`, `name?` → `ack {ok, workspaceId}` (an existing workspace for that folder is reused) |
 | `workspace.remove` | client | `workspaceId` → `ack {ok}`: its sessions close, the folder and worktrees stay (servers and desktops) |
 | `git.clone` | client | `url`, `branch?`, `parent` → `ack {ok, workspaceId, path}` once cloned (into `parent/<repo>`) |
@@ -214,7 +216,8 @@ one's ack.
 | `device.end` | host | `streamId`, `error`: the stream stopped (the device went away, the video ended) |
 
 Ops: `list` (`{android: {adb, devices: [{serial, state, model, emulator}], avds}, ios: {simctl, input, devices: [{udid,
-name, state, runtime, booted}]}}`; `input` is the simulator input tool there, `axe` or `idb`, or null), `boot {platform,
+name, state, runtime, booted}]}}`; `input` is the simulator input tool there, `axe` or `idb`, or null), `host`
+(`{form}`: what computer it is, for its icon: `laptop`, `desktop`, `imac`, `mac-studio`, `mac-mini` or `mac-pro`), `boot {platform,
 device}` (an AVD name, started without a window on a server, or a simulator udid), `attach {streamId, platform
 (`android`/`ios`), device (serial/udid), name}` (`{codec, live, input, inputTool?, width?, height?}`; `live`: touches
 follow the pointer, else a press becomes a tap or swipe when it lifts; `input` false: view only), `frameDone {streamId}`,

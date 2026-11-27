@@ -5,6 +5,7 @@
 use super::commands::{Command, PaneRef};
 use super::menu::MenuItem;
 use super::settings_kit::alpha;
+use super::sidebar::{agent_summary, card_bg, monogram_tile};
 use super::*;
 use gpui_kit::component::tooltip::Tooltip;
 use serde_json::{Value, json};
@@ -29,6 +30,7 @@ pub struct RemotePane {
     pub workspace: String,
     pub workspace_id: String,
     pub archived: bool,
+    pub cwd: String,
     pub provider: String,
     pub status: AgentStatus,
     pub message: Option<String>,
@@ -47,6 +49,7 @@ impl RemotePane {
             workspace: v["workspace"].as_str().unwrap_or_default().to_string(),
             workspace_id: v["workspaceId"].as_str().unwrap_or_default().to_string(),
             archived: v["archived"].as_bool().unwrap_or(false),
+            cwd: v["cwd"].as_str().unwrap_or_default().to_string(),
             provider: v["provider"].as_str().unwrap_or("shell").to_string(),
             status: parse_status(v["status"].as_str().unwrap_or("idle")),
             message: v["message"].as_str().map(str::to_string),
@@ -73,6 +76,7 @@ pub fn parse_status(s: &str) -> AgentStatus {
 pub struct Mirror {
     pub panes: Vec<RemotePane>,
     pub workspaces: Vec<(String, String)>,
+    pub workspace_roots: HashMap<String, String>,
     pub providers: Vec<(String, String)>,
     pub default_provider: Option<String>,
     pub loaded: bool,
@@ -127,8 +131,8 @@ impl ServerInfo {
 #[derive(Default)]
 pub(super) struct ConnectClient {
     pub mirrors: HashMap<String, Mirror>,
-    /// Collapsed machines in the sidebar (expanded by default).
-    pub collapsed: HashSet<String>,
+    /// Machines (`peer`) and their workspaces (`peer/workspace`) opened in the sidebar (closed by default).
+    pub expanded: HashSet<String>,
     /// Workspace removals asked of another machine: request id → what to say once it's done.
     pub removing: HashMap<String, String>,
     seq: u64,
@@ -239,6 +243,7 @@ impl Root {
         let peer = payload["peer"].as_str().unwrap_or_default().to_string();
         if payload["up"] == true {
             self.connect_request(&peer, json!({"t": "panes.get"}), None);
+            self.viewer.update(cx, |v, cx| v.on_peer_up(&peer, cx));
             // Tiles showing its panes attach again (a new link: nothing was replayed).
             for local in crate::connect_term::locals_of_peer(&peer) {
                 if let (Some(session), Some((_, pane))) = (SESSIONS.get(&local), crate::connect_term::remote_of(&local)) {
@@ -534,9 +539,28 @@ impl Root {
             "usage" => self.on_remote_usage(&peer, msg, cx),
             "mobile.pairing" => self.on_server_pairing(&peer, msg, cx),
             "panes" => {
+                let mut workspace_roots = HashMap::new();
+                let mut meta = Vec::new();
+                let workspaces: Vec<(String, String)> = msg["workspaces"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|w| {
+                        let id = w["id"].as_str().unwrap_or_default().to_string();
+                        let name = w["name"].as_str().unwrap_or_default().to_string();
+                        let root_dir = w["rootDir"].as_str().unwrap_or_default().to_string();
+                        if !root_dir.is_empty() {
+                            workspace_roots.insert(id.clone(), root_dir.clone());
+                        }
+                        meta.push(winfer_core::connect_files::RemoteWorkspaceMeta { id: id.clone(), name: name.clone(), root_dir });
+                        (id, name)
+                    })
+                    .collect();
+                winfer_core::connect_files::set_workspaces(&peer, meta);
                 let mirror = Mirror {
                     panes: msg["panes"].as_array().into_iter().flatten().filter_map(RemotePane::parse).collect(),
-                    workspaces: msg["workspaces"].as_array().into_iter().flatten().map(|w| (w["id"].as_str().unwrap_or_default().to_string(), w["name"].as_str().unwrap_or_default().to_string())).collect(),
+                    workspaces,
+                    workspace_roots,
                     providers: msg["providers"].as_array().into_iter().flatten().map(|p| (p["id"].as_str().unwrap_or_default().to_string(), p["name"].as_str().unwrap_or_default().to_string())).collect(),
                     default_provider: msg["defaultProvider"].as_str().map(str::to_string),
                     loaded: true,
@@ -544,6 +568,21 @@ impl Root {
                 };
                 self.connect.mirrors.insert(peer, mirror);
                 cx.notify();
+            }
+            "file.open" => {
+                let path = msg["path"].as_str().unwrap_or_default().trim().to_string();
+                if !path.is_empty() {
+                    let line = msg["line"].as_u64().map(|l| l as usize);
+                    let remote_ws = msg["workspaceId"].as_str();
+                    let on_screen = {
+                        let s = self.state.read(cx);
+                        s.view() == View::Workspace
+                            && s.active().is_some_and(|w| {
+                                w.remote.as_ref().is_some_and(|r| r.peer == peer && remote_ws.is_none_or(|id| r.workspace == id))
+                            })
+                    };
+                    self.viewer.update(cx, |v, cx| v.open_remote(&peer, path, line, !on_screen, cx));
+                }
             }
             "status" => {
                 let Some(pane) = RemotePane::parse(&msg["pane"]) else { return };
@@ -676,7 +715,11 @@ impl Root {
             ("decline", _) => self.remote_action(&peer, &pane, "decline", None, cx),
             ("reply", Some(text)) => self.remote_action(&peer, &pane, "send", Some(text), cx),
             _ => {
-                self.connect.collapsed.remove(&peer);
+                // Open the machine and the pane's workspace, so its row shows.
+                if let Some(p) = self.connect.mirrors.get(&peer).and_then(|m| m.panes.iter().find(|p| p.id == pane)) {
+                    self.connect.expanded.insert(format!("{peer}/{}", p.workspace_id));
+                }
+                self.connect.expanded.insert(peer);
                 cx.notify();
             }
         }
@@ -1051,8 +1094,8 @@ impl Root {
         }
     }
 
-    /// A paired server named in `a["machine"]`, online.
-    fn online_machine(&self, a: &Value) -> Result<(String, String), String> {
+    /// A paired machine named in `a["machine"]`, online.
+    pub(super) fn online_machine(&self, a: &Value) -> Result<(String, String), String> {
         let (peer, name, up) = self.machine(a["machine"].as_str().unwrap_or_default())?;
         if !up {
             return Err(format!("{name} is offline."));
@@ -1528,14 +1571,17 @@ impl Root {
             return None;
         }
         let mono = crate::fonts::mono(cx);
+        let card_bg = card_bg(c);
         let mut list = div().flex().flex_col().gap_1p5();
         for peer in &status.peers {
             let up = peer.link.via.is_some();
             let mirror = self.connect.mirrors.get(&peer.peer_id).cloned().unwrap_or_default();
             let live: Vec<&RemotePane> = mirror.panes.iter().filter(|p| !p.archived).collect();
             let agents = live.iter().filter(|p| p.provider != "shell").count();
+            let count = |st: AgentStatus| live.iter().filter(|p| p.provider != "shell" && p.status == st).count();
+            let (working, done) = (count(AgentStatus::Working), count(AgentStatus::Done));
             let waiting = live.iter().filter(|p| p.status == AgentStatus::NeedsInput).count();
-            let collapsed = self.connect.collapsed.contains(&peer.peer_id);
+            let collapsed = !self.connect.expanded.contains(&peer.peer_id);
             let icon = if peer.kind == Kind::Server { IconName::Server } else { IconName::Monitor };
             let (label, _) = super::settings_connect::link_label(peer, now_ms());
             let toggle = peer.peer_id.clone();
@@ -1543,13 +1589,16 @@ impl Root {
             let about = mirror.server.as_ref().map(|sv| format!("\nwinferd {}{}", sv.version, sv.health.as_ref().map_or(String::new(), |h| format!("\n{h}")))).unwrap_or_default();
             let tip = format!("{}\n{label}{about}\nClick to show or hide its sessions{}", peer.name, if up && mirror.loaded { ", right-click for more" } else { "" });
             let menu_ready = up && mirror.loaded;
-            let header = div().id(SharedString::from(format!("peer-{}", peer.peer_id))).flex().items_center().gap_2().px_2().py(px(6.0)).rounded(px(10.0)).cursor_pointer().text_size(px(13.0))
+            let header = div().id(SharedString::from(format!("peer-{}", peer.peer_id))).flex().flex_col().justify_center().px_2().py(px(6.0)).cursor_pointer().text_size(px(13.0))
+                .when(collapsed, |d| d.rounded(px(10.0)))
+                .when(!collapsed, |d| d.rounded_t(px(10.0)))
                 .text_color(if up { c.fg } else { c.muted })
+                .when(up, |d| d.font_weight(FontWeight::MEDIUM))
                 .hover(move |d| d.bg(c.hover).text_color(c.fg))
                 .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
                 .on_click(cx.listener(move |this, _, _, cx| {
-                    if !this.connect.collapsed.remove(&toggle) {
-                        this.connect.collapsed.insert(toggle.clone());
+                    if !this.connect.expanded.remove(&toggle) {
+                        this.connect.expanded.insert(toggle.clone());
                     }
                     cx.notify();
                 }))
@@ -1558,7 +1607,8 @@ impl Root {
                         let items = this.remote_machine_menu(&add_peer);
                         this.open_menu(e.position, None, items, cx);
                     }
-                }))
+                }));
+            let top_row = div().flex().items_center().gap_2()
                 .child(div().relative().size(px(22.0)).flex_shrink_0().flex().items_center().justify_center().rounded(px(6.0)).bg(c.hover)
                     .child(Icon::new(icon).size(px(12.0)).text_color(c.muted))
                     .child(div().absolute().right(px(-2.0)).bottom(px(-2.0)).size(px(7.0)).rounded_full().bg(if up { c.success } else { c.subtle })))
@@ -1580,12 +1630,13 @@ impl Root {
                         }))
                         .child("Update"))
                 })
-                .when(waiting > 0, |d| d.child(div().text_size(px(10.5)).text_color(c.warning).child(format!("{waiting} need{} you", if waiting == 1 { "s" } else { "" }))))
-                .when(waiting == 0 && agents > 0, |d| d.child(div().text_size(px(10.5)).text_color(c.subtle).font_family(mono.clone()).child(format!("{agents} agent{}", if agents == 1 { "" } else { "s" }))))
+                .when(collapsed && agents > 0, |d| d.child(div().text_size(px(10.5)).font_weight(FontWeight::NORMAL).text_color(c.subtle).font_family(mono.clone()).child(format!("{agents} agent{}", if agents == 1 { "" } else { "s" }))))
                 .child(Icon::new(if collapsed { IconName::ChevronRight } else { IconName::ChevronDown }).size(px(13.0)).text_color(c.subtle));
-            let mut group = div().flex().flex_col().child(header);
+            let summary = (collapsed && (agents > 0 || waiting > 0)).then(|| agent_summary(working, waiting, done, c));
+            let mut group = div().flex().flex_col().rounded(px(10.0)).border_1().border_color(c.edge).bg(card_bg)
+                .child(header.child(top_row).children(summary));
             if !collapsed {
-                let mut rows = div().flex().flex_col().gap_0p5().pl_2();
+                let mut rows = div().flex().flex_col().gap_0p5().p_1();
                 if !up && live.is_empty() {
                     rows = rows.child(div().px_2().py_1().text_size(px(11.5)).text_color(c.subtle).child(label.clone()));
                 } else if live.is_empty() && mirror.loaded && mirror.workspaces.len() <= 1 {
@@ -1609,17 +1660,28 @@ impl Root {
                     let panes: Vec<&&RemotePane> = live.iter().filter(|p| &p.workspace_id == ws_id).collect();
                     // Each workspace folds on its own (click its name).
                     let fold_key = format!("{}/{ws_id}", peer.peer_id);
-                    let folded = many_workspaces && self.connect.collapsed.contains(&fold_key);
-                    if many_workspaces {
+                    let folded = many_workspaces && !self.connect.expanded.contains(&fold_key);
+                    // With several workspaces, each is a card of its own, like the local ones.
+                    let header = many_workspaces.then(|| {
                         let (menu_peer, menu_ws, title) = (peer.peer_id.clone(), ws_id.clone(), ws_name.clone());
                         let tip = if up { "Click to show or hide its sessions, right-click for a new session, its browser or removing it" } else { "Click to show or hide its sessions" };
-                        rows = rows.child(div().id(SharedString::from(format!("peer-ws-{}-{ws_id}", peer.peer_id))).flex().items_center().gap_1().px_2().pt_1().pb_0p5().rounded_md().cursor_pointer()
-                            .text_size(px(10.5)).font_weight(FontWeight::SEMIBOLD).text_color(c.subtle)
-                            .hover(move |d| d.text_color(c.fg))
+                        let agents: Vec<&&&RemotePane> = panes.iter().filter(|p| p.provider != "shell").collect();
+                        let count = |st: AgentStatus| agents.iter().filter(|p| p.status == st).count();
+                        let summary = (folded && !agents.is_empty()).then(|| agent_summary(count(AgentStatus::Working), count(AgentStatus::NeedsInput), count(AgentStatus::Done), c));
+                        let top_row = div().flex().items_center().gap_2()
+                            .child(monogram_tile(ws_name))
+                            .child(div().flex_1().min_w_0().truncate().child(ws_name.clone()))
+                            .when(folded && !panes.is_empty(), |d| d.child(div().text_size(px(10.5)).font_weight(FontWeight::NORMAL).text_color(c.subtle).font_family(mono.clone())
+                                .child(if agents.is_empty() { format!("{}", panes.len()) } else { format!("{} agent{}", agents.len(), if agents.len() == 1 { "" } else { "s" }) })))
+                            .child(Icon::new(if folded { IconName::ChevronRight } else { IconName::ChevronDown }).size(px(13.0)).text_color(c.subtle));
+                        div().id(SharedString::from(format!("peer-ws-{}-{ws_id}", peer.peer_id))).flex().flex_col().justify_center().px_2().py(px(6.0)).cursor_pointer().text_size(px(13.0))
+                            .when(folded, |d| d.rounded(px(8.0)).text_color(c.muted))
+                            .when(!folded, |d| d.rounded_t(px(8.0)).text_color(c.fg).font_weight(FontWeight::MEDIUM))
+                            .hover(move |d| d.bg(c.hover).text_color(c.fg))
                             .tooltip(move |window, cx| Tooltip::new(tip).build(window, cx))
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                if !this.connect.collapsed.remove(&fold_key) {
-                                    this.connect.collapsed.insert(fold_key.clone());
+                                if !this.connect.expanded.remove(&fold_key) {
+                                    this.connect.expanded.insert(fold_key.clone());
                                 }
                                 cx.notify();
                             }))
@@ -1627,25 +1689,33 @@ impl Root {
                                 let items = this.remote_workspace_menu(&menu_peer, &menu_ws);
                                 this.open_menu(e.position, Some(title.clone().into()), items, cx);
                             })))
-                            .child(Icon::new(if folded { IconName::ChevronRight } else { IconName::ChevronDown }).size(px(10.0)))
-                            .child(div().flex_1().min_w_0().truncate().child(ws_name.clone()))
-                            .when(folded && !panes.is_empty(), |d| d.child(div().font_weight(FontWeight::NORMAL).child(panes.len().to_string()))));
+                            .child(top_row)
+                            .children(summary)
+                    });
+                    let mut sessions = div().flex().flex_col().gap_0p5().when(many_workspaces, |d| d.p_1());
+                    if !folded {
+                        // A workspace with no sessions yet (just opened or cloned): start one there.
+                        if panes.is_empty() && many_workspaces && up {
+                            let (target, ws) = (peer.peer_id.clone(), ws_id.clone());
+                            sessions = sessions.child(div().id(SharedString::from(format!("peer-ws-new-{}-{ws_id}", peer.peer_id))).flex().items_center().gap_2().rounded(px(7.0)).px_2().h(px(28.0)).cursor_pointer().text_size(px(12.0)).text_color(c.subtle)
+                                .hover(move |d| d.bg(c.hover).text_color(c.fg))
+                                .on_click(cx.listener(move |this, _, _, cx| this.remote_new_pane(&target, Some(ws.clone()), None, cx)))
+                                .child(Icon::new(IconName::Plus).size(px(12.0)))
+                                .child("No agents yet · start one"));
+                        }
+                        for p in &panes {
+                            sessions = sessions.child(self.render_remote_row(&peer.peer_id, p, up, c, cx));
+                        }
                     }
-                    if folded {
-                        continue;
-                    }
-                    // A workspace with no sessions yet (just opened or cloned): start one there.
-                    if panes.is_empty() && many_workspaces && up {
-                        let (target, ws) = (peer.peer_id.clone(), ws_id.clone());
-                        rows = rows.child(div().id(SharedString::from(format!("peer-ws-new-{}-{ws_id}", peer.peer_id))).flex().items_center().gap_2().px_2().py_1().rounded_md().cursor_pointer().text_size(px(12.0)).text_color(c.subtle)
-                            .hover(move |d| d.bg(c.hover).text_color(c.fg))
-                            .on_click(cx.listener(move |this, _, _, cx| this.remote_new_pane(&target, Some(ws.clone()), None, cx)))
-                            .child(Icon::new(IconName::Plus).size(px(12.0)))
-                            .child("New session"));
-                    }
-                    for p in panes {
-                        rows = rows.child(self.render_remote_row(&peer.peer_id, p, up, c, cx));
-                    }
+                    rows = match header {
+                        Some(header) => rows.child(div().flex().flex_col().rounded(px(8.0)).border_1()
+                            .border_color(if folded { gpui_kit::transparent_black() } else { c.edge })
+                            .when(!folded, |d| d.bg(c.panel))
+                            .child(header)
+                            // Nothing to pad under a closed card, or an empty one of a machine that's offline.
+                            .when(!folded && (up || !panes.is_empty()), |d| d.child(sessions))),
+                        None => rows.child(sessions),
+                    };
                 }
                 group = group.child(rows);
             }
@@ -1716,6 +1786,8 @@ impl Root {
         } else {
             let (p, first) = (peer.to_string(), mirror.workspaces.first().map(|w| w.0.clone()));
             items.push(MenuItem::run("Show its browser", move |this: &mut Root, _: &mut Window, cx: &mut Context<Root>| this.show_remote_browser(&p, first.as_deref(), cx)));
+            let p = peer.to_string();
+            items.push(MenuItem::run("Browse files…", move |this: &mut Root, window: &mut Window, cx: &mut Context<Root>| this.browse_remote_files(&p, None, window, cx)));
         }
         let p = peer.to_string();
         items.push(MenuItem::run("New workspace (folder or git clone)…", move |this: &mut Root, window: &mut Window, cx: &mut Context<Root>| this.open_remote_folder(&p, window, cx)));
@@ -1723,7 +1795,7 @@ impl Root {
     }
 
     /// A workspace's menu on a paired machine (right-click on it): a session with each agent
-    /// installed there, its browser, and removing it.
+    /// installed there, its browser, files, and removing it.
     fn remote_workspace_menu(&self, peer: &str, ws: &str) -> Vec<MenuItem> {
         let Some(mirror) = self.connect.mirrors.get(peer) else { return Vec::new() };
         let mut items = Vec::new();
@@ -1736,8 +1808,20 @@ impl Root {
         let (p, w) = (peer.to_string(), ws.to_string());
         items.push(MenuItem::run("Show its browser", move |this: &mut Root, _: &mut Window, cx: &mut Context<Root>| this.show_remote_browser(&p, Some(&w), cx)));
         let (p, w) = (peer.to_string(), ws.to_string());
+        items.push(MenuItem::run("Browse files…", move |this: &mut Root, window: &mut Window, cx: &mut Context<Root>| this.browse_remote_files(&p, Some(&w), window, cx)));
+        let (p, w) = (peer.to_string(), ws.to_string());
         items.push(MenuItem::run("Remove workspace…", move |this: &mut Root, window: &mut Window, cx: &mut Context<Root>| this.remove_remote_workspace(&p, &w, window, cx)).danger());
         items
+    }
+
+    fn browse_remote_files(&mut self, peer: &str, ws: Option<&str>, window: &mut Window, cx: &mut Context<Self>) {
+        let start = ws.and_then(|id| self.connect.mirrors.get(peer)?.workspace_roots.get(id).cloned());
+        self.update_state(cx, |s| {
+            s.browser_open = true;
+            s.side_panel = Some(crate::model::SidePanel::Viewer);
+        });
+        let peer = peer.to_string();
+        self.viewer.update(cx, |v, cx| v.browse_remote(Some(peer), start, window, cx));
     }
 
     fn show_remote_browser(&mut self, peer: &str, ws: Option<&str>, cx: &mut Context<Self>) {

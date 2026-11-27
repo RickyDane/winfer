@@ -363,12 +363,12 @@ impl Session {
         self.code.lock().is_some()
     }
 
-    /// Writes protocol bytes to the process, bypassing the chat's input hook. Messages sent go to
-    /// the machines showing this chat (the process doesn't echo them).
+    /// Writes protocol bytes to the process, bypassing the chat's input hook. Sent messages and
+    /// answered approvals/questions go to the machines showing this chat.
     pub fn write_process(&self, data: &str) -> bool {
         if self.ready.load(Ordering::Acquire) && !self.exited.load(Ordering::Relaxed) {
             let _ = self.input.send(data.to_string());
-            let echo = crate::connect_term::user_echo(data);
+            let echo = crate::connect_term::chat_echo(data);
             if !echo.is_empty() {
                 crate::connect_term::tap(&self.pane_id, echo.as_bytes(), true);
             }
@@ -380,11 +380,11 @@ impl Session {
 
     /// Writes to the process through its one writer thread, so keys from another machine stay in
     /// order with each other and with what's typed here (no chat input hook). A chat's messages
-    /// from `peer` show here and on the other machines showing it.
+    /// and approval/question answers from `peer` show here and on the other machines showing it.
     pub fn write_remote(&self, data: &str, peer: &str) {
         let _ = self.input.send(data.to_string());
         let Some(code) = self.code.lock().clone() else { return };
-        let echo = crate::connect_term::user_echo(data);
+        let echo = crate::connect_term::chat_echo(data);
         if !echo.is_empty() {
             crate::connect_term::tap_except(&self.pane_id, echo.as_bytes(), true, Some(peer));
             (code.tap)(echo.as_bytes());
@@ -884,5 +884,20 @@ mod tests {
         assert!(session.write_process("{\"type\":\"set_mode\",\"mode\":\"yolo\"}\n"));
         session.exited.store(true, Ordering::Release);
         assert!(!session.write_process("{\"type\":\"set_mode\",\"mode\":\"ask\"}\n"));
+    }
+
+    #[test]
+    fn write_remote_echoes_answered_to_host_code_tap() {
+        let (tx, _rx) = async_channel::unbounded();
+        let session = Session::new("remote-answer-test", tx);
+        let seen = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let sink = seen.clone();
+        session.attach_code(CodeHooks {
+            tap: Box::new(move |bytes| sink.lock().extend_from_slice(bytes)),
+            input: Box::new(|_| {}),
+        });
+        session.write_remote("{\"type\":\"answer\",\"id\":\"q1\",\"answers\":[\"Yes\"]}\n", "peer-a");
+        let text = String::from_utf8(seen.lock().clone()).unwrap();
+        assert_eq!(serde_json::from_str::<serde_json::Value>(text.trim()).unwrap(), json!({"type": "answered", "id": "q1"}));
     }
 }

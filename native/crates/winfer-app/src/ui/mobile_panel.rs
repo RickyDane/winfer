@@ -206,7 +206,8 @@ fn allowed(path: &Path, roots: &[PathBuf], docs: &[String]) -> bool {
 /// grouped by project (this workspace's first, then the others and "Other files"); `docs` lists
 /// them all in that order (what older phones show).
 fn phone_docs(docs: &[String], active: Option<&String>, workspaces: &[Workspace], ws: &Workspace) -> Value {
-    let mut groups = viewer_projects(docs, workspaces);
+    let local: Vec<String> = docs.iter().filter(|d| !winfer_core::connect_files::is_remote(d)).cloned().collect();
+    let mut groups = viewer_projects(&local, workspaces);
     groups.sort_by_key(|g| g.id != ws.id);
     let all: Vec<&String> = groups.iter().flat_map(|g| &g.docs).collect();
     let active = active.filter(|a| all.contains(a));
@@ -582,7 +583,6 @@ impl Root {
 #[cfg(test)]
 mod tests {
     use super::{Feed, PHONES, Watch, allowed, frame_done, list_dir, next_quality, read_file};
-    use std::path::Path;
     use std::time::Instant;
 
     #[test]

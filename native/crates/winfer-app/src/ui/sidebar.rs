@@ -76,6 +76,37 @@ fn mix_color(base: Hsla, over: Hsla, t: f32) -> Hsla {
     .into()
 }
 
+/// Background of an opened (or active) card in the sidebar.
+pub(super) fn card_bg(c: Colors) -> Hsla {
+    mix_color(c.panel, c.app, 0.68)
+}
+
+/// A workspace's letter on a tile in its own color.
+pub(super) fn monogram_tile(name: &str) -> Div {
+    let color = hsla(name_hue(name) / 360.0, 0.65, 0.62, 1.0);
+    div().size(px(22.0)).flex_shrink_0().flex().items_center().justify_center().rounded(px(6.0)).bg(Hsla { a: 0.16, ..color })
+        .text_size(px(11.0)).font_weight(FontWeight::SEMIBOLD).text_color(color).child(monogram(name))
+}
+
+/// The line under a closed card: how its agents are doing.
+pub(super) fn agent_summary(working: usize, waiting: usize, done: usize, c: Colors) -> Div {
+    let mut parts: Vec<AnyElement> = vec![div().child(format!("{working} working")).into_any_element()];
+    if waiting > 0 {
+        parts.push(div().text_color(c.warning).font_weight(FontWeight::MEDIUM).child(format!("{waiting} need{} you", if waiting == 1 { "s" } else { "" })).into_any_element());
+    }
+    if done > 0 {
+        parts.push(div().text_color(c.success).child(format!("{done} done")).into_any_element());
+    }
+    let mut line = div().flex().flex_wrap().gap_1().pl(px(30.0)).mt(px(2.0)).text_size(px(11.0)).font_weight(FontWeight::NORMAL).text_color(c.subtle);
+    for (k, part) in parts.into_iter().enumerate() {
+        if k > 0 {
+            line = line.child("·");
+        }
+        line = line.child(part);
+    }
+    line
+}
+
 fn normalize(path: &str) -> String {
     let value = path.replace('\\', "/").trim_end_matches('/').to_string();
     let bytes = value.as_bytes();
@@ -501,7 +532,7 @@ impl Root {
         let s = self.state.read(cx);
         let workspaces = s.workspaces.clone();
         let expanded_ids = s.expanded_workspaces.clone();
-        let card_bg = mix_color(c.panel, c.app, 0.68);
+        let card_bg = card_bg(c);
         let mut list = div().mt_1().flex().flex_col().gap_1p5();
         for (i, ws) in workspaces.iter().enumerate() {
             // Other machines' workspaces are listed under them (Connected).
@@ -523,25 +554,9 @@ impl Root {
             let (toggle, menu_ws, hover_dir) = (ws.id.clone(), ws.clone(), ws.root_dir.clone());
             let count = |st: AgentStatus| agents.iter().filter(|p| p.status == st).count();
             let (working, waiting_here, done) = (count(AgentStatus::Working), count(AgentStatus::NeedsInput), count(AgentStatus::Done));
-            let summary = (!expanded && !agents.is_empty()).then(|| {
-                let mut parts: Vec<AnyElement> = vec![div().child(format!("{working} working")).into_any_element()];
-                if waiting_here > 0 {
-                    parts.push(div().text_color(c.warning).font_weight(FontWeight::MEDIUM).child(format!("{waiting_here} need{} you", if waiting_here == 1 { "s" } else { "" })).into_any_element());
-                }
-                if done > 0 {
-                    parts.push(div().text_color(c.success).child(format!("{done} done")).into_any_element());
-                }
-                let mut line = div().flex().flex_wrap().gap_1().pl(px(30.0)).mt(px(2.0)).text_size(px(11.0)).font_weight(FontWeight::NORMAL).text_color(c.subtle);
-                for (k, part) in parts.into_iter().enumerate() {
-                    if k > 0 {
-                        line = line.child("·");
-                    }
-                    line = line.child(part);
-                }
-                line
-            });
+            let summary = (!expanded && !agents.is_empty()).then(|| agent_summary(working, waiting_here, done, c));
             let top_row = div().flex().items_center().gap_2()
-                .child(div().size(px(22.0)).flex_shrink_0().flex().items_center().justify_center().rounded(px(6.0)).bg(Hsla { a: 0.16, ..color }).text_size(px(11.0)).font_weight(FontWeight::SEMIBOLD).text_color(color).child(monogram(&ws.name)))
+                .child(monogram_tile(&ws.name))
                 .child(div().flex_1().min_w_0().truncate().child(ws.name.clone()))
                 .when(active, |d| d.child(div().size(px(6.0)).flex_shrink_0().rounded_full().bg(color)))
                 .when(!expanded && !live.is_empty(), |d| d.child(div().text_size(px(10.5)).font_weight(FontWeight::NORMAL).text_color(c.subtle).font_family(mono.clone())

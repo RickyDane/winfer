@@ -197,6 +197,7 @@ pub fn call(client: &str, msg: &Value, out: Out, link: Link) -> Result<Value, St
     let stream = s(msg, "streamId");
     match msg["op"].as_str().unwrap_or_default() {
         "list" => Ok(list()),
+        "host" => Ok(json!({"form": crate::machine::form()})),
         "boot" => {
             let device = s(msg, "device");
             match msg["platform"].as_str() {

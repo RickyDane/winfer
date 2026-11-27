@@ -76,27 +76,36 @@ pub fn tap_except(pane: &str, bytes: &[u8], chat: bool, except: Option<&str>) {
     }
 }
 
-/// The messages in chat commands (`send`/`steer` JSON lines) as the chat's `user` lines. A chat
-/// process doesn't echo what it's sent, so the host feeds these to everyone showing the chat but
-/// the one that sent them (it shows them already).
-pub fn user_echo(data: &str) -> String {
+/// The events a chat process doesn't echo back for commands written to it: `send`/`steer` as
+/// `user` lines, and `approve`/`answer` as `answered` lines. The host feeds these to everyone
+/// showing the chat except the sender (which applied them locally).
+pub fn chat_echo(data: &str) -> String {
     let mut out = String::new();
     for line in data.lines().map(str::trim).filter(|l| l.starts_with('{')) {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
-        if !matches!(v["type"].as_str(), Some("send" | "steer")) {
-            continue;
+        match v["type"].as_str() {
+            Some("send" | "steer") => {
+                let text = v["text"].as_str().unwrap_or_default().trim();
+                let files = v["files"].as_array().into_iter().flatten().filter_map(|f| f["name"].as_str());
+                let shown = crate::code::state::shown_text(text, v["skill"].as_str(), files);
+                let images: Vec<String> = v["images"].as_array().into_iter().flatten()
+                    .filter_map(|i| Some(format!("data:{};base64,{}", i["mime"].as_str()?, i["data"].as_str()?)))
+                    .collect();
+                if shown.is_empty() && images.is_empty() {
+                    continue;
+                }
+                out.push_str(&json!({"type": "user", "text": shown, "images": images}).to_string());
+                out.push('\n');
+            }
+            Some("approve" | "answer") => {
+                let id = v["id"].as_str().unwrap_or_default();
+                if !id.is_empty() {
+                    out.push_str(&json!({"type": "answered", "id": id}).to_string());
+                    out.push('\n');
+                }
+            }
+            _ => {}
         }
-        let text = v["text"].as_str().unwrap_or_default().trim();
-        let files = v["files"].as_array().into_iter().flatten().filter_map(|f| f["name"].as_str());
-        let shown = crate::code::state::shown_text(text, v["skill"].as_str(), files);
-        let images: Vec<String> = v["images"].as_array().into_iter().flatten()
-            .filter_map(|i| Some(format!("data:{};base64,{}", i["mime"].as_str()?, i["data"].as_str()?)))
-            .collect();
-        if shown.is_empty() && images.is_empty() {
-            continue;
-        }
-        out.push_str(&json!({"type": "user", "text": shown, "images": images}).to_string());
-        out.push('\n');
     }
     out
 }
@@ -255,19 +264,25 @@ mod tests {
     }
 
     #[test]
-    fn chat_commands_echo_as_user_lines() {
+    fn chat_commands_echo_as_user_and_answered_lines() {
         let data = concat!(
             r#"{"type":"send","text":"fix it","skill":"review","files":[{"name":"a.txt","data":"eA=="}],"images":[{"mime":"image/png","data":"aQ=="}]}"#, "\n",
             r#"{"type":"interrupt"}"#, "\n",
             r#"{"type":"steer","text":"also tests"}"#, "\n",
+            r#"{"type":"answer","id":"q1","answers":["Classic"]}"#, "\n",
+            r#"{"type":"approve","id":"a1","decision":"allow"}"#, "\n",
         );
-        let echo = user_echo(data);
+        let echo = chat_echo(data);
         let lines: Vec<serde_json::Value> = echo.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
-        assert_eq!(lines.len(), 2);
+        assert_eq!(lines.len(), 4);
         assert_eq!(lines[0], json!({"type": "user", "text": "/review fix it\n[File: a.txt]", "images": ["data:image/png;base64,aQ=="]}));
         assert_eq!(lines[1]["text"], "also tests");
+        assert_eq!(lines[2], json!({"type": "answered", "id": "q1"}));
+        assert_eq!(lines[3], json!({"type": "answered", "id": "a1"}));
         assert!(matches!(crate::code::protocol::parse_line(echo.lines().next().unwrap()), Some(crate::code::protocol::Ev::User { images, .. }) if images.len() == 1));
-        assert_eq!(user_echo("ls\r"), "");
+        assert!(matches!(crate::code::protocol::parse_line(echo.lines().nth(2).unwrap()), Some(crate::code::protocol::Ev::Answered { id }) if id == "q1"));
+        assert!(matches!(crate::code::protocol::parse_line(echo.lines().nth(3).unwrap()), Some(crate::code::protocol::Ev::Answered { id }) if id == "a1"));
+        assert_eq!(chat_echo("ls\r"), "");
     }
 
     #[test]
