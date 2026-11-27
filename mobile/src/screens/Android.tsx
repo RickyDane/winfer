@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import type { DesktopClient } from "../client";
 import { haptic, useClient } from "../hooks";
+import { forMachine } from "../multi";
 import type { AndroidOp, AndroidState } from "../protocol";
 import { Icon, linkState } from "./common";
 import { LiveView, type Unit } from "./LiveView";
@@ -14,7 +15,8 @@ const MODE: Record<string, string> = { scrcpy: "live", stream: "screen recording
 
 export function Android({ client }: { client: DesktopClient }) {
   const state = useClient(client);
-  const online = linkState(state) === "online";
+  // The Android panel is the primary machine's, when several are paired.
+  const online = linkState(forMachine(state, state.machines.find((m) => m.primary)?.id)) === "online";
   const [as, setAs] = useState<AndroidState | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [typing, setTyping] = useState(false);

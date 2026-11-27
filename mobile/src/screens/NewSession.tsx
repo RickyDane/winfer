@@ -4,6 +4,7 @@ import { firstMessages, go, haptic, useClient } from "../hooks";
 import type { ModelOption } from "../protocol";
 import { Icon, ProviderMark, linkState, providerInfo } from "./common";
 import { activeIsServer } from "../pairing";
+import { forMachine } from "../multi";
 import { Composer, Pill, PillIcon } from "./Composer";
 import { EffortIcon, EffortListSheet, ModelListSheet, Sheet, backendOf, effortLabel } from "./Pickers";
 import { Sky } from "./Sky";
@@ -20,8 +21,8 @@ interface ProviderCatalog {
 
 /** Starts an agent session in one of the desktop's workspaces, with optional model, effort, and first message. */
 export function NewSession({ client, workspaceId }: { client: DesktopClient; workspaceId: string | null }) {
-  const state = useClient(client);
-  const workspaces = state.workspaces;
+  const all = useClient(client);
+  const workspaces = all.workspaces;
   const [ws, setWs] = useState<string | null>(workspaceId);
   const [provider, setProvider] = useState<string | null>(null);
   const [model, setModel] = useState<string | null>(null);
@@ -33,32 +34,47 @@ export function NewSession({ client, workspaceId }: { client: DesktopClient; wor
   const [err, setErr] = useState<string | null>(null);
 
   // Until picked: the workspace asked for, else the one open on the desktop; the desktop's default agent.
-  const chosenWs = workspaces.find((w) => w.id === ws) ?? workspaces.find((w) => w.active) ?? workspaces[0] ?? null;
+  // With several machines, an answering machine's workspace first: the primary's open one, any open one, any.
+  const up = (w: (typeof workspaces)[number]) => linkState(forMachine(all, w.machine)) === "online";
+  const isPrimary = (w: (typeof workspaces)[number]) => !w.machine || !!all.machines.find((m) => m.id === w.machine)?.primary;
+  const chosenWs =
+    workspaces.find((w) => w.id === ws) ??
+    workspaces.find((w) => w.active && isPrimary(w) && up(w)) ??
+    workspaces.find((w) => w.active && up(w)) ??
+    workspaces.find(up) ??
+    workspaces.find((w) => w.active && isPrimary(w)) ??
+    workspaces.find((w) => w.active) ??
+    workspaces[0] ??
+    null;
+  // With several machines: the agents, link and models of the workspace's own machine.
+  const machine = chosenWs?.machine;
+  const state = forMachine(all, machine);
   const chosenProvider = state.providers.find((p) => p.id === provider) ?? state.providers.find((p) => p.id === state.defaultProvider) ?? state.providers[0] ?? null;
   const online = linkState(state) === "online";
   const providerId = chosenProvider?.id ?? null;
+  const catalogKey = providerId ? `${machine ?? ""}/${providerId}` : null;
 
   // Fetch available models & effort defaults for the active provider (cached per provider).
   useEffect(() => {
-    if (!providerId || !online || requested.current.has(providerId)) return;
-    requested.current.add(providerId);
-    setCatalogs((c) => ({ ...c, [providerId]: "loading" }));
+    if (!providerId || !catalogKey || !online || requested.current.has(catalogKey)) return;
+    requested.current.add(catalogKey);
+    setCatalogs((c) => ({ ...c, [catalogKey]: "loading" }));
     client
-      .request({ t: "models.get", provider: providerId })
+      .request({ t: "models.get", provider: providerId }, machine)
       .then((r) => {
         const entry: ProviderCatalog =
           r.t === "models"
             ? { models: r.models, defaultModel: r.defaultModel ?? null, defaultEffort: r.defaultEffort ?? null, defaultEfforts: r.defaultEfforts ?? [] }
             : { models: [], defaultModel: null, defaultEffort: null, defaultEfforts: [] };
-        setCatalogs((c) => ({ ...c, [providerId]: entry }));
+        setCatalogs((c) => ({ ...c, [catalogKey]: entry }));
       })
       .catch(() => {
-        requested.current.delete(providerId);
-        setCatalogs((c) => ({ ...c, [providerId]: { models: [], defaultModel: null, defaultEffort: null, defaultEfforts: [] } }));
+        requested.current.delete(catalogKey);
+        setCatalogs((c) => ({ ...c, [catalogKey]: { models: [], defaultModel: null, defaultEffort: null, defaultEfforts: [] } }));
       });
-  }, [client, providerId, online]);
+  }, [client, providerId, catalogKey, machine, online]);
 
-  const rawCatalog = providerId ? catalogs[providerId] : undefined;
+  const rawCatalog = catalogKey ? catalogs[catalogKey] : undefined;
   const loadingModels = rawCatalog === "loading";
   const catalog = rawCatalog && rawCatalog !== "loading" ? rawCatalog : null;
   const models = catalog?.models ?? [];
@@ -119,6 +135,7 @@ export function NewSession({ client, workspaceId }: { client: DesktopClient; wor
         <div className="pane-title">
           <b>New session</b>
           <span className="pane-meta">
+            {chosenWs?.machineName && <span className="meta-item">{chosenWs.machineName}</span>}
             {chosenWs ? <span className="chip-ws">{chosenWs.name}</span> : "Pick a workspace"}
             {chosenProvider && <span className="meta-item">{chosenProvider.name}</span>}
             {models.length > 0 && effectiveModel && <span className="meta-item">· {effectiveModel.name}</span>}
@@ -131,11 +148,12 @@ export function NewSession({ client, workspaceId }: { client: DesktopClient; wor
             <div className="empty">
               <h3>{online ? "No workspaces" : "Desktop not connected"}</h3>
               <p className="sub">{online
-                  ? activeIsServer() ? "Update winferd on the server to start sessions from your phone." : "Update winfer on the desktop to start sessions from your phone."
-                  : `Sessions start once your ${activeIsServer() ? "server" : "desktop"} is back online.`}</p>
+                  ? (state.welcome?.server ?? activeIsServer()) ? "Update winferd on the server to start sessions from your phone." : "Update winfer on the desktop to start sessions from your phone."
+                  : `Sessions start once your ${(state.welcome?.server ?? activeIsServer()) ? "server" : "desktop"} is back online.`}</p>
             </div>
           ) : (
             <Welcome
+              server={state.welcome?.server}
               status={[chosenProvider?.name, effectiveModel?.name, availableEfforts.length > 1 && activeEffort !== "default" ? effortLabel(activeEffort) : null, chosenWs?.name].filter(Boolean).join(" · ")}
               disabled={busy}
               onPick={(prompt) => {
@@ -203,15 +221,16 @@ export function NewSession({ client, workspaceId }: { client: DesktopClient; wor
         <Sheet label="Workspace" title="Workspace" sub="Where the agent works" onClose={() => setSheet(null)}>
           <div className="pick-list scrolls">
             {workspaces.map((w) => (
-              <button key={w.id} className="pick-row" data-on={w.id === chosenWs?.id} onClick={() => (haptic(5), setWs(w.id), setSheet(null))}>
+              <button key={w.id} className="pick-row" data-on={w.id === chosenWs?.id} onClick={() => (haptic(5), w.machine !== machine && (setModel(null), setEffort(null)), setWs(w.id), setSheet(null))}>
                 <span className="pick-icon">
                   <Icon name="folder" size={15} />
                 </span>
                 <span className="pick-body">
                   <b>{w.name}</b>
                   <small>
+                    {w.machineName && `${w.machineName} · `}
                     {sessions(state.panes.filter((p) => p.workspaceId === w.id).length)}
-                    {w.active && !activeIsServer() ? " · open on the desktop" : ""}
+                    {w.active && !(forMachine(all, w.machine).welcome?.server ?? activeIsServer()) ? " · open on the desktop" : ""}
                   </small>
                 </span>
                 {w.id === chosenWs?.id && <Icon name="check" size={16} className="pick-check" />}

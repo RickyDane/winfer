@@ -5,6 +5,7 @@ import { ago, go, haptic, useClient, useTick, vtName } from "../hooks";
 import { isFreeText, sortPanes, type AgentStatus, type Pane, type RequestOption } from "../protocol";
 import { Avatar, ConnNotice, Icon, STATUS_LABEL, linkState, providerInfo } from "./common";
 import { activeIsServer } from "../pairing";
+import { forMachine } from "../multi";
 import { Segmented, SwipeCard, useFlip, usePullToRefresh } from "./widgets";
 
 type Filter = "all" | "needs" | "working" | "done";
@@ -67,7 +68,13 @@ export function Inbox({ client }: { client: DesktopClient }) {
     return c;
   }, [state.panes]);
   const link = linkState(state);
-  const desktop = state.welcome?.desktop ?? client.name;
+  const multi = state.machines.length > 1;
+  const desktop = multi ? "All machines" : (state.welcome?.desktop ?? client.name);
+  // With several machines the bar says how many answer; one that doesn't gets its own notice.
+  const away = state.machines.filter((m) => linkState(forMachine(state, m.id)) !== "online");
+  // A failed machine says why (it won't heal by itself); one that's away or offline comes back on its own.
+  const failed = away.filter((m) => m.error);
+  const gone = away.filter((m) => !m.error && ["away", "offline"].includes(linkState(forMachine(state, m.id))));
   const shown = panes.filter(MATCH[filter]);
   useFlip(list, shown.map((p) => `${p.id}:${p.status}`).join() + filter);
 
@@ -119,6 +126,12 @@ export function Inbox({ client }: { client: DesktopClient }) {
                 {STATUS_LABEL[p.status]}
               </span>
               <span className="sep">·</span>
+              {p.machineName && (
+                <>
+                  <span className="machine">{p.machineName}</span>
+                  <span className="sep">·</span>
+                </>
+              )}
               <span className="ws">{p.workspace}</span>
               {info && (
                 <>
@@ -177,7 +190,7 @@ export function Inbox({ client }: { client: DesktopClient }) {
         <span className="live-dot" data-state={link} aria-hidden />
         <div className="bar-title">
           <b>{desktop}</b>
-          <span>{link === "online" ? "Connected" : link === "away" ? (state.welcome?.server ?? activeIsServer() ? "Server offline" : "Desktop offline") : link === "offline" ? "Offline" : "Connecting…"}</span>
+          <span>{multi && link === "online" ? `${state.machines.length - away.length} of ${state.machines.length} connected` : link === "online" ? "Connected" : link === "away" ? (state.welcome?.server ?? activeIsServer() ? "Server offline" : "Desktop offline") : link === "offline" ? "Offline" : "Connecting…"}</span>
         </div>
         {state.panes.length > 0 && <span className="bar-chip num">{state.panes.length} active</span>}
       </header>
@@ -202,6 +215,29 @@ export function Inbox({ client }: { client: DesktopClient }) {
           />
         </div>
         <ConnNotice state={state} onRetry={() => client.reconnect()} />
+        {multi &&
+          link === "online" &&
+          failed.map((m) => (
+            <div key={m.id} className="notice" data-tone="danger" role="status">
+              <Icon name="x" />
+              <p>
+                {m.name}: {m.error}
+              </p>
+              {m.socket === "closed" && (
+                <button className="btn sm" onClick={() => client.reconnect()}>
+                  Retry
+                </button>
+              )}
+            </div>
+          ))}
+        {multi && link === "online" && gone.length > 0 && (
+          <div className="notice" role="status">
+            <Icon name="laptop" />
+            <p>
+              {gone.map((m) => m.name).join(", ")} {gone.length === 1 ? "isn't" : "aren't"} connected: {gone.length === 1 ? "its" : "their"} agents show once {gone.length === 1 ? "it's" : "they're"} back.
+            </p>
+          </div>
+        )}
         <div className="list" ref={list}>
           {filter === "all"
             ? GROUPS.map((g) => {

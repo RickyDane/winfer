@@ -1,4 +1,3 @@
-import { markActiveServer } from "./pairing";
 import { applyTheme } from "./theme";
 import type { DesktopMsg, Message, Pane, PhoneMsg, Provider, ThreadSource, Workspace } from "./protocol";
 
@@ -25,6 +24,22 @@ export interface ClientState {
   showBgNotes: boolean;
   threads: Record<string, Thread>;
   error: string | null;
+  /** With several paired machines: each one's own link and agents (empty with one). */
+  machines: Machine[];
+}
+
+/** One paired machine, as merged into the phone's combined view. */
+export interface Machine {
+  id: string;
+  name: string;
+  /** The one used for notifications, usage, and the theme. */
+  primary: boolean;
+  socket: ClientState["socket"];
+  desktopOnline: boolean | null;
+  welcome: ClientState["welcome"];
+  providers: Provider[];
+  defaultProvider: string | null;
+  error: string | null;
 }
 
 export interface DesktopClient {
@@ -32,7 +47,8 @@ export interface DesktopClient {
   getState(): ClientState;
   subscribe(fn: () => void): () => void;
   /** Send a request and wait for the reply carrying the same id. */
-  request(msg: PhoneMsg): Promise<DesktopMsg>;
+  /** `via`: the machine to ask, for requests that don't name a pane or workspace. */
+  request(msg: PhoneMsg, via?: string): Promise<DesktopMsg>;
   /** Send without waiting for (or getting) a reply: input events, frame acks. */
   fire(msg: PhoneMsg): void;
   /** Every message from the desktop as it comes (streams: terminal output, panel frames). */
@@ -41,6 +57,8 @@ export interface DesktopClient {
   sendMessage(paneId: string, text: string): Promise<DesktopMsg>;
   reconnect(): void;
   close(): void;
+  /** A bare pane id (from a notification) in this client's terms, when it names them differently. */
+  canonicalId?(id: string): string;
 }
 
 export const initialState = (): ClientState => ({
@@ -55,6 +73,7 @@ export const initialState = (): ClientState => ({
   showBgNotes: true,
   threads: {},
   error: null,
+  machines: [],
 });
 
 /** Shared state + reducer for real and mock clients. */
@@ -65,6 +84,8 @@ export abstract class BaseClient implements DesktopClient {
   private listeners = new Set<() => void>();
   private streams = new Set<(msg: DesktopMsg) => void>();
   abstract readonly name: string;
+  /** Follow the desktop's theme (off for all but the primary of several machines). */
+  themed = true;
   abstract request(msg: PhoneMsg): Promise<DesktopMsg>;
   abstract fire(msg: PhoneMsg): void;
 
@@ -76,6 +97,9 @@ export abstract class BaseClient implements DesktopClient {
   abstract close(): void;
 
   getState = () => this.state;
+
+  /** The welcome said whether this is a server. */
+  protected onServer(_server: boolean) {}
 
   subscribe = (fn: () => void) => {
     this.listeners.add(fn);
@@ -112,10 +136,10 @@ export abstract class BaseClient implements DesktopClient {
     switch (msg.t) {
       case "welcome":
         this.set({ welcome: { desktop: msg.desktop, version: msg.version, vapidPublicKey: msg.vapidPublicKey, server: msg.server }, error: null });
-        if (msg.server !== undefined) markActiveServer(msg.server);
+        if (msg.server !== undefined) this.onServer(msg.server);
         break;
       case "panes":
-        if (msg.theme) applyTheme(msg.theme);
+        if (msg.theme && this.themed) applyTheme(msg.theme);
         this.set({
           panes: msg.panes,
           ...(msg.workspaces && { workspaces: msg.workspaces }),

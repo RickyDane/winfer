@@ -3,7 +3,8 @@ import { b64uDecode } from "../b64";
 import type { DesktopClient } from "../client";
 import { go, haptic, isIOS, isStandalone, useClient } from "../hooks";
 import { activeIsServer, activePairing, loadPairings, removePairing, setActive } from "../pairing";
-import { Icon } from "./common";
+import { Icon, linkState } from "./common";
+import { forMachine } from "../multi";
 import { setCompactToolsOverride, useCompactTools } from "./compactTools";
 import { setShowBgNotesOverride, useShowBgNotes } from "./bgNotes";
 
@@ -194,10 +195,12 @@ export function Settings({ client, mock, onChanged }: { client: DesktopClient; m
           </section>
 
           <section className="group">
-            <h2>Desktops</h2>
+            <h2>{pairings.length > 1 ? "Machines" : "Desktops"}</h2>
             <div className="group-card">
               {pairings.map((p) => {
                 const isActive = p.deviceId === active?.deviceId;
+                const m = state.machines.find((x) => x.id === p.deviceId);
+                const live = m ? linkState(forMachine(state, m.id)) : null;
                 return (
                   <button
                     key={p.deviceId}
@@ -213,8 +216,11 @@ export function Settings({ client, mock, onChanged }: { client: DesktopClient; m
                       <Icon name="laptop" />
                     </span>
                     <span className="row-main">
-                      <b>{isActive && state.welcome ? state.welcome.desktop : p.name}</b>
-                      <span>Paired {new Date(p.createdAt).toLocaleDateString()}</span>
+                      <b>{m?.name ?? (isActive && state.welcome ? state.welcome.desktop : p.name)}</b>
+                      <span>
+                        {live && `${live === "online" ? "Connected" : live === "away" ? "Offline" : live === "offline" ? "Not connected" : "Connecting…"} · `}
+                        {m && isActive ? "Notifications & usage" : `Paired ${new Date(p.createdAt).toLocaleDateString()}`}
+                      </span>
                     </span>
                     {isActive && <Icon name="check" size={18} className="check" />}
                   </button>
@@ -225,11 +231,12 @@ export function Settings({ client, mock, onChanged }: { client: DesktopClient; m
                   <Icon name="plus" />
                 </span>
                 <span className="row-main">
-                  <b>Pair another desktop</b>
+                  <b>{pairings.length > 1 ? "Pair another machine" : "Pair another desktop"}</b>
                 </span>
                 <Icon name="right" size={16} className="chev" />
               </button>
             </div>
+            {pairings.length > 1 && <p className="group-foot">Agents from every machine show together. Tap one to get its notifications and usage here.</p>}
             {mock && <p className="group-foot">Mock mode: using a fake desktop.</p>}
           </section>
 

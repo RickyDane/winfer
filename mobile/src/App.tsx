@@ -1,9 +1,10 @@
-import { Suspense, lazy, useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import type { DesktopClient } from "./client";
 import { RelayClient } from "./connection";
-import { go, useRoute } from "./hooks";
+import { go, useClient, useRoute } from "./hooks";
 import { MockClient } from "./mock";
-import { activePairing, addPairing, parsePairPayload } from "./pairing";
+import { MultiClient } from "./multi";
+import { activePairing, addPairing, loadPairings, parsePairPayload } from "./pairing";
 import { Inbox } from "./screens/Inbox";
 import { NewSession } from "./screens/NewSession";
 import { Island } from "./screens/Island";
@@ -20,6 +21,30 @@ import { Panel } from "./screens/Panel";
 const Term = lazy(() => import("./screens/Term").then((m) => ({ default: m.Term })));
 
 const MOCK = new URLSearchParams(location.search).has("mock");
+/** `?mock=2`: two fake machines, to try the combined view. */
+const MOCK_MACHINES = Number(new URLSearchParams(location.search).get("mock")) || 1;
+
+/** Every paired machine at once: one relay connection each, merged into one view. */
+function makeClient(): DesktopClient | null {
+  if (MOCK) {
+    if (MOCK_MACHINES < 2) return new MockClient();
+    const members = Array.from({ length: MOCK_MACHINES }, (_, i) => ({ id: `mock${i}`, name: i ? `Mock server ${i}` : "Mock desktop", client: new MockClient(i ? `Mock server ${i}` : "Mock desktop") }));
+    members.forEach((m, i) => (m.client.themed = i === 0));
+    return new MultiClient(members, "mock0");
+  }
+  const primary = activePairing();
+  if (!primary) return null;
+  const all = loadPairings();
+  if (all.length < 2) return new RelayClient(primary);
+  return new MultiClient(
+    all.map((p) => {
+      const client = new RelayClient(p);
+      client.themed = p.deviceId === primary.deviceId;
+      return { id: p.deviceId, name: p.name, client };
+    }),
+    primary.deviceId,
+  );
+}
 
 /** Consume a `#p=…` pair link: store it, then strip the secret from the URL. */
 function consumePairLink(): string | null {
@@ -51,13 +76,14 @@ export function App() {
     return () => window.removeEventListener("hashchange", on);
   }, []);
 
-  const pairing = MOCK ? null : activePairing();
-  const client = useMemo<DesktopClient | null>(
-    () => (MOCK ? new MockClient() : pairing ? new RelayClient(pairing) : null),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [pairing?.deviceId, version],
-  );
-  useEffect(() => () => client?.close(), [client]);
+  // Rebuilt when pairings change (pair, unpair, another primary): `version` bumps then.
+  const client = useMemo<DesktopClient | null>(makeClient, [version]);
+  // Close a client only once it's been replaced: StrictMode's rehearsal cleanup must not close the live one.
+  const live = useRef(client);
+  useEffect(() => {
+    live.current = client;
+    return () => void setTimeout(() => live.current !== client && client?.close());
+  }, [client]);
 
   const changed = () => setVersion((v) => v + 1);
 
@@ -73,9 +99,16 @@ export function App() {
         }}
       />
     );
+  return <Screens client={client} mock={MOCK} onChanged={changed} />;
+}
+
+function Screens({ client, mock, onChanged }: { client: DesktopClient; mock: boolean; onChanged: () => void }) {
+  const route = useRoute();
+  useClient(client); // a notification's bare pane id resolves once its machine lists it
+  const paneId = route.name === "pane" ? (client.canonicalId?.(route.id) ?? route.id) : null;
   const screen =
     route.name === "settings" ? (
-      <Settings client={client} mock={MOCK} onChanged={changed} />
+      <Settings client={client} mock={mock} onChanged={onChanged} />
     ) : route.name === "usage" ? (
       <Usage client={client} />
     ) : route.name === "panel" ? (
@@ -92,8 +125,8 @@ export function App() {
       <Files key={route.workspaceId} client={client} workspaceId={route.workspaceId} />
     ) : route.name === "new" ? (
       <NewSession client={client} workspaceId={route.workspaceId} />
-    ) : route.name === "pane" ? (
-      <Thread key={route.id} client={client} paneId={route.id} />
+    ) : paneId ? (
+      <Thread key={paneId} client={client} paneId={paneId} />
     ) : (
       <Inbox client={client} />
     );
@@ -101,7 +134,7 @@ export function App() {
     <>
       {screen}
       {(route.name === "inbox" || route.name === "settings" || route.name === "panel") && <TabBar client={client} active={route.name} />}
-      <Island client={client} openPaneId={route.name === "pane" ? route.id : null} />
+      <Island client={client} openPaneId={paneId} />
     </>
   );
 }

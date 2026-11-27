@@ -205,6 +205,7 @@ textarea, input, .md, .ask-code, .ask-q p, .turn-user p, .screen-text, .tool-bod
 .card-meta { display: flex; align-items: center; gap: 5px; margin-top: 2px; font-size: 12px; color: var(--subtle); white-space: nowrap; min-width: 0; }
 .card-meta .ws { overflow: hidden; text-overflow: ellipsis; min-width: 0; padding: 0 6px; border-radius: 5px; background: color-mix(in srgb, var(--fg) 7%, transparent); color: var(--muted); }
 .card-meta .prov { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.card-meta .machine { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; max-width: 32%; flex: 0 3 auto; }
 .status-text { flex: none; display: inline-flex; align-items: center; gap: 5px; font-weight: 500; }
 .status-text[data-status="needs-input"] { color: var(--warn); }
 .status-text[data-status="working"] { color: var(--accent); }

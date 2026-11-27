@@ -1,6 +1,6 @@
 import { BaseClient } from "./client";
 import { deriveKeys, open, seal, type Keys } from "./crypto";
-import { relayOrigin, type Pairing } from "./pairing";
+import { markServer, relayOrigin, type Pairing } from "./pairing";
 import type { DesktopMsg, PhoneMsg, Presence } from "./protocol";
 
 const REQUEST_TIMEOUT = 20_000;
@@ -40,6 +40,10 @@ export class RelayClient extends BaseClient {
     this.resync = setInterval(() => {
       if (document.visibilityState === "visible" && this.state.socket === "open" && this.state.desktopOnline) this.request({ t: "panes.get" }).catch(() => {});
     }, RESYNC_EVERY);
+  }
+
+  protected onServer(server: boolean) {
+    markServer(this.pairing.deviceId, server);
   }
 
   private onVisible = () => {

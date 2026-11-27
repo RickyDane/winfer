@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import type { DesktopClient } from "../client";
 import { haptic, useClient } from "../hooks";
+import { forMachine } from "../multi";
 import type { BrowserOp, BrowserState, BrowserTab } from "../protocol";
 import { Icon, linkState } from "./common";
 import { LiveView, type Unit } from "./LiveView";
@@ -32,8 +33,9 @@ const host = (url: string) => {
 
 export function Browser({ client, workspaceId }: { client: DesktopClient; workspaceId: string }) {
   const state = useClient(client);
-  const online = linkState(state) === "online";
   const ws = state.workspaces.find((w) => w.id === workspaceId);
+  // The workspace's own machine, when several are paired.
+  const online = linkState(forMachine(state, ws?.machine)) === "online";
   const [bs, setBs] = useState<BrowserState | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [picked, setPicked] = useState<string | null>(null);

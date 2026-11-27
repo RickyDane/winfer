@@ -46,9 +46,8 @@ export function addPairing(p: Pairing) {
   setActive(p.deviceId);
 }
 
-/** Remembers whether the active pairing is a server, for when it can't be asked (offline). */
-export function markActiveServer(server: boolean) {
-  const id = activeId();
+/** Remembers whether a pairing is a server, for when it can't be asked (offline). */
+export function markServer(id: string, server: boolean) {
   const list = loadPairings();
   if (!list.some((p) => p.deviceId === id && !!p.server !== server)) return;
   save(list.map((p) => (p.deviceId === id ? { ...p, server } : p)));

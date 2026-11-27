@@ -203,7 +203,7 @@ const THREADS: Record<string, Message[]> = {
 };
 
 export class MockClient extends BaseClient {
-  readonly name = "Mock desktop";
+  readonly name: string;
   private panes = PANES.map((p) => ({ ...p }));
   private threads: Record<string, Message[]> = structuredClone(THREADS);
   private n = 100;
@@ -213,8 +213,9 @@ export class MockClient extends BaseClient {
     this.panel.handle(msg);
   }
 
-  constructor() {
+  constructor(name = "Mock desktop") {
     super();
+    this.name = name;
     setTimeout(() => {
       this.set({ socket: "open", desktopOnline: true });
       this.apply({ t: "welcome", desktop: this.name, version: "mock", vapidPublicKey: "" });

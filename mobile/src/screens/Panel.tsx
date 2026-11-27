@@ -3,6 +3,7 @@
 import { useState } from "react";
 import type { DesktopClient } from "../client";
 import { go, haptic, useClient } from "../hooks";
+import { forMachine } from "../multi";
 import type { PanelInfo } from "../protocol";
 import { ConnNotice, Icon, ProviderMark, linkState, type IconName } from "./common";
 import { call, savedWorkspace, saveWorkspace, usePoll } from "./panelKit";
@@ -15,10 +16,12 @@ const MODULES: { id: "browser" | "android" | "terminal" | "files"; label: string
 ];
 
 export function Panel({ client }: { client: DesktopClient }) {
-  const state = useClient(client);
-  const workspaces = state.workspaces;
+  const all = useClient(client);
+  const workspaces = all.workspaces;
   const [picked, setPicked] = useState(savedWorkspace);
   const ws = workspaces.find((w) => w.id === picked) ?? workspaces.find((w) => w.active) ?? workspaces[0];
+  // With several machines: the picked workspace's machine's link and kind.
+  const state = forMachine(all, ws?.machine);
   const [info, setInfo] = useState<PanelInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const online = linkState(state) === "online";
@@ -45,7 +48,7 @@ export function Panel({ client }: { client: DesktopClient }) {
     else if (id === "terminal") go(`/panel/terminal/${w}/${encodeURIComponent(`side-terminal-${ws.id}`)}`);
     else go(`/panel/${id}/${w}`);
   };
-  const terminals = info?.workspaceId === ws?.id ? info.terminals : [];
+  const terminals = info && info.workspaceId === ws?.id ? info.terminals : [];
 
   return (
     <div className="screen">
@@ -69,7 +72,7 @@ export function Panel({ client }: { client: DesktopClient }) {
                   saveWorkspace(w.id);
                 }}
               >
-                {w.name}
+                {w.machineName ? `${w.name} · ${w.machineName}` : w.name}
               </button>
             ))}
           </div>

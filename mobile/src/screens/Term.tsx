@@ -6,6 +6,7 @@ import "@xterm/xterm/css/xterm.css";
 import { useEffect, useRef, useState } from "react";
 import type { DesktopClient } from "../client";
 import { haptic, useClient } from "../hooks";
+import { forMachine } from "../multi";
 import type { DesktopMsg, StreamMsg } from "../protocol";
 import { linkState } from "./common";
 import { BarButton, PanelBar, fromB64, textToB64, withCtrl } from "./panelKit";
@@ -34,8 +35,9 @@ function cssVar(name: string, fallback: string) {
 
 export function Term({ client, workspaceId, paneId }: { client: DesktopClient; workspaceId: string; paneId: string }) {
   const state = useClient(client);
-  const online = linkState(state) === "online";
   const ws = state.workspaces.find((w) => w.id === workspaceId);
+  // The workspace's own machine, when several are paired.
+  const online = linkState(forMachine(state, ws?.machine)) === "online";
   const pane = state.panes.find((p) => p.id === paneId);
   const host = useRef<HTMLDivElement>(null);
   const term = useRef<Terminal | null>(null);

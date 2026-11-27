@@ -4,6 +4,7 @@ import { ago, firstMessages, go, haptic, useClient, useTick, vtName } from "../h
 import { isFreeText, type Message, type Pane, type RequestOption } from "../protocol";
 import { Composer, Pill, PillIcon } from "./Composer";
 import { activeIsServer } from "../pairing";
+import { forMachine } from "../multi";
 import { Avatar, ConnNotice, Icon, ProviderMark, STATUS_LABEL, providerInfo, toolIcon, toolText, toolTint, type IconName } from "./common";
 import { VizReport } from "./Viz";
 import { buildDisplayRows, describeStep, useCompactTools, workGroupSummary } from "./compactTools";
@@ -245,7 +246,7 @@ export const SUGGESTIONS: { icon: IconName; title: string; prompt: string }[] = 
 ];
 
 /** A fresh session: "What should we build?", who answers and where, and four ways to start. */
-export function Welcome({ status, where, onPick, disabled }: { status: string; where?: string | null; onPick?: (prompt: string) => void; disabled?: boolean }) {
+export function Welcome({ status, where, onPick, disabled, server }: { status: string; where?: string | null; onPick?: (prompt: string) => void; disabled?: boolean; server?: boolean }) {
   return (
     <div className="welcome">
       <div className="welcome-head">
@@ -265,7 +266,7 @@ export function Welcome({ status, where, onPick, disabled }: { status: string; w
           ))}
         </div>
       )}
-      <p className="welcome-hint">Type a message below, and it's sent to the agent on your {activeIsServer() ? "server" : "desktop"}</p>
+      <p className="welcome-hint">Type a message below, and it's sent to the agent on your {(server ?? activeIsServer()) ? "server" : "desktop"}</p>
     </div>
   );
 }
@@ -280,6 +281,8 @@ export function Thread({ client, paneId }: { client: DesktopClient; paneId: stri
   const state = useClient(client);
   const pane = state.panes.find((p) => p.id === paneId);
   const thread = state.threads[paneId];
+  // This pane's own machine's link, when several are paired.
+  const link = forMachine(state, pane?.machine);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -294,7 +297,7 @@ export function Thread({ client, paneId }: { client: DesktopClient; paneId: stri
   const input = useRef<HTMLTextAreaElement>(null);
   const stick = useRef(true);
   const seen = useRef<Set<string> | null>(null);
-  const ready = state.socket === "open" && state.desktopOnline !== false;
+  const ready = link.socket === "open" && link.desktopOnline !== false;
 
   const raw = thread?.messages ?? [];
   // The desktop ends the thread with a marker while the agent is reasoning.
@@ -476,6 +479,7 @@ export function Thread({ client, paneId }: { client: DesktopClient; paneId: stri
           <span className="pane-meta">
             {pane ? (
               <>
+                {pane.machineName && <span className="meta-item">{pane.machineName}</span>}
                 <span className="chip-ws">{pane.workspace}</span>
                 {cfg?.branch ? (
                   <span className="meta-item">
@@ -512,7 +516,7 @@ export function Thread({ client, paneId }: { client: DesktopClient; paneId: stri
         }}
       >
         <div className="transcript">
-          <ConnNotice state={state} onRetry={() => client.reconnect()} />
+          <ConnNotice state={link} onRetry={() => client.reconnect()} />
           {first && (
             <div className="turn-user">
               <p>{first}</p>
@@ -528,7 +532,7 @@ export function Thread({ client, paneId }: { client: DesktopClient; paneId: stri
               <Markdown text={pane.reply} />
             </div>
           )}
-          {empty && <Welcome status={welcomeStatus} where={where} disabled={!ready || !!busy} onPick={pane?.request ? undefined : sendPrompt} />}
+          {empty && <Welcome status={welcomeStatus} where={where} server={link.welcome?.server} disabled={!ready || !!busy} onPick={pane?.request ? undefined : sendPrompt} />}
           {displayRows.map((b, i) => {
             if (b.kind === "work-group")
               return (

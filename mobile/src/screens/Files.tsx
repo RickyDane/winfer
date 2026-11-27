@@ -4,6 +4,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { DesktopClient } from "../client";
 import { haptic, useClient } from "../hooks";
+import { forMachine } from "../multi";
 import type { FileData, FileEntry, FilesOp } from "../protocol";
 import { Icon, linkState } from "./common";
 import { Markdown } from "./Markdown";
@@ -28,8 +29,9 @@ const size = (n: number) => (n < 1024 ? `${n} B` : n < 1 << 20 ? `${(n / 1024).t
 
 export function Files({ client, workspaceId }: { client: DesktopClient; workspaceId: string }) {
   const state = useClient(client);
-  const online = linkState(state) === "online";
   const ws = state.workspaces.find((w) => w.id === workspaceId);
+  // The workspace's own machine, when several are paired.
+  const online = linkState(forMachine(state, ws?.machine)) === "online";
   const [view, setView] = useState<"open" | "browse">("open");
   const [docs, setDocs] = useState<Docs | null>(null);
   const [listing, setListing] = useState<Listing | null>(null);

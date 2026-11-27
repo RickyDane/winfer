@@ -56,6 +56,9 @@ export interface Pane {
   workspaceId?: string;
   /** Put aside in the desktop's archive (still running). */
   archived?: boolean;
+  /** Phone-side, with several paired machines: whose pane this is. */
+  machine?: string;
+  machineName?: string;
   provider: string | null;
   status: AgentStatus;
   message: string | null;
@@ -174,6 +177,9 @@ export interface Workspace {
   name: string;
   /** Open on the desktop right now. */
   active: boolean;
+  /** Phone-side, with several paired machines: whose workspace this is. */
+  machine?: string;
+  machineName?: string;
 }
 
 /** An agent installed on the desktop. */
