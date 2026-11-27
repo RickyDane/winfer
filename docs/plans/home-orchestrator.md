@@ -1,6 +1,17 @@
 # Home: a global orchestrator above all workspaces (native-gpui)
 
-**Status: brainstorm.** Leave comments inline as `<!-- @user: … -->`.
+**Status: built** (native only, branch `home-orchestrator`). Main code: `native/crates/winfer-app/src/ui/home.rs`
+(engine, tasks, tools) and `ui/home_view.rs` (the view). Roles: `assets/conductor-role.txt`, `assets/task-role.txt`.
+Differences from the design below:
+- Shortcut is ⌘⇧M (⌘0 resets the text size). Also in the palette, and first in the sidebar and rail.
+- "Chips when unsure" are the conductor's `ask_user` picker in Home's chat (typed requests only).
+- Inline cards are clickable links in its replies: `winfer://task/3`, `winfer://pane/api/2`,
+  `winfer://workspace/api`.
+- Remote task orchestrators are shown on the server as panes titled "Task N · goal" (auto-approve and
+  the task role come from that title), not hidden. Home finds them by that title in the mirror.
+- The phone shows Home pinned in its own section on the Agents page, outside the counts.
+- `usage_status` from Home's orchestrators lists every account.
+- Debug aid: `WINFER_NATIVE_ORCHESTRATE="…"` still hands a request at launch (now to the conductor).
 
 Goal: one place you can open and just say what you want ("fix the flaky relay test", "what are my
 agents doing?", "merge everything that passes") without picking a workspace or opening a winfer
