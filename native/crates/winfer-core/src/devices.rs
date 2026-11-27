@@ -939,4 +939,43 @@ mod tests {
         assert_eq!(png_size(&png), Some((1080, 2400)));
         assert_eq!(png_size(b"nope"), None);
     }
+
+    /// The app's path: attach a booted simulator, drive it with `input` calls, watch frames.
+    #[test]
+    #[ignore]
+    #[cfg(target_os = "macos")]
+    fn live_ios_attach_and_input() {
+        let udid = ios_sim::status()["devices"].as_array().into_iter().flatten().find(|d| d["booted"] == true).and_then(|d| d["udid"].as_str()).expect("no booted iOS simulator").to_string();
+        let frames = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let f2 = frames.clone();
+        let out: Out = Arc::new(move |stream, m| {
+            if let Msg::Frame { .. } = m {
+                f2.fetch_add(1, Ordering::SeqCst);
+                let _ = call("test", &json!({"op": "frameDone", "streamId": stream}), Arc::new(|_, _| {}), Link::Local);
+            }
+        });
+        let info = call("test", &json!({"op": "attach", "streamId": "s1", "platform": "ios", "device": udid, "name": "iPhone 16 Pro"}), out, Link::Local).expect("attach");
+        println!("attach: {info}");
+        assert_eq!(info["input"], true);
+        std::thread::sleep(Duration::from_millis(800));
+        let before = frames.load(Ordering::SeqCst);
+        let input = |v: Value| call("test", &v, Arc::new(|_, _| {}), Link::Local).unwrap();
+        input(json!({"op": "input", "streamId": "s1", "kind": "button", "button": "home"}));
+        std::thread::sleep(Duration::from_millis(800));
+        let shot1 = ios_sim::screenshot(&udid).unwrap();
+        for i in 0..=20 {
+            let x = 0.85 - 0.7 * (i as f32 / 20.0);
+            let action = if i == 0 { "down" } else if i == 20 { "up" } else { "move" };
+            input(json!({"op": "input", "streamId": "s1", "kind": "touch", "action": action, "x": x, "y": 0.5}));
+            std::thread::sleep(Duration::from_millis(16));
+        }
+        std::thread::sleep(Duration::from_millis(1200));
+        let shot2 = ios_sim::screenshot(&udid).unwrap();
+        let after = frames.load(Ordering::SeqCst);
+        println!("frames before input {before}, after {after}; screen changed: {}", shot1 != shot2);
+        assert!(after > before + 10, "no frames after input");
+        assert_ne!(shot1, shot2, "swipe didn't change the screen");
+        input(json!({"op": "input", "streamId": "s1", "kind": "button", "button": "home"}));
+        let _ = call("test", &json!({"op": "detach", "streamId": "s1"}), Arc::new(|_, _| {}), Link::Local);
+    }
 }
