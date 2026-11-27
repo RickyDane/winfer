@@ -10,7 +10,7 @@
 //! - fork: a task orchestrator here plans, runs and checks it in its workspace;
 //! - remote: a task orchestrator on the paired machine the workspace is on.
 
-use super::connect_ui::Mirror;
+use super::connect_ui::{Mirror, RemotePane};
 use super::voice_tools;
 use super::*;
 use crate::code::protocol::{Cmd, Decision};
@@ -128,6 +128,8 @@ pub struct HomeTask {
     pub merged: Vec<String>,
     /// A remote task's orchestrator: its pane id on that machine.
     pub remote_pane: Option<String>,
+    /// Panes there already titled like it when it was asked for: an earlier task of its number.
+    pub earlier_panes: Vec<String>,
     pub summary: String,
     /// A fork's winfer code session, to resume it after a restart.
     pub session: Option<String>,
@@ -145,6 +147,15 @@ pub struct HomeTask {
 impl HomeTask {
     pub fn title(&self) -> String {
         format!("Task {}", self.number)
+    }
+
+    /// Whether a pane on a remote task's machine is its orchestrator.
+    pub fn orchestrated_by(&self, pane: &RemotePane) -> bool {
+        match &self.remote_pane {
+            Some(id) => pane.id == *id,
+            // Not seen yet: found by its title.
+            None => pane.title.starts_with(&format!("{} ·", self.title())) && !self.earlier_panes.contains(&pane.id),
+        }
     }
 }
 
@@ -185,13 +196,7 @@ pub fn remote_pane_open(t: &HomeTask, mirror: Option<&Mirror>, starting: bool) -
         return false;
     }
     let Some(mirror) = mirror else { return true };
-    match &t.remote_pane {
-        Some(id) => mirror.panes.iter().any(|p| p.id == *id),
-        None => {
-            let title = format!("{} ·", t.title());
-            starting || mirror.panes.iter().any(|p| p.title.starts_with(&title))
-        }
-    }
+    (starting && t.remote_pane.is_none()) || mirror.panes.iter().any(|p| t.orchestrated_by(p))
 }
 
 /// The tasks Home's panel lists (and the phones): open ones first (newest first), then the done
@@ -203,12 +208,43 @@ pub fn listed_tasks(tasks: &[HomeTask]) -> Vec<&HomeTask> {
     list
 }
 
-/// Finds a task by "3", "Task 3", "t3" or its id.
+/// The lowest number no open task has.
+pub fn free_number(tasks: &[HomeTask]) -> u32 {
+    let used: HashSet<u32> = tasks.iter().filter(|t| t.stage.open()).map(|t| t.number).collect();
+    let mut n = 1;
+    while used.contains(&n) {
+        n += 1;
+    }
+    n
+}
+
+/// Numbers are reused, so a task's id carries more than its number.
+fn new_task_id(number: u32) -> String {
+    crate::model::new_id(&format!("t{number}"))
+}
+
+/// A done task about to be taken up again: what was merged before doesn't finish it, and it gets
+/// a free number if an open task has taken its own.
+fn reopen(tasks: &mut [HomeTask], id: &str) {
+    let free = free_number(tasks);
+    let Some(i) = tasks.iter().position(|t| t.id == id && !t.stage.open()) else { return };
+    let number = tasks[i].number;
+    if tasks.iter().any(|t| t.stage.open() && t.number == number) {
+        tasks[i].number = free;
+    }
+    tasks[i].merged.clear();
+}
+
+/// Finds a task by "3", "Task 3", "t3" or its id. By number, the open one wins over done ones
+/// that had it before (else the latest of those).
 pub fn find_task<'a>(tasks: &'a [HomeTask], key: &Value) -> Option<&'a HomeTask> {
     let text = key.as_u64().map(|n| n.to_string()).or_else(|| key.as_str().map(str::to_string))?;
     let t = text.trim().to_lowercase();
     let digits = t.trim_start_matches("task").trim_start_matches('t').trim();
-    tasks.iter().find(|x| x.id == t || digits.parse::<u32>().is_ok_and(|n| n == x.number))
+    match digits.parse::<u32>() {
+        Ok(n) => tasks.iter().filter(|x| x.number == n).max_by_key(|x| (x.stage.open(), x.updated)),
+        Err(_) => tasks.iter().find(|x| x.id == t),
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -547,11 +583,6 @@ impl Root {
         self.mobile_home_status(cx);
     }
 
-    fn next_task_number(&self, cx: &App) -> u32 {
-        let saved = self.state.read(cx).rest.get("home").and_then(|h| h["nextTask"].as_u64()).unwrap_or(1) as u32;
-        saved.max(self.home.tasks.iter().map(|t| t.number + 1).max().unwrap_or(1))
-    }
-
     pub(super) fn task(&self, id: &str) -> Option<&HomeTask> {
         self.home.tasks.iter().find(|t| t.id == id)
     }
@@ -562,13 +593,12 @@ impl Root {
 
     /// Changes a task's stage and summary; true when something changed.
     pub(super) fn set_task(&mut self, id: &str, stage: Option<Stage>, summary: Option<&str>, cx: &mut Context<Self>) -> bool {
+        if stage.is_some_and(Stage::open) {
+            reopen(&mut self.home.tasks, id);
+        }
         let Some(t) = self.task_mut(id) else { return false };
         let mut changed = false;
         if let Some(stage) = stage.filter(|s| *s != t.stage) {
-            // Taken up again: what was merged before doesn't finish it.
-            if !t.stage.open() && stage.open() {
-                t.merged.clear();
-            }
             t.stage = stage;
             changed = true;
         }
@@ -1055,11 +1085,7 @@ impl Root {
         for task in remote {
             let Some(peer) = task.machine.clone() else { continue };
             let Some(mirror) = self.connect.mirrors.get(&peer) else { continue };
-            let title = format!("{} ·", task.title());
-            let found = match &task.remote_pane {
-                Some(id) => mirror.panes.iter().find(|p| p.id == *id).cloned(),
-                None => mirror.panes.iter().find(|p| p.title.starts_with(&title)).cloned(),
-            };
+            let found = mirror.panes.iter().find(|p| task.orchestrated_by(p)).cloned();
             let Some(pane) = found else {
                 // Asked to start a while ago and never showed up.
                 if let Some(at) = self.home.pending_remote.get(&task.id)
@@ -1404,19 +1430,18 @@ impl Root {
 
     /// A task's orchestrator started an agent for it.
     pub(super) fn task_gets_pane(&mut self, task_id: &str, pane_id: &str, cx: &mut Context<Self>) {
-        let Some(t) = self.task_mut(task_id) else { return };
-        if !t.panes.iter().any(|p| p == pane_id) {
-            t.panes.push(pane_id.to_string());
-            t.updated = now_secs();
-            // A new agent for a done task: it's being worked on again.
-            if !t.stage.open() {
-                t.merged.clear();
-            }
-            if t.stage == Stage::Planning || !t.stage.open() {
-                t.stage = Stage::Running;
-            }
-            self.save_home(cx);
+        if self.task(task_id).is_none_or(|t| t.panes.iter().any(|p| p == pane_id)) {
+            return;
         }
+        // A new agent for a done task: it's being worked on again.
+        reopen(&mut self.home.tasks, task_id);
+        let Some(t) = self.task_mut(task_id) else { return };
+        t.panes.push(pane_id.to_string());
+        t.updated = now_secs();
+        if t.stage == Stage::Planning || !t.stage.open() {
+            t.stage = Stage::Running;
+        }
+        self.save_home(cx);
     }
 
     /// list_workspaces: every workspace here and on the paired machines, with their agents.
@@ -1649,7 +1674,7 @@ impl Root {
         let goal = a["goal"].as_str().map(str::trim).filter(|g| !g.is_empty()).ok_or("goal is empty.")?.to_string();
         let target = a["workspace"].as_str().map(str::trim).filter(|w| !w.is_empty()).ok_or("Which workspace? list_workspaces lists them.")?;
         let prompt = a["prompt"].as_str().map(str::trim).unwrap_or_default().to_string();
-        let number = self.next_task_number(cx);
+        let number = free_number(&self.home.tasks);
         // The agent: one the user asked for in this request, else Settings → Home's.
         let agent = a["provider"].as_str().map(str::trim).filter(|p| !p.is_empty()).map(str::to_string).or_else(|| home_settings(self.state.read(cx)).task_agent);
         let text = |k: &str| a[k].as_str().map(str::trim).filter(|v| !v.is_empty() && *v != "default").map(str::to_string);
@@ -1659,7 +1684,7 @@ impl Root {
         {
             self.check_model(m, effort.as_deref(), cx)?;
         }
-        let mut task = HomeTask { id: format!("t{number}"), number, goal: goal.clone(), agent: agent.clone(), model: model.clone(), effort: effort.clone(), model_note: text("reason").unwrap_or_default(), created: now_secs(), updated: now_secs(), ..Default::default() };
+        let mut task = HomeTask { id: new_task_id(number), number, goal: goal.clone(), agent: agent.clone(), model: model.clone(), effort: effort.clone(), model_note: text("reason").unwrap_or_default(), created: now_secs(), updated: now_secs(), ..Default::default() };
         let place = self.find_workspace(target, cx)?;
         let reply = match place {
             Place::Local(ws_id, name) => {
@@ -1692,6 +1717,8 @@ impl Root {
                 task.workspace = format!("{machine}/{workspace}");
                 task.machine = Some(peer.clone());
                 task.mode = TaskMode::Remote;
+                let prefix = format!("{} ·", task.title());
+                task.earlier_panes = self.connect.mirrors.get(&peer).map(|m| m.panes.iter().filter(|p| p.title.starts_with(&prefix)).map(|p| p.id.clone()).collect()).unwrap_or_default();
                 // The orchestrator there runs on the task orchestrators' model; the agents' model is in its brief.
                 let model = home_settings(self.state.read(cx)).task_model;
                 let args = json!({ "provider": "winfer", "prompt": fork_brief(&task, &prompt), "worktree": false, "workspace": workspace, "role": "task", "title": format!("{} · {goal}", task.title()), "model": model });
@@ -1710,15 +1737,7 @@ impl Root {
     }
 
     fn add_task(&mut self, task: HomeTask, cx: &mut Context<Self>) {
-        let next = task.number + 1;
         self.home.tasks.push(task);
-        self.update_state(cx, |s| {
-            let entry = s.rest.entry("home".to_string()).or_insert_with(|| json!({}));
-            if !entry.is_object() {
-                *entry = json!({});
-            }
-            entry["nextTask"] = json!(next);
-        });
         self.save_home(cx);
         cx.notify();
     }
@@ -1935,7 +1954,7 @@ pub(super) fn home_dir() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{AgentStatus, HomeTask, Item, Mirror, Stage, TaskMode, Watch, all_merged, answer_of, finished, remote_pane_open, current_step, find_task, fork_brief, home_tools, light_stage, listed_tasks, pane_event, ui_tools};
+    use super::{AgentStatus, HomeTask, Item, Mirror, Stage, TaskMode, Watch, all_merged, answer_of, finished, free_number, new_task_id, remote_pane_open, reopen, current_step, find_task, fork_brief, home_tools, light_stage, listed_tasks, pane_event, ui_tools};
     use serde_json::json;
 
     fn user(text: &str) -> Item {
@@ -2014,6 +2033,49 @@ mod tests {
         assert_eq!(find_task(&tasks, &json!("Task 1")).map(|t| t.number), Some(1));
         assert_eq!(find_task(&tasks, &json!("t12")).map(|t| t.number), Some(12));
         assert_eq!(find_task(&tasks, &json!("task 3")), None);
+    }
+
+    #[test]
+    fn numbers_count_over_open_tasks_only() {
+        assert_eq!(free_number(&[]), 1);
+        let mut tasks = vec![task(1), task(2), task(4)];
+        assert_eq!(free_number(&tasks), 3);
+        tasks[0].stage = Stage::Merged;
+        assert_eq!(free_number(&tasks), 1);
+        for t in &mut tasks {
+            t.stage = Stage::Cancelled;
+        }
+        assert_eq!(free_number(&tasks), 1);
+        let (a, b) = (new_task_id(1), new_task_id(1));
+        assert!(a.starts_with("t1-") && a != b);
+    }
+
+    #[test]
+    fn a_number_means_the_open_task() {
+        let mut old = task(1);
+        old.stage = Stage::Merged;
+        old.updated = 9;
+        let mut new = task(1);
+        new.id = "t1-abc".into();
+        let mut tasks = vec![old, new];
+        for key in [json!(1), json!("Task 1"), json!("t1"), json!("t1-abc")] {
+            assert_eq!(find_task(&tasks, &key).map(|t| t.id.as_str()), Some("t1-abc"), "{key}");
+        }
+        // Both done: the latest.
+        tasks[1].stage = Stage::Cancelled;
+        assert_eq!(find_task(&tasks, &json!(1)).map(|t| t.id.as_str()), Some("t1"));
+    }
+
+    #[test]
+    fn a_reopened_task_leaves_a_taken_number() {
+        let mut old = task(1);
+        old.stage = Stage::Merged;
+        old.merged = vec!["/a".into()];
+        let mut new = task(1);
+        new.id = "t1-abc".into();
+        let mut tasks = vec![old, new];
+        reopen(&mut tasks, "t1");
+        assert_eq!((tasks[0].number, tasks[0].merged.len(), tasks[1].number), (2, 0, 1));
     }
 
     #[test]
@@ -2124,6 +2186,9 @@ mod tests {
         // Not seen yet: found by its title, or still starting.
         t.remote_pane = None;
         assert!(remote_pane_open(&t, Some(&mirror), false));
+        // An earlier Task 3's orchestrator isn't this one.
+        t.earlier_panes = vec!["r".into()];
+        assert!(!remote_pane_open(&t, Some(&mirror), false));
         mirror.panes.clear();
         assert!(!remote_pane_open(&t, Some(&mirror), false));
         assert!(remote_pane_open(&t, Some(&mirror), true));
