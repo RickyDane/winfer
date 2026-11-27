@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest, windows-latest]
+        os: [avrea-macos-latest-8-vcpu, avrea-ubuntu-latest-8-vcpu, avrea-windows-latest-8-vcpu]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

@@ -23,7 +23,7 @@ concurrency:
 
 jobs:
   tag:
-    runs-on: ubuntu-latest
+    runs-on: avrea-ubuntu-latest-8-vcpu
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
     steps:

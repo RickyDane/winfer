@@ -44,7 +44,7 @@ env:
 jobs:
   # One job creates the release; the bundle jobs only upload to it.
   release:
-    runs-on: ubuntu-latest
+    runs-on: avrea-ubuntu-latest-8-vcpu
     outputs:
       id: ${{ steps.create.outputs.id }}
     steps:
@@ -87,16 +87,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: ubuntu-22.04
+          - platform: avrea-ubuntu-latest-8-vcpu
             target: x86_64-unknown-linux-gnu
             asset: linux-x86_64
           - platform: ubuntu-22.04-arm
             target: aarch64-unknown-linux-gnu
             asset: linux-aarch64
-          - platform: macos-15
+          - platform: avrea-macos-latest-8-vcpu
             target: aarch64-apple-darwin
             asset: macos-aarch64
-          - platform: macos-15
+          - platform: avrea-macos-latest-8-vcpu
             target: x86_64-apple-darwin
             asset: macos-x86_64
     runs-on: ${{ matrix.platform }}
@@ -135,7 +135,7 @@ jobs:
   # :<version>, and :latest (stable) or :nebula (Nebula builds).
   winferd-image:
     needs: winferd
-    runs-on: ubuntu-latest
+    runs-on: avrea-ubuntu-latest-8-vcpu
     permissions:
       contents: read
       packages: write
@@ -179,13 +179,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: macos-15
+          - platform: avrea-macos-latest-8-vcpu
             target: aarch64-apple-darwin
-          - platform: macos-15
+          - platform: avrea-macos-latest-8-vcpu
             target: x86_64-apple-darwin
-          - platform: windows-latest
+          - platform: avrea-windows-latest-8-vcpu
             target: x86_64-pc-windows-msvc
-          - platform: ubuntu-latest
+          - platform: avrea-ubuntu-latest-8-vcpu
             target: x86_64-unknown-linux-gnu
     runs-on: ${{ matrix.platform }}
     env:
@@ -338,7 +338,7 @@ jobs:
   native-updater-json:
     needs: [release, native-bundle]
     if: ${{ !inputs.winferd_only }}
-    runs-on: ubuntu-latest
+    runs-on: avrea-ubuntu-latest-8-vcpu
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GH_REPO: ${{ github.repository }}
