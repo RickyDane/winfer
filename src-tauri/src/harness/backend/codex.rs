@@ -251,6 +251,8 @@ struct Child {
 /// `codex app-server` with winfer's MCP servers, the lean setup and the subagents' model.
 fn server_args(opts: &Opts) -> Vec<String> {
     let mut args = vec!["app-server".to_string()];
+    // Newer models default to no reasoning summary, so the thinking row would stay empty.
+    args.extend(["-c".to_string(), "model_reasoning_summary=\"auto\"".to_string()]);
     args.extend(mcp_args(&opts.mcp));
     // Lean Codex (Settings → winfer code → Lean setup): on by default for winfer code; Codex CLI
     // panes have their own switch.

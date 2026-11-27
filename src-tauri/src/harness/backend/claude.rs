@@ -95,6 +95,9 @@ pub fn args(opts: &Opts) -> Vec<String> {
         "stream-json",
         "--verbose",
         "--include-partial-messages",
+        // Claude Code omits thinking text by default (empty `thinking_delta`s); ask for summaries.
+        "--thinking-display",
+        "summarized",
         "--permission-prompt-tool",
         "stdio",
         "--allow-dangerously-skip-permissions",
