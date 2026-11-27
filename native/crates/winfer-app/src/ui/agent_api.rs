@@ -217,7 +217,7 @@ impl Root {
                     return Outcome::Done(Err("Nobody sees questions asked this way: put the question in your reply.".to_string()));
                 }
                 "spawn_agent" if which == HomePane::Conductor => {
-                    return Outcome::Done(Err("Every coding job is a task: use start_task (it starts the agent and its card on Home).".to_string()));
+                    return Outcome::Done(Err("Every coding job is a task: use start_task (it starts the agent and its card on Home). Chores that change no project code aren't tasks and need no new workspace: run them in your own shell here, or on a paired machine with spawn_remote_agent (worktree: false) or send_to_pane.".to_string()));
                 }
                 t => {
                     if let Some(result) = self.orchestrator_action(pane_id, &ws.id, t, a, window, cx) {

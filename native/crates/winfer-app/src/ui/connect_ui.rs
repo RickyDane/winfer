@@ -41,6 +41,13 @@ pub struct RemotePane {
     pub branch: Option<String>,
 }
 
+impl Mirror {
+    /// Its panes in the order list_remote_panes numbers them.
+    pub fn ordered(&self) -> Vec<&RemotePane> {
+        self.workspaces.iter().flat_map(|(ws, _)| self.panes.iter().filter(move |p| &p.workspace_id == ws && !p.archived)).collect()
+    }
+}
+
 impl RemotePane {
     fn parse(v: &Value) -> Option<RemotePane> {
         Some(RemotePane {
@@ -211,7 +218,7 @@ pub(super) enum ToolOutcome {
 pub(super) fn agent_tools() -> Vec<Value> {
     // This machine's workspaces: with or without Connect.
     let mut tools = vec![
-        json!({"name": "add_workspace", "description": "Open a workspace on this machine: an existing folder (path), or a git repository it clones first (git_url, optional branch and parent folder).", "inputSchema": {"type": "object", "properties": workspace_props(None)}}),
+        json!({"name": "add_workspace", "description": "Open a workspace on this machine: an existing folder (path), or a git repository it clones first (git_url, optional branch and parent folder). Only for project work in a folder that isn't open yet; running commands needs no new workspace.", "inputSchema": {"type": "object", "properties": workspace_props(None)}}),
         json!({"name": "list_workspaces", "description": "List every workspace on this machine and on the paired machines: name, folder, its agents (working, needing input, failed). Address panes as \"workspace/N\" here and \"machine/workspace/N\" on another machine in read_pane and send_to_pane; spawn_agent and list_panes take a workspace.", "inputSchema": {"type": "object", "properties": {}}}),
         json!({"name": "remove_workspace", "description": "Remove a workspace from this machine: its panes close; the folder and worktrees stay. Not the one you run in.", "inputSchema": {"type": "object", "properties": {"workspace": {"type": "string", "description": "Workspace name"}}, "required": ["workspace"]}}),
     ];
@@ -223,17 +230,18 @@ pub(super) fn agent_tools() -> Vec<Value> {
     tools.extend([
         json!({"name": "list_machines", "description": "List the other winfer machines paired with this one (Winfer Connect): name, desktop or server, online or not, their workspaces and agents; also machines nearby that could be paired, and a pairing in progress. Their panes are reachable with list_remote_panes, read_pane, send_to_pane, spawn_remote_agent and remote_pane_action. You run on this machine, not on any listed one: work on another machine only through these tools.", "inputSchema": {"type": "object", "properties": {}}}),
         json!({"name": "list_remote_panes", "description": "List a paired machine's workspaces and panes: number, agent, status, workspace. Address panes as \"<machine>:<number>\" in read_pane, send_to_pane and remote_pane_action.", "inputSchema": {"type": "object", "properties": {"machine": machine}, "required": ["machine"]}}),
-        json!({"name": "spawn_remote_agent", "description": "Start an agent pane on a paired machine, optionally with a first prompt, in a workspace there and its own git worktree. Returns its \"<machine>:<number>\" address. To run more commands on a machine, first look for a pane of yours there (list_remote_panes) and send them to it with send_to_pane; start another only when you need one running alongside.", "inputSchema": {"type": "object", "properties": {
+        json!({"name": "spawn_remote_agent", "description": "Start an agent pane on a paired machine, optionally with a first prompt, in an existing workspace there, in its own git worktree unless worktree: false. Running commands needs no new workspace. Returns its \"<machine>:<number>\" address. To run more commands on a machine, first look for a pane of yours there (list_remote_panes) and send them to it with send_to_pane; start another only when you need one running alongside.", "inputSchema": {"type": "object", "properties": {
             "machine": machine,
-            "provider": {"type": "string", "description": "Agent id, e.g. claude, codex, winfer, or shell"},
+            "provider": {"type": "string", "description": "Agent id, e.g. claude, codex, winfer, or shell (types the prompt as a command; never reports finished)"},
             "prompt": {"type": "string"},
-            "worktree": {"type": "boolean"},
-            "workspace": {"type": "string", "description": "Workspace name on that machine (default: its first); new_remote_workspace makes one"}
+            "model": {"type": "string", "description": "The agent's model (default: its own)"},
+            "worktree": {"type": "boolean", "description": "Its own git worktree (default: the workspace's setting); false for commands and chores"},
+            "workspace": {"type": "string", "description": "Workspace name on that machine (default: its first)"}
         }, "required": ["machine", "provider"]}}),
         json!({"name": "remote_pane_action", "description": "Act on an agent pane on a paired machine: approve or decline what it asks, interrupt it, or close the pane.", "inputSchema": {"type": "object", "properties": {
             "pane": pane, "action": {"type": "string", "enum": ["approve", "decline", "interrupt", "close"]}
         }, "required": ["pane", "action"]}}),
-        json!({"name": "new_remote_workspace", "description": "Open a workspace on a paired machine (server or desktop): an existing folder there (path), or a git repository it clones first (git_url; private ones on a server need its deploy key). Returns the workspace's name for spawn_remote_agent.", "inputSchema": {"type": "object", "properties": workspace_props(Some(&machine)), "required": ["machine"]}}),
+        json!({"name": "new_remote_workspace", "description": "Open a workspace on a paired machine (server or desktop): an existing folder there (path), or a git repository it clones first (git_url; private ones on a server need its deploy key). Only for project work in a folder that isn't open there yet (or a machine with no workspace); running commands needs no new one. Returns the workspace's name for spawn_remote_agent.", "inputSchema": {"type": "object", "properties": workspace_props(Some(&machine)), "required": ["machine"]}}),
         json!({"name": "remove_remote_workspace", "description": "Remove a workspace from a paired machine: its sessions there close; the folder and worktrees stay.", "inputSchema": {"type": "object", "properties": {"machine": machine, "workspace": {"type": "string", "description": "Workspace name there (list_remote_panes)"}}, "required": ["machine", "workspace"]}}),
         json!({"name": "list_reviews", "description": "List the finished work waiting for review on paired servers (and their merge queues): review id, agent, branch, changes, tests, summary.", "inputSchema": {"type": "object", "properties": {"machine": {"type": "string", "description": "Only this machine's"}}}}),
         json!({"name": "review_action", "description": "Act on a review from list_reviews, on the server it's on: merge it (through its merge queue; tests: run the tests first), run its tests, send it back to its agent with text, discard the work, or dismiss the review.", "inputSchema": {"type": "object", "properties": {
@@ -627,6 +635,7 @@ impl Root {
             "tool.result" => {
                 let id = msg["id"].as_str().unwrap_or_default();
                 if let Some(call) = self.connect.tool_calls.remove(id) {
+                    self.home.follows.answered(&call, msg["ok"] == true, msg["text"].as_str().unwrap_or_default());
                     super::agent_api::respond(&call, msg["ok"] == true, msg["text"].as_str().unwrap_or_default().to_string());
                 } else {
                     self.home_tool_result(id, msg["ok"] == true, msg["text"].as_str().unwrap_or_default(), cx);
@@ -925,12 +934,7 @@ impl Root {
 
     /// A paired machine's panes in the order list_remote_panes numbers them.
     pub(super) fn remote_order(&self, peer: &str) -> Vec<RemotePane> {
-        let Some(m) = self.connect.mirrors.get(peer) else { return Vec::new() };
-        let mut out = Vec::new();
-        for (ws, _) in &m.workspaces {
-            out.extend(m.panes.iter().filter(|p| &p.workspace_id == ws && !p.archived).cloned());
-        }
-        out
+        self.connect.mirrors.get(peer).map(|m| m.ordered().into_iter().cloned().collect()).unwrap_or_default()
     }
 
     /// `machine:N` → (peer, N, machine name); None when `reference` isn't one. The machine
@@ -1083,15 +1087,26 @@ impl Root {
                 if let Some(ws) = a["workspace"].as_str() {
                     args["workspace"] = json!(ws);
                 }
+                if pane == crate::voice::CONDUCTOR {
+                    self.home.follows.spawning(call, &peer, a["provider"].as_str().unwrap_or_default(), self.connect.mirrors.get(&peer));
+                }
                 Some(self.remote_tool(call, &peer, &name, "spawn_agent", args, &caller, cx))
             }
             "read_pane" | "send_to_pane" => {
-                let (peer, pane, name) = match self.remote_ref(&a["pane"])? {
+                let (peer, number, name) = match self.remote_ref(&a["pane"])? {
                     Ok(r) => r,
                     Err(e) => return Some(ToolOutcome::Done(Err(e))),
                 };
                 let mut args = a.clone();
-                args["pane"] = json!(pane);
+                args["pane"] = json!(number);
+                // The conductor hears back from a pane it messages: sent by its id, which stays.
+                if tool == "send_to_pane"
+                    && pane == crate::voice::CONDUCTOR
+                    && let Some(target) = number.parse::<usize>().ok().and_then(|n| self.remote_order(&peer).into_iter().nth(n.checked_sub(1)?))
+                {
+                    args["pane"] = json!(target.id);
+                    self.home.follows.sending(call, &peer, &target);
+                }
                 Some(self.remote_tool(call, &peer, &name, tool, args, &caller, cx))
             }
             "remote_pane_action" => {
@@ -1449,20 +1464,31 @@ impl Root {
         }
         let s = self.state.read(cx);
         // The workspace: the target pane's, the one named, or the first.
-        let ws = match (&tool[..], a["pane"].as_str(), a["workspace"].as_str()) {
-            (_, Some(pane), _) => s.workspaces.iter().find(|w| w.panes.iter().any(|p| p.id == pane)),
-            ("spawn_agent", None, Some(name)) => s.workspaces.iter().find(|w| w.remote.is_none() && w.name.eq_ignore_ascii_case(name)),
+        let ws = match (&tool[..], a["pane"].as_str()) {
+            (_, Some(pane)) => s.workspaces.iter().find(|w| w.panes.iter().any(|p| p.id == pane)),
+            ("spawn_agent", None) => spawn_workspace(s, a["workspace"].as_str()),
             _ => s.workspaces.iter().find(|w| w.id == s.active_workspace_id).or(s.workspaces.first()),
         }
         .cloned();
         let result = match ws {
+            None if tool == "spawn_agent" => Err(no_spawn_workspace(s, a["workspace"].as_str())),
             None => Err("No such pane or workspace on this machine.".to_string()),
             Some(_) if !matches!(&tool[..], "read_pane" | "send_to_pane" | "spawn_agent") => Err(format!("{tool} can't be called from another machine.")),
             Some(ws) => {
                 let me = crate::model::Pane { id: format!("remote:{peer}"), provider: "winfer".into(), cwd: ws.root_dir.clone(), workspace_id: ws.id.clone(), ..Default::default() };
                 let all = |s: &crate::model::AppState| s.workspaces.iter().flat_map(super::mobile::ordered).filter(|p| !p.archived).map(|p| p.id.clone()).collect::<Vec<_>>();
                 let before = all(self.state.read(cx));
+                let view = KeptView::of(self.state.read(cx), &ws.id);
                 let result = self.run_remote_sync_tool(&tool, &ws, &me, &a, &caller, cx);
+                if tool == "spawn_agent" && result.is_ok() {
+                    // Another machine asked: the user here stays where they were.
+                    let hidden = view.hides_new_panes();
+                    self.update_state(cx, |s| view.restore(s));
+                    // Nothing draws it then, which would start it.
+                    if hidden && let Some(new) = all(self.state.read(cx)).into_iter().find(|id| !before.contains(id)) {
+                        self.start_detached(&new, cx);
+                    }
+                }
                 // Its address in this machine's order, as the caller writes it (machine:N).
                 if tool == "spawn_agent" && result.is_ok() {
                     let me_name = crate::connect::get().map(|c| c.status().name).unwrap_or_default();
@@ -2070,9 +2096,86 @@ fn push_summary(b: &PushBatch) -> String {
     text
 }
 
+/// The workspace another machine's spawn_agent starts in: the one named, else this machine's
+/// first. Never a new one.
+fn spawn_workspace<'a>(s: &'a AppState, name: Option<&str>) -> Option<&'a crate::model::Workspace> {
+    let mut here = s.workspaces.iter().filter(|w| w.remote.is_none());
+    match name.map(str::trim).filter(|n| !n.is_empty()) {
+        Some(n) => here.find(|w| w.name.eq_ignore_ascii_case(n)),
+        None => here.next(),
+    }
+}
+
+/// Why `spawn_workspace` found none.
+fn no_spawn_workspace(s: &AppState, name: Option<&str>) -> String {
+    let names = s.workspaces.iter().filter(|w| w.remote.is_none()).map(|w| w.name.as_str()).collect::<Vec<_>>().join(", ");
+    match name {
+        _ if names.is_empty() => "No workspace is open on this machine: open one with new_remote_workspace.".to_string(),
+        Some(n) => format!("No workspace “{n}” here. Workspaces: {names}."),
+        None => "No workspace on this machine.".to_string(),
+    }
+}
+
+/// What the user is looking at, which a pane added to workspace `ws` would change.
+struct KeptView {
+    ws: String,
+    view: Option<View>,
+    focused: Option<String>,
+    zoomed: Option<String>,
+    overview_zoomed: Option<String>,
+}
+
+impl KeptView {
+    fn of(s: &AppState, ws: &str) -> Self {
+        let zoomed = s.workspaces.iter().find(|w| w.id == ws).and_then(|w| w.zoomed_pane_id.clone());
+        Self { ws: ws.to_string(), view: s.view.clone(), focused: s.focused_pane_id.clone(), zoomed, overview_zoomed: s.overview.zoomed_pane_id.clone() }
+    }
+
+    /// Behind a zoomed pane or the archive, which `add_pane` leaves for the workspace.
+    fn hides_new_panes(&self) -> bool {
+        self.zoomed.is_some() || self.view == Some(View::Archive)
+    }
+
+    fn restore(&self, s: &mut AppState) {
+        s.view = self.view.clone();
+        s.focused_pane_id = self.focused.clone();
+        s.overview.zoomed_pane_id = self.overview_zoomed.clone();
+        if let Some(w) = s.workspaces.iter_mut().find(|w| w.id == self.ws) {
+            w.zoomed_pane_id = self.zoomed.clone();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{AgentStatus, RemotePane, Value, parse_status};
+    use super::{AgentStatus, KeptView, RemotePane, Value, View, no_spawn_workspace, parse_status, spawn_workspace};
+    use crate::model::{AddPane, AppState};
+
+    #[test]
+    fn a_remote_spawn_uses_a_workspace_here_without_making_or_showing_one() {
+        let mut s = AppState::default();
+        assert!(no_spawn_workspace(&s, None).contains("new_remote_workspace"));
+        s.remote_workspace("peer", "w", "theirs");
+        let (api, web) = (s.workspace_for_folder("/code/api", "api"), s.workspace_for_folder("/code/web", "web"));
+        // Their tiles are on screen; the first workspace of this machine's own takes it.
+        assert_eq!(spawn_workspace(&s, None).map(|w| w.id.clone()), Some(api.clone()));
+        assert_eq!(spawn_workspace(&s, Some("WEB")).map(|w| w.id.clone()), Some(web));
+        assert!(spawn_workspace(&s, Some("theirs")).is_none());
+        assert_eq!(no_spawn_workspace(&s, Some("nope")), "No workspace “nope” here. Workspaces: api, web.");
+
+        s.set_active_workspace(&api);
+        let opts = || AddPane { workspace_id: Some(api.clone()), worktree: Some(false), ..Default::default() };
+        let mine = s.add_pane("shell", opts());
+        s.view = Some(View::Archive);
+        s.workspaces.iter_mut().find(|w| w.id == api).unwrap().zoomed_pane_id = Some(mine.clone());
+        let kept = KeptView::of(&s, &api);
+        let theirs = s.add_pane("claude", opts());
+        kept.restore(&mut s);
+        assert_eq!((s.view.clone(), s.focused_pane_id.as_deref()), (Some(View::Archive), Some(mine.as_str())));
+        assert_eq!(s.active().and_then(|w| w.zoomed_pane_id.as_deref()), Some(mine.as_str()));
+        assert!(!s.pane(&theirs).unwrap().wants_worktree);
+        assert_eq!(s.workspaces.len(), 3);
+    }
 
     #[test]
     fn remote_panes_parse_from_the_mobile_protocol() {

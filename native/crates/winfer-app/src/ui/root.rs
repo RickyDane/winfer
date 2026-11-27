@@ -100,6 +100,8 @@ pub mod voice_tools;
 mod voice_ui;
 #[path = "home.rs"]
 mod home;
+#[path = "home_follow.rs"]
+mod home_follow;
 #[path = "home_view.rs"]
 mod home_view;
 
