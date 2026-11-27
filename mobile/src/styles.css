@@ -1109,7 +1109,8 @@ html[data-nav="tab"]::view-transition-new(root) { animation: vt-fade-in 0.24s va
 .live-view[data-mode="touch"] img { width: auto; max-width: 100%; border-radius: 14px; background: #000; box-shadow: var(--lift); }
 .live-view .empty { margin: auto; }
 
-.browser-nav { display: flex; align-items: center; gap: 2px; padding: 0 6px 8px; background: var(--panel); border-bottom: 1px solid var(--border); }
+/* Below the floating header like the other panel screens' rows (Files' filters, Android's chips). */
+.browser-nav { display: flex; align-items: center; gap: 2px; padding: 10px 6px 8px; border-bottom: 1px solid var(--border); }
 .address { flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px; height: 34px; padding: 0 10px; border-radius: 999px; border: 1px solid var(--edge); background: var(--raised); color: var(--subtle); }
 .address img { width: 14px; height: 14px; border-radius: 3px; }
 .address input { flex: 1; min-width: 0; border: 0; outline: 0; background: none; color: var(--fg); font: inherit; font-size: 14px; }
@@ -1139,7 +1140,7 @@ html[data-nav="tab"]::view-transition-new(root) { animation: vt-fade-in 0.24s va
 .android-avds { margin: 0 12px; }
 
 .term-screen .bar { flex: none; }
-.term-host { flex: 1; min-height: 0; padding: 4px 2px 0 6px; background: var(--code-bg); overflow: hidden; }
+.term-host { flex: 1; min-height: 0; padding: 12px 2px 0 6px; background: var(--code-bg); overflow: hidden; }
 .term-host .xterm { height: 100%; }
 .term-host .xterm-viewport { scrollbar-width: none; }
 .term-keys { padding: 6px 8px calc(var(--sb) + 8px); background: var(--panel); border-top: 1px solid var(--border); }
