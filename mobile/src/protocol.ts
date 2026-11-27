@@ -262,6 +262,8 @@ export interface BrowserState {
   error: string | null;
   tabs: BrowserTab[];
   active: string | null;
+  /** The machine's other workspaces with tabs (the desktop shows them all in Overview); older desktops omit it. */
+  others?: { workspaceId: string; name: string; tabs: BrowserTab[]; active: string | null }[];
 }
 
 export interface AndroidDevice {

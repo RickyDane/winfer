@@ -1878,11 +1878,19 @@ impl BrowserPanel {
         if !self.tabs.contains_key(workspace) && !self.needs_install {
             self.open_workspace(workspace.to_string(), cx);
         }
-        let tabs: Vec<Value> = self.tabs.get(workspace).into_iter().flatten().map(|t| {
-            // Favicons ride along when they're small (they're data URLs).
-            let icon = if t.favicon.len() <= 8 << 10 { t.favicon.as_str() } else { "" };
-            json!({ "id": t.id, "url": t.url, "title": t.title, "favicon": icon })
-        }).collect();
+        let list = |ws: &str| -> Vec<Value> {
+            self.tabs.get(ws).into_iter().flatten().map(|t| {
+                // Favicons ride along when they're small (they're data URLs).
+                let icon = if t.favicon.len() <= 8 << 10 { t.favicon.as_str() } else { "" };
+                json!({ "id": t.id, "url": t.url, "title": t.title, "favicon": icon })
+            }).collect()
+        };
+        let tabs = list(workspace);
+        // This machine's other workspaces' tabs, as the desktop's strip shows them in Overview.
+        let others: Vec<Value> = self.state.read(cx).workspaces.iter()
+            .filter(|w| w.remote.is_none() && w.id != workspace && self.tabs.get(&w.id).is_some_and(|t| !t.is_empty()))
+            .map(|w| json!({ "workspaceId": w.id, "name": w.name, "tabs": list(&w.id), "active": self.active_tab.get(&w.id) }))
+            .collect();
         let failed = self.failed.contains(workspace);
         json!({
             "workspaceId": workspace,
@@ -1892,6 +1900,7 @@ impl BrowserPanel {
             "error": if failed { self.message.as_ref().map(|m| m.to_string()) } else { None },
             "tabs": tabs,
             "active": self.active_tab.get(workspace),
+            "others": others,
         })
     }
 

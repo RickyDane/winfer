@@ -2,7 +2,7 @@
 // taps as clicks, drags as scrolling, typing, the address bar, back/forward/reload and tabs.
 import { useEffect, useState } from "react";
 import type { DesktopClient } from "../client";
-import { haptic, useClient } from "../hooks";
+import { go as goTo, haptic, useClient } from "../hooks";
 import { forMachine } from "../multi";
 import type { BrowserOp, BrowserState, BrowserTab } from "../protocol";
 import { Icon, linkState } from "./common";
@@ -55,6 +55,15 @@ export function Browser({ client, workspaceId }: { client: DesktopClient; worksp
   usePoll(() => online && void refresh(), 2000, [workspaceId, online]);
 
   const tabs = bs?.tabs ?? [];
+  const others = bs?.others ?? [];
+  /** A tab of another workspace: that workspace's browser shows it. */
+  const openOther = (wsId: string, tabId: string) => {
+    haptic(6);
+    setTabsOpen(false);
+    void call(client, { t: "browser.call", op: "select", workspaceId: wsId, tab: tabId })
+      .catch(() => {})
+      .then(() => goTo(`/panel/browser/${encodeURIComponent(wsId)}`));
+  };
   const shown: BrowserTab | undefined = tabs.find((t) => t.id === picked) ?? tabs.find((t) => t.id === bs?.active) ?? tabs[tabs.length - 1];
   const tab = shown?.id ?? null;
 
@@ -118,7 +127,15 @@ export function Browser({ client, workspaceId }: { client: DesktopClient; worksp
       );
     if (bs.error) return <Notice icon="alert" title="The browser didn't start" text={bs.error} action={{ label: "Retry", onClick: () => void refresh(true) }} />;
     if (!bs.ready) return <Notice icon="globe" title="Starting the browser…" />;
-    if (!tab) return <Notice icon="globe" title="No tabs" action={{ label: "New tab", onClick: () => void act("newTab").then((id) => typeof id === "string" && setPicked(id)) }} />;
+    if (!tab)
+      return (
+        <Notice
+          icon="globe"
+          title="No tabs"
+          text={others.length ? "Other workspaces have tabs open: see them under Tabs." : undefined}
+          action={{ label: "New tab", onClick: () => void act("newTab").then((id) => typeof id === "string" && setPicked(id)) }}
+        />
+      );
     return (
       <LiveView
         mode="page"
@@ -135,7 +152,7 @@ export function Browser({ client, workspaceId }: { client: DesktopClient; worksp
     <div className="screen panel-screen">
       <PanelBar title={shown?.title || (shown ? host(shown.url) : "Browser")} subtitle={ws?.name}>
         <button className="icon-btn tabs-count" aria-label="Tabs" title="Tabs" disabled={!bs?.ready} onClick={() => setTabsOpen(true)}>
-          <span>{tabs.length}</span>
+          <span>{tabs.length + others.reduce((n, o) => n + o.tabs.length, 0)}</span>
         </button>
       </PanelBar>
       <div className="browser-nav">
@@ -224,6 +241,22 @@ export function Browser({ client, workspaceId }: { client: DesktopClient; worksp
                 <b>New tab</b>
               </span>
             </button>
+            {others.map((o) => (
+              <section key={o.workspaceId} className="tab-group">
+                <h2>{o.name}</h2>
+                {o.tabs.map((t) => (
+                  <div key={t.id} className="pick-row tab-row">
+                    <button className="tab-row-main" onClick={() => openOther(o.workspaceId, t.id)}>
+                      {t.favicon ? <img src={t.favicon} alt="" /> : <Icon name="globe" size={15} />}
+                      <span className="row-main">
+                        <b>{t.title || host(t.url) || "New tab"}</b>
+                        <span>{host(t.url)}</span>
+                      </span>
+                    </button>
+                  </div>
+                ))}
+              </section>
+            ))}
           </div>
         </Sheet>
       )}

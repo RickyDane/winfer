@@ -66,7 +66,9 @@ export class MockPanel {
   }
 
   private browserState() {
-    return { workspaceId: "ws-winfer", ready: true, needsInstall: false, installing: false, error: null, tabs: this.tabs, active: this.active };
+    // Another workspace's tabs too, as the desktop's Overview strip shows them.
+    const others = [{ workspaceId: "w-api", name: "api", tabs: [{ id: "api-docs", url: "http://localhost:8080/docs", title: "API docs", favicon: "" }], active: "api-docs" }];
+    return { workspaceId: "ws-winfer", ready: true, needsInstall: false, installing: false, error: null, tabs: this.tabs, active: this.active, others };
   }
 
   /** The reply's `value`, or undefined when it isn't a panel request. */

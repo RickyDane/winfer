@@ -1118,6 +1118,7 @@ html[data-nav="tab"]::view-transition-new(root) { animation: vt-fade-in 0.24s va
 .tab-row[data-on] { background: color-mix(in srgb, var(--accent) 10%, transparent); }
 .tab-row-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 11px; min-height: 48px; text-align: left; }
 .tab-row-main img { width: 16px; height: 16px; border-radius: 3px; }
+.tab-group h2 { margin: 0; padding: 14px 10px 6px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--subtle); }
 
 .compose-bar { padding: 6px 8px calc(var(--sb) + 8px); background: var(--panel); border-top: 1px solid var(--border); }
 .compose-keys, .term-keys { display: flex; gap: 5px; overflow-x: auto; scrollbar-width: none; }
