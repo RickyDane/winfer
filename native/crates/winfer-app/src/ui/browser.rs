@@ -1878,19 +1878,9 @@ impl BrowserPanel {
         if !self.tabs.contains_key(workspace) && !self.needs_install {
             self.open_workspace(workspace.to_string(), cx);
         }
-        let list = |ws: &str| -> Vec<Value> {
-            self.tabs.get(ws).into_iter().flatten().map(|t| {
-                // Favicons ride along when they're small (they're data URLs).
-                let icon = if t.favicon.len() <= 8 << 10 { t.favicon.as_str() } else { "" };
-                json!({ "id": t.id, "url": t.url, "title": t.title, "favicon": icon })
-            }).collect()
-        };
-        let tabs = list(workspace);
+        let tabs = self.phone_tab_list(workspace);
         // This machine's other workspaces' tabs, as the desktop's strip shows them in Overview.
-        let others: Vec<Value> = self.state.read(cx).workspaces.iter()
-            .filter(|w| w.remote.is_none() && w.id != workspace && self.tabs.get(&w.id).is_some_and(|t| !t.is_empty()))
-            .map(|w| json!({ "workspaceId": w.id, "name": w.name, "tabs": list(&w.id), "active": self.active_tab.get(&w.id) }))
-            .collect();
+        let others = self.phone_tabs(Some(workspace), cx);
         let failed = self.failed.contains(workspace);
         json!({
             "workspaceId": workspace,
@@ -1902,6 +1892,24 @@ impl BrowserPanel {
             "active": self.active_tab.get(workspace),
             "others": others,
         })
+    }
+
+    /// A workspace's tabs as a phone lists them.
+    fn phone_tab_list(&self, workspace: &str) -> Vec<Value> {
+        self.tabs.get(workspace).into_iter().flatten().map(|t| {
+            // Favicons ride along when they're small (they're data URLs).
+            let icon = if t.favicon.len() <= 8 << 10 { t.favicon.as_str() } else { "" };
+            json!({ "id": t.id, "url": t.url, "title": t.title, "favicon": icon })
+        }).collect()
+    }
+
+    /// This machine's workspaces with tabs (but `except`), in workspace order: the phone's
+    /// overview of every browser. Starts none.
+    pub fn phone_tabs(&self, except: Option<&str>, cx: &App) -> Vec<Value> {
+        self.state.read(cx).workspaces.iter()
+            .filter(|w| w.remote.is_none() && Some(w.id.as_str()) != except && self.tabs.get(&w.id).is_some_and(|t| !t.is_empty()))
+            .map(|w| json!({ "workspaceId": w.id, "name": w.name, "tabs": self.phone_tab_list(&w.id), "active": self.active_tab.get(&w.id) }))
+            .collect()
     }
 
     /// A phone picked a tab: the panel shows it too (only the tab in front paints).

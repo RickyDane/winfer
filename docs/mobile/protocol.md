@@ -121,7 +121,9 @@ streams (terminal output, frames).
 | `panel.frameDone` | `seq`, `feed?` (`browser` / `android`: which machine's frames it acknowledges) | — |
 
 Browser ops: `state {retry?}` → `{workspaceId, ready, needsInstall, installing, error, tabs: [{id, url, title, favicon}], active, others}`
-(starts the workspace's browser; `others`: `[{workspaceId, name, tabs, active}]`, the machine's other workspaces with tabs), `install`, `select {tab}` (the desktop panel shows it too), `watch {tab, maxWidth}`,
+(starts the workspace's browser; `others`: `[{workspaceId, name, tabs, active}]`, the machine's other workspaces with tabs),
+`tabs` → `{all: [{workspaceId, name, tabs, active}]}` (every workspace with tabs, starting no browser: the phone's
+"All workspaces"), `install`, `select {tab}` (the desktop panel shows it too), `watch {tab, maxWidth}`,
 `unwatch`, `input {tab, method, params}` (CDP `Input.dispatchMouseEvent` / `dispatchKeyEvent` / `insertText`, page CSS
 pixels), `newTab {url?}` → tab id, `closeTab {tab}`, `navigate {tab, url}` (typed text becomes a URL or search),
 `history {tab, delta}` (-1 back, 1 forward, 0 reload).

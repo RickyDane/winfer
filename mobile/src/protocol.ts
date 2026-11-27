@@ -233,7 +233,7 @@ export type PhoneMsg =
   | ({ t: "android.call"; op: AndroidOp; workspaceId?: string } & Record<string, unknown>)
   | ({ t: "files.call"; op: FilesOp } & Record<string, unknown>);
 
-export type BrowserOp = "state" | "install" | "select" | "watch" | "unwatch" | "input" | "newTab" | "closeTab" | "navigate" | "history";
+export type BrowserOp = "state" | "tabs" | "install" | "select" | "watch" | "unwatch" | "input" | "newTab" | "closeTab" | "navigate" | "history";
 export type AndroidOp = "state" | "watch" | "unwatch" | "select" | "startAvd" | "touch" | "scroll" | "key" | "text";
 export type FilesOp = "docs" | "list" | "read" | "write" | "comment" | "open" | "close";
 
@@ -263,7 +263,15 @@ export interface BrowserState {
   tabs: BrowserTab[];
   active: string | null;
   /** The machine's other workspaces with tabs (the desktop shows them all in Overview); older desktops omit it. */
-  others?: { workspaceId: string; name: string; tabs: BrowserTab[]; active: string | null }[];
+  others?: WorkspaceTabs[];
+}
+
+/** A workspace's browser tabs (`browser.call` `tabs` answers `{all: WorkspaceTabs[]}`, every workspace with tabs). */
+export interface WorkspaceTabs {
+  workspaceId: string;
+  name: string;
+  tabs: BrowserTab[];
+  active: string | null;
 }
 
 export interface AndroidDevice {

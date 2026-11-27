@@ -121,6 +121,8 @@ export class MockPanel {
         switch (msg.op) {
           case "state":
             return { value: this.browserState() };
+          case "tabs":
+            return { value: { all: [{ workspaceId: "w-winfer", name: "winfer", tabs: this.tabs, active: this.active }, ...this.browserState().others] } };
           case "watch":
           case "select":
             this.active = tab;

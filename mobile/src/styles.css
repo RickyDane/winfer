@@ -1079,6 +1079,27 @@ html[data-nav="tab"]::view-transition-new(root) { animation: vt-fade-in 0.24s va
 
 /* ---------- Side panel (Panel tab, Browser, Android, Terminal, Files) ---------- */
 .panel-ws { padding: 10px 10px 0; margin: 0; }
+/* The Panel tab's workspace combobox: a card that opens a searchable list under it. */
+.ws-combo { position: relative; z-index: 3; }
+.ws-combo-trigger { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 50px; padding: 8px 12px; text-align: left; border-radius: var(--r-xl); border: 1px solid var(--edge); background: var(--raised); box-shadow: var(--lift-sm); transition: border-color 0.15s, background 0.15s; }
+.ws-combo-trigger:active { background: var(--hover); }
+.ws-combo[data-open] .ws-combo-trigger { border-color: color-mix(in srgb, var(--accent) 45%, var(--edge)); }
+.ws-combo-icon { flex: none; display: grid; place-items: center; width: 30px; height: 30px; border-radius: var(--r-lg); background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
+.ws-combo-trigger .row-main span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ws-combo-chevron { flex: none; color: var(--subtle); transition: transform 0.2s; }
+.ws-combo[data-open] .ws-combo-chevron { transform: rotate(180deg); }
+.ws-combo-pop { position: absolute; top: calc(100% + 6px); left: 0; right: 0; padding: 8px 6px 6px; border-radius: var(--r-xl); border: 1px solid var(--edge); background: var(--raised); box-shadow: var(--lift); animation: fade-in 0.15s both; }
+.ws-combo-search { margin: 0 2px 6px; background: var(--panel); }
+.ws-combo-search .icon-btn { width: 32px; height: 32px; margin-right: -8px; }
+.ws-combo-list { list-style: none; margin: 0; padding: 0; max-height: min(52vh, 360px); overflow-y: auto; overscroll-behavior: contain; }
+.ws-combo-option { display: flex; align-items: center; gap: 11px; min-height: 46px; padding: 6px 10px; border-radius: var(--r-lg); color: var(--muted); cursor: pointer; }
+.ws-combo-option[data-cursor="true"] { background: var(--hover); }
+.ws-combo-option[aria-selected="true"] { color: var(--fg); }
+.ws-combo-option .row-main b { color: var(--fg); }
+.ws-combo-check { flex: none; color: var(--accent); }
+.ws-combo-none { padding: 14px 10px; font-size: 13px; color: var(--subtle); }
+.panel-all .group:first-child { margin-top: 0; }
+.row-favicon { width: 16px; height: 16px; border-radius: 3px; }
 .chip[aria-pressed="true"] { color: var(--fg); border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: color-mix(in srgb, var(--accent) 12%, var(--raised)); }
 .panel-hub { padding: 12px 10px 16px; }
 .panel-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }

@@ -3,7 +3,7 @@
 // on (`<!-- @user: … -->`, as on the desktop) and shown on the desktop.
 import { useEffect, useMemo, useState } from "react";
 import type { DesktopClient } from "../client";
-import { haptic, useClient } from "../hooks";
+import { go, haptic, panelBack, useClient } from "../hooks";
 import { forMachine } from "../multi";
 import type { FileData, FileEntry, FilesOp } from "../protocol";
 import { Icon, linkState } from "./common";
@@ -28,7 +28,7 @@ export function showComments(text: string): string {
 
 const size = (n: number) => (n < 1024 ? `${n} B` : n < 1 << 20 ? `${(n / 1024).toFixed(n < 10240 ? 1 : 0)} KB` : `${(n / (1 << 20)).toFixed(1)} MB`);
 
-export function Files({ client, workspaceId }: { client: DesktopClient; workspaceId: string }) {
+export function Files({ client, workspaceId, path: opened }: { client: DesktopClient; workspaceId: string; path?: string }) {
   const state = useClient(client);
   const ws = state.workspaces.find((w) => w.id === workspaceId);
   // The workspace's own machine, when several are paired.
@@ -36,7 +36,7 @@ export function Files({ client, workspaceId }: { client: DesktopClient; workspac
   const [view, setView] = useState<"open" | "browse">("open");
   const [docs, setDocs] = useState<Docs | null>(null);
   const [listing, setListing] = useState<Listing | null>(null);
-  const [path, setPath] = useState<string | null>(null);
+  const [path, setPath] = useState<string | null>(opened ?? null);
   const [err, setErr] = useState<string | null>(null);
 
   const op = <T,>(o: FilesOp, extra: Record<string, unknown> = {}) => call<T>(client, { t: "files.call", op: o, workspaceId, ...extra });
@@ -62,7 +62,7 @@ export function Files({ client, workspaceId }: { client: DesktopClient; workspac
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [online, workspaceId]);
 
-  if (path) return <FileView client={client} workspaceId={workspaceId} path={path} root={docs?.root ?? listing?.root ?? ""} onBack={() => { setPath(null); void loadDocs(); }} />;
+  if (path) return <FileView client={client} workspaceId={workspaceId} path={path} root={docs?.root ?? listing?.root ?? ""} onBack={() => (opened ? go(panelBack()) : (setPath(null), void loadDocs()))} />;
 
   const root = listing?.root ?? docs?.root ?? "";
   const atRoot = !listing || listing.dir.replace(/\/+$/, "") === listing.root.replace(/\/+$/, "");

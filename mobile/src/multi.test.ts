@@ -109,6 +109,8 @@ describe("MultiClient", () => {
     expect(b.fire).toHaveBeenLastCalledWith({ t: "panel.frameDone", seq: 1, feed: "android" });
     b.request.mockResolvedValueOnce({ t: "ack", id: "1", ok: true, value: { workspaceId: "w", tabs: [], others: [{ workspaceId: "v", name: "v", tabs: [] }] } });
     expect(await multi.request({ t: "browser.call", op: "state", workspaceId: "B~w" })).toMatchObject({ value: { workspaceId: "B~w", others: [{ workspaceId: "B~v" }] } });
+    b.request.mockResolvedValueOnce({ t: "ack", id: "1", ok: true, value: { all: [{ workspaceId: "w", name: "w", tabs: [] }] } });
+    expect(await multi.request({ t: "browser.call", op: "tabs", workspaceId: "B~w" })).toMatchObject({ value: { all: [{ workspaceId: "B~w" }] } });
     multi.fire({ t: "panel.frameDone", seq: 7, feed: "browser" });
     expect(a.fire).toHaveBeenLastCalledWith({ t: "panel.frameDone", seq: 7, feed: "browser" });
   });

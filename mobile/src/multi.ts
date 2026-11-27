@@ -170,6 +170,7 @@ export class MultiClient implements DesktopClient {
       if (Array.isArray(v.terminals)) v.terminals = v.terminals.map((t: { id: string }) => ({ ...t, id: this.liftPane(m, t.id) }));
       // A browser state's other workspaces.
       if (Array.isArray(v.others)) v.others = v.others.map((o: object) => ids(o));
+      if (Array.isArray(v.all)) v.all = v.all.map((o: object) => ids(o));
       return { ...out, value: v };
     }
     return out;

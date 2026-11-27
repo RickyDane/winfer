@@ -18,6 +18,7 @@ describe("side panel", () => {
     expect(parseRoute("#/panel/android/B~ws-1")).toEqual({ name: "android", workspaceId: "B~ws-1" });
     expect(parseRoute("#/panel/browser/w%201")).toEqual({ name: "browser", workspaceId: "w 1" });
     expect(parseRoute("#/panel/files/w1")).toEqual({ name: "files", workspaceId: "w1" });
+    expect(parseRoute(`#/panel/files/w1/${encodeURIComponent("/a b/c.md")}`)).toEqual({ name: "files", workspaceId: "w1", path: "/a b/c.md" });
     expect(parseRoute("#/panel/terminal/w1/side-terminal-w1")).toEqual({ name: "terminal", workspaceId: "w1", paneId: "side-terminal-w1" });
   });
 

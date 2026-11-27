@@ -367,6 +367,11 @@ impl Root {
                 let value = self.browser.update(cx, |b, cx| b.phone_state(&ws, retry, cx));
                 reply(ok(value))
             }
+            // Every workspace's tabs, for the phone's "All workspaces" (starts no browser).
+            "tabs" => {
+                let all = self.browser.read(cx).phone_tabs(None, cx);
+                reply(ok(json!({ "all": all })))
+            }
             "install" => {
                 self.browser.update(cx, |b, cx| b.phone_install(cx));
                 reply(ok(Value::Null))

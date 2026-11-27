@@ -13,7 +13,7 @@ export type Route =
   | { name: "browser"; workspaceId: string }
   | { name: "android"; workspaceId: string | null }
   | { name: "terminal"; workspaceId: string; paneId: string }
-  | { name: "files"; workspaceId: string };
+  | { name: "files"; workspaceId: string; path?: string };
 
 export function parseRoute(hash: string): Route {
   const h = hash.replace(/^#/, "");
@@ -25,6 +25,8 @@ export function parseRoute(hash: string): Route {
   if (h === "/panel") return { name: "panel" };
   const android = h.match(/^\/panel\/android(?:\/([^/]+))?$/);
   if (android) return { name: "android", workspaceId: android[1] ? decodeURIComponent(android[1]) : null };
+  const file = h.match(/^\/panel\/files\/([^/]+)\/(.+)$/);
+  if (file) return { name: "files", workspaceId: decodeURIComponent(file[1]), path: decodeURIComponent(file[2]) };
   const mod = h.match(/^\/panel\/(browser|files)\/([^/]+)$/);
   if (mod) return { name: mod[1] as "browser" | "files", workspaceId: decodeURIComponent(mod[2]) };
   const term = h.match(/^\/panel\/terminal\/([^/]+)\/(.+)$/);

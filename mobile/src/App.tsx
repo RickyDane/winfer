@@ -122,7 +122,7 @@ function Screens({ client, mock, onChanged }: { client: DesktopClient; mock: boo
         <Term key={route.paneId} client={client} workspaceId={route.workspaceId} paneId={route.paneId} />
       </Suspense>
     ) : route.name === "files" ? (
-      <Files key={route.workspaceId} client={client} workspaceId={route.workspaceId} />
+      <Files key={route.workspaceId + (route.path ?? "")} client={client} workspaceId={route.workspaceId} path={route.path} />
     ) : route.name === "new" ? (
       <NewSession client={client} workspaceId={route.workspaceId} />
     ) : paneId ? (
