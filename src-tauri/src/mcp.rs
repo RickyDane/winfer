@@ -40,12 +40,15 @@ pub struct Reply {
 }
 
 fn tools() -> Value {
-    let pane = json!({ "type": ["integer", "string"], "description": "Pane number as shown in winfer (1, 2, …) or pane id" });
+    let pane = json!({ "type": ["integer", "string"], "description": "Pane number as shown in winfer (1, 2, …) or pane id; \"workspace/N\" for another workspace's pane" });
     json!([
         {
             "name": "list_panes",
-            "description": "List the terminal panes in your winfer workspace: number, agent, status (working, needs-input, done, idle, error), git branch and whether it is you.",
-            "inputSchema": { "type": "object", "properties": {} }
+            "description": "List the terminal panes in your winfer workspace (or another one: workspace; every one: all): number, agent, status (working, needs-input, done, idle, error), git branch and whether it is you.",
+            "inputSchema": { "type": "object", "properties": {
+                "workspace": { "type": "string", "description": "Another workspace's name" },
+                "all": { "type": "boolean", "description": "Every workspace's panes" }
+            } }
         },
         {
             "name": "read_pane",
@@ -59,11 +62,12 @@ fn tools() -> Value {
         },
         {
             "name": "spawn_agent",
-            "description": "Start a new agent pane in this workspace, optionally with a first prompt. By default it gets its own git worktree so it can't overwrite other agents' files. Providers: claude, codex, agy, grok, opencode, cursor, pi, shell (only installed ones work).",
+            "description": "Start a new agent pane in this workspace (or another one: workspace), optionally with a first prompt. By default it gets its own git worktree so it can't overwrite other agents' files. Providers: claude, codex, agy, grok, opencode, cursor, pi, shell (only installed ones work).",
             "inputSchema": { "type": "object", "properties": {
                 "provider": { "type": "string" },
                 "prompt": { "type": "string" },
-                "worktree": { "type": "boolean" }
+                "worktree": { "type": "boolean" },
+                "workspace": { "type": "string", "description": "Another workspace's name (\"machine/name\" on a paired machine); default: yours" }
             }, "required": ["provider"] }
         },
         {

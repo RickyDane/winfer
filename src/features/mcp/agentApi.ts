@@ -34,7 +34,17 @@ function order(ws: Workspace): Pane[] {
   return [...tiled, ...ws.panes.filter((p) => p.archived)];
 }
 
+const workspaceNamed = (name: string) => useWorkspaces.getState().workspaces.find((w) => w.name.toLowerCase() === name.trim().toLowerCase());
+
 function resolve(ws: Workspace, ref: unknown): Pane {
+  // "workspace/N": another workspace's pane.
+  const slash = typeof ref === "string" ? /^(.+)\/(\d+)$/.exec(ref.trim()) : null;
+  if (slash) {
+    const other = workspaceNamed(slash[1]);
+    if (!other) throw new ToolError(`No workspace “${slash[1]}” here.`);
+    ws = other;
+    ref = slash[2];
+  }
   const panes = order(ws);
   const n = typeof ref === "number" ? ref : /^\d+$/.test(String(ref)) ? Number(ref) : NaN;
   const pane = Number.isNaN(n) ? panes.find((p) => p.id === ref) : panes[n - 1];
@@ -70,6 +80,12 @@ const who = (ws: Workspace, self: Pane | null) => (self ? describe(ws, self) : V
 /** `self` is the calling pane, or null for live voice. */
 async function runWorkspaceTool(ws: Workspace, self: Pane | null, tool: string, a: Record<string, unknown>): Promise<string> {
   const s = useWorkspaces.getState();
+  // list_panes and spawn_agent can name another workspace.
+  if ((tool === "list_panes" || tool === "spawn_agent") && typeof a.workspace === "string" && a.workspace.trim()) {
+    const other = workspaceNamed(a.workspace);
+    if (!other) throw new ToolError(`No workspace “${a.workspace}” here.`);
+    ws = other;
+  }
   switch (tool) {
     case "list_panes": {
       const rows = order(ws).map((p, i) => {

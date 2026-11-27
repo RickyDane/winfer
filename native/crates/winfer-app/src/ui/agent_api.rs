@@ -6,6 +6,7 @@ use crate::model::Workspace;
 use serde_json::json;
 use std::time::Instant;
 use winfer_backend::mcp;
+use crate::voice::HomePane;
 
 /// How long an `ask_user` question waits (the backend's own limit is an hour).
 const ASK_TIMEOUT: Duration = Duration::from_secs(59 * 60);
@@ -94,6 +95,17 @@ fn resolve<'a>(ws: &'a Workspace, reference: &Value) -> Result<&'a Pane, String>
     pane.ok_or_else(|| format!("No pane {} in this workspace. Use list_panes to see them.", reference.as_str().map_or(reference.to_string(), str::to_string)))
 }
 
+/// A pane by number or id in `ws`, or anywhere here as "workspace/N".
+fn resolve_any(s: &AppState, ws: &Workspace, reference: &Value) -> Result<(Workspace, Pane), String> {
+    if let Some((name, n)) = reference.as_str().and_then(|r| r.rsplit_once('/'))
+        && n.trim().parse::<usize>().is_ok()
+    {
+        let w = s.workspace_named(name).ok_or_else(|| format!("No workspace “{name}” on this machine. list_workspaces lists them."))?;
+        return resolve(w, &json!(n.trim())).map(|p| (w.clone(), p.clone()));
+    }
+    resolve(ws, reference).map(|p| (ws.clone(), p.clone()))
+}
+
 fn describe(state: &AppState, ws: &Workspace, pane: &Pane) -> String {
     let index = order(ws).iter().position(|p| p.id == pane.id).unwrap_or(0) + 1;
     format!("pane {index} ({})", state.provider_name(&pane.provider))
@@ -119,49 +131,74 @@ impl Root {
     }
 
     fn run_tool(&mut self, call: &str, tool: &str, pane_id: &str, a: &Value, window: &mut Window, cx: &mut Context<Self>) -> Outcome {
-        let orchestrator = crate::voice::orchestrator_workspace(pane_id).map(str::to_string);
+        let home = crate::voice::home_pane(pane_id);
         if tool == "__plugin_tools" {
             let mut list = self.plugin_agent_tool_list();
             if let Value::Array(tools) = &mut list {
                 tools.extend(super::connect_ui::agent_tools());
-            }
-            // Orchestrators also get winfer's UI actions.
-            if let (Some(_), Value::Array(tools)) = (&orchestrator, &mut list) {
-                tools.extend(self.orchestrator_mcp_tools(cx));
+                // Home's orchestrators also get Home's task tools and winfer's UI actions.
+                if home.is_some() {
+                    tools.extend(self.orchestrator_mcp_tools(pane_id, cx));
+                }
             }
             return Outcome::Done(Ok(list.to_string()));
         }
-        let (ws, me) = {
-            let s = self.state.read(cx);
-            let found = match &orchestrator {
-                // An orchestrator isn't one of the workspace's panes: it stands in for the user.
-                Some(w) => s.workspaces.iter().find(|ws| ws.id == *w).map(|ws| {
-                    let me = Pane { id: pane_id.to_string(), provider: "winfer".into(), cwd: ws.root_dir.clone(), workspace_id: ws.id.clone(), ..Default::default() };
-                    (ws.clone(), me)
-                }),
-                None => s.workspaces.iter().find(|w| w.panes.iter().any(|p| p.id == pane_id)).map(|ws| (ws.clone(), ws.panes.iter().find(|p| p.id == pane_id).cloned().unwrap())),
-            };
-            let Some(found) = found else {
-                return Outcome::Done(Err("The calling pane isn't open in winfer anymore.".to_string()));
-            };
-            found
+        if home.is_some()
+            && let Some(result) = self.home_task_tool(pane_id, tool, a, cx)
+        {
+            return Outcome::Done(result);
+        }
+        // "machine/workspace/N" → "machine:N", the address the other machine resolves.
+        let a = &self.normalize_pane_ref(a);
+        let (ws, me) = match self.caller(pane_id, a, cx) {
+            Ok(found) => found,
+            Err(e) => return Outcome::Done(Err(e)),
         };
-        let who = if orchestrator.is_some() { "Orchestrator".to_string() } else { describe(self.state.read(cx), &ws, &me) };
+        let who = match home {
+            Some(HomePane::Conductor) => "Home".to_string(),
+            Some(HomePane::Task(t)) => self.task(t).map_or_else(|| "Task".to_string(), |t| t.title()),
+            None => describe(self.state.read(cx), &ws, &me),
+        };
+        // spawn_agent into another machine's workspace: Connect's spawn_remote_agent.
+        if tool == "spawn_agent"
+            && let Some(target) = a["workspace"].as_str().map(str::trim).filter(|w| !w.is_empty())
+            && self.state.read(cx).workspace_named(target).is_none()
+        {
+            match self.find_workspace(target, cx) {
+                Ok(super::home::Place::Remote { machine, workspace, .. }) => {
+                    let mut args = a.clone();
+                    args["machine"] = json!(machine);
+                    args["workspace"] = json!(workspace);
+                    return match self.connect_tool(call, "spawn_remote_agent", &args, &who, pane_id, window, cx) {
+                        Some(super::connect_ui::ToolOutcome::Done(result)) => Outcome::Done(result),
+                        Some(super::connect_ui::ToolOutcome::Later) => Outcome::Later,
+                        None => Outcome::Done(Err("Winfer Connect isn't running.".into())),
+                    };
+                }
+                Ok(_) => {}
+                Err(e) => return Outcome::Done(Err(e)),
+            }
+        }
         // Winfer Connect: other machines and their panes (`machine:N`).
         match self.connect_tool(call, tool, a, &who, pane_id, window, cx) {
             Some(super::connect_ui::ToolOutcome::Done(result)) => return Outcome::Done(result),
             Some(super::connect_ui::ToolOutcome::Later) => return Outcome::Later,
             None => {}
         }
-        if let Some(w) = &orchestrator {
+        if let Some(which) = home {
             match tool {
                 "notify_user" => {
-                    self.orchestrator_says(w, a["message"].as_str().unwrap_or_default(), cx);
+                    self.orchestrator_says(pane_id, a["message"].as_str().unwrap_or_default(), cx);
                     return Outcome::Done(Ok("Told the user.".to_string()));
                 }
-                "ask_user" => return Outcome::Done(Err("Nobody sees questions asked this way: put the question in your reply; the voice assistant asks the user.".to_string())),
+                "ask_user" if which != HomePane::Conductor || !self.home_can_ask() => {
+                    return Outcome::Done(Err("Nobody sees questions asked this way: put the question in your reply.".to_string()));
+                }
+                "spawn_agent" if which == HomePane::Conductor => {
+                    return Outcome::Done(Err("Every coding job is a task: use start_task (it starts the agent and its card on Home).".to_string()));
+                }
                 t => {
-                    if let Some(result) = self.orchestrator_action(w, t, a, window, cx) {
+                    if let Some(result) = self.orchestrator_action(pane_id, &ws.id, t, a, window, cx) {
                         return Outcome::Done(result);
                     }
                 }
@@ -247,6 +284,53 @@ impl Root {
         }
     }
 
+    /// The calling pane and the workspace its tools work on. Home's orchestrators aren't panes of
+    /// any workspace: the conductor works on the workspace it names (`workspace`), else the one
+    /// the user is in; a task's orchestrator on its task's workspace.
+    fn caller(&self, pane_id: &str, a: &Value, cx: &App) -> Result<(Workspace, Pane), String> {
+        let s = self.state.read(cx);
+        let stand_in = |ws: &Workspace, cwd: String| Pane { id: pane_id.to_string(), provider: "winfer".into(), cwd, workspace_id: ws.id.clone(), ..Default::default() };
+        match crate::voice::home_pane(pane_id) {
+            Some(HomePane::Conductor) => {
+                let named = a["workspace"].as_str().and_then(|w| s.workspace_named(w));
+                let ws = named.or_else(|| s.active()).or_else(|| s.workspaces.first()).cloned().ok_or("There's no workspace open.")?;
+                let me = stand_in(&ws, super::home::home_dir());
+                Ok((ws, me))
+            }
+            Some(HomePane::Task(t)) => {
+                let task = self.task(t).ok_or("Your task is gone.")?;
+                let ws = task.workspace_id.as_ref().and_then(|w| s.workspaces.iter().find(|x| x.id == *w)).cloned().ok_or("Your task's workspace isn't open anymore.")?;
+                let me = stand_in(&ws, ws.root_dir.clone());
+                Ok((ws, me))
+            }
+            None => s
+                .workspaces
+                .iter()
+                .find(|w| w.panes.iter().any(|p| p.id == pane_id))
+                .map(|ws| (ws.clone(), ws.panes.iter().find(|p| p.id == pane_id).cloned().unwrap()))
+                .ok_or_else(|| "The calling pane isn't open in winfer anymore.".to_string()),
+        }
+    }
+
+    /// `pane` given as "machine/workspace/N" → "machine:N" in that machine's numbering.
+    fn normalize_pane_ref(&self, a: &Value) -> Value {
+        let mut a = a.clone();
+        let Some(r) = a["pane"].as_str() else { return a };
+        let parts: Vec<&str> = r.split('/').map(str::trim).collect();
+        let [machine, workspace, n] = parts[..] else { return a };
+        let (Ok(n), Ok((peer, name, _))) = (n.parse::<usize>(), self.machine(machine)) else { return a };
+        let Some(m) = self.connect.mirrors.get(&peer) else { return a };
+        let Some((ws_id, _)) = m.workspaces.iter().find(|(_, w)| w.eq_ignore_ascii_case(workspace)) else { return a };
+        let order = self.remote_order(&peer);
+        let in_ws: Vec<&super::connect_ui::RemotePane> = order.iter().filter(|p| p.workspace_id == *ws_id).collect();
+        if let Some(target) = n.checked_sub(1).and_then(|i| in_ws.get(i))
+            && let Some(k) = order.iter().position(|p| p.id == target.id)
+        {
+            a["pane"] = json!(format!("{name}:{}", k + 1));
+        }
+        a
+    }
+
     /// The agent tools for live voice: no calling pane, so the user's workspace stands in.
     pub(super) fn run_voice_agent_tool(&mut self, tool: &str, a: &Value, cx: &mut Context<Self>) -> Result<String, String> {
         let (ws, me) = {
@@ -268,34 +352,51 @@ impl Root {
         match tool {
             "list_panes" => {
                 let s = self.state.read(cx);
-                let rows: Vec<String> = order(ws)
-                    .iter()
-                    .enumerate()
-                    .map(|(i, p)| {
-                        let mut parts = vec![format!("{}. {}", i + 1, s.provider_name(&p.provider)), status_name(p.status).to_string()];
-                        if let Some(t) = &p.worktree {
-                            parts.push(format!("branch {}", t.branch));
-                        }
-                        if p.archived {
-                            parts.push("archived".to_string());
-                        }
-                        if p.id == me.id {
-                            parts.push("(you)".to_string());
-                        }
-                        parts.join(" · ")
-                    })
-                    .collect();
-                Ok(format!("Workspace “{}” ({}):\n{}", ws.name, ws.root_dir, rows.join("\n")))
+                let home = crate::voice::home_pane(&me.id) == Some(HomePane::Conductor);
+                let named = a["workspace"].as_str().map(str::trim).filter(|w| !w.is_empty());
+                let list = |ws: &Workspace| -> String {
+                    let rows: Vec<String> = order(ws)
+                        .iter()
+                        .enumerate()
+                        .map(|(i, p)| {
+                            let mut parts = vec![format!("{}. {}", i + 1, s.provider_name(&p.provider)), status_name(p.status).to_string()];
+                            if let Some(t) = &p.worktree {
+                                parts.push(format!("branch {}", t.branch));
+                            }
+                            if p.archived {
+                                parts.push("archived".to_string());
+                            }
+                            if p.id == me.id {
+                                parts.push("(you)".to_string());
+                            }
+                            parts.join(" · ")
+                        })
+                        .collect();
+                    let rows = if rows.is_empty() { "(no panes)".to_string() } else { rows.join("\n") };
+                    format!("Workspace “{}” ({}):\n{rows}", ws.name, ws.root_dir)
+                };
+                if let Some(name) = named {
+                    let w = s.workspace_named(name).ok_or_else(|| format!("No workspace “{name}” on this machine. list_workspaces lists them; list_remote_panes shows another machine's."))?;
+                    return Ok(list(w));
+                }
+                if a["all"] == true || home {
+                    let all: Vec<String> = s.workspaces.iter().filter(|w| w.remote.is_none()).map(list).collect();
+                    return Ok(format!("{}\n\nAddress a pane as \"workspace/N\" (e.g. read_pane \"{}/1\").", all.join("\n\n"), s.workspaces.first().map_or("api", |w| w.name.as_str())));
+                }
+                Ok(list(ws))
             }
+            "list_workspaces" => Ok(self.workspaces_text(cx)),
             "read_pane" => {
-                let pane = resolve(ws, &a["pane"])?;
+                let (ws, pane) = resolve_any(self.state.read(cx), ws, &a["pane"])?;
+                let (ws, pane) = (&ws, &pane);
                 let lines = a["lines"].as_f64().unwrap_or(80.0).clamp(1.0, 400.0) as usize;
                 let session = SESSIONS.get(&pane.id).ok_or_else(|| format!("{} hasn't started yet.", describe(self.state.read(cx), ws, pane)))?;
                 let text = session.read_text(lines);
                 Ok(if text.is_empty() { "(no output yet)".to_string() } else { text })
             }
             "send_to_pane" => {
-                let pane = resolve(ws, &a["pane"])?.clone();
+                let (ws, pane) = resolve_any(self.state.read(cx), ws, &a["pane"])?;
+                let ws = &ws;
                 if pane.id == me.id {
                     return Err("That's your own pane.".to_string());
                 }
@@ -312,6 +413,8 @@ impl Root {
             "spawn_agent" => {
                 let wanted = a["provider"].as_str().unwrap_or_default();
                 let s = self.state.read(cx);
+                let other = a["workspace"].as_str().and_then(|w| s.workspace_named(w)).filter(|w| w.id != ws.id).cloned();
+                let ws = other.as_ref().unwrap_or(ws);
                 let Some(provider) = s.providers.iter().find(|p| p.id == wanted && p.installed).cloned() else {
                     let available: Vec<&str> = s.providers.iter().filter(|p| p.installed).map(|p| p.id.as_str()).collect();
                     return Err(format!("Unknown or uninstalled provider “{wanted}”. Available: {}.", available.join(", ")));
@@ -329,12 +432,14 @@ impl Root {
                     cx.notify();
                     id
                 });
-                if crate::voice::orchestrator_workspace(&me.id).is_some() {
-                    self.orchestrator_owns(&ws.id, &new_id, cx);
+                if let Some(HomePane::Task(t)) = crate::voice::home_pane(&me.id) {
+                    let t = t.to_string();
+                    self.home_owns(&me.id, &new_id, cx);
+                    self.task_gets_pane(&t, &new_id, cx);
                 }
                 let s = self.state.read(cx);
                 let fresh = s.workspaces.iter().find(|w| w.id == ws.id).cloned().unwrap_or_default();
-                if ws.id != s.active_workspace_id {
+                if ws.id != s.active_workspace_id || s.view() != View::Workspace {
                     self.start_detached(&new_id, cx);
                 }
                 let index = order(&fresh).iter().position(|p| p.id == new_id).unwrap_or(0) + 1;

@@ -212,6 +212,7 @@ pub(super) fn agent_tools() -> Vec<Value> {
     // This machine's workspaces: with or without Connect.
     let mut tools = vec![
         json!({"name": "add_workspace", "description": "Open a workspace on this machine: an existing folder (path), or a git repository it clones first (git_url, optional branch and parent folder).", "inputSchema": {"type": "object", "properties": workspace_props(None)}}),
+        json!({"name": "list_workspaces", "description": "List every workspace on this machine and on the paired machines: name, folder, its agents (working, needing input, failed). Address panes as \"workspace/N\" here and \"machine/workspace/N\" on another machine in read_pane and send_to_pane; spawn_agent and list_panes take a workspace.", "inputSchema": {"type": "object", "properties": {}}}),
         json!({"name": "remove_workspace", "description": "Remove a workspace from this machine: its panes close; the folder and worktrees stay. Not the one you run in.", "inputSchema": {"type": "object", "properties": {"workspace": {"type": "string", "description": "Workspace name"}}, "required": ["workspace"]}}),
     ];
     if crate::connect::get().is_none_or(|c| !c.status().enabled) {
@@ -624,8 +625,11 @@ impl Root {
             }
             "term.snapshot" | "term.out" | "term.exit" | "term.reclaim" => self.on_term_reply(&peer, msg, cx),
             "tool.result" => {
-                if let Some(call) = self.connect.tool_calls.remove(msg["id"].as_str().unwrap_or_default()) {
+                let id = msg["id"].as_str().unwrap_or_default();
+                if let Some(call) = self.connect.tool_calls.remove(id) {
                     super::agent_api::respond(&call, msg["ok"] == true, msg["text"].as_str().unwrap_or_default().to_string());
+                } else {
+                    self.home_tool_result(id, msg["ok"] == true, msg["text"].as_str().unwrap_or_default(), cx);
                 }
             }
             "ack" | "error" => {
@@ -902,7 +906,7 @@ impl Root {
     // ---- agents across machines ----
 
     /// A paired machine by name (or id): exact, then case-insensitive, then a unique prefix.
-    fn machine(&self, name: &str) -> Result<(String, String, bool), String> {
+    pub(super) fn machine(&self, name: &str) -> Result<(String, String, bool), String> {
         let connect = crate::connect::get().ok_or("Winfer Connect isn't running.")?;
         let peers = connect.peers();
         // Any case and any whitespace: macOS names often have a no-break space ("Mac\u{a0}Studio").
@@ -920,7 +924,7 @@ impl Root {
     }
 
     /// A paired machine's panes in the order list_remote_panes numbers them.
-    fn remote_order(&self, peer: &str) -> Vec<RemotePane> {
+    pub(super) fn remote_order(&self, peer: &str) -> Vec<RemotePane> {
         let Some(m) = self.connect.mirrors.get(peer) else { return Vec::new() };
         let mut out = Vec::new();
         for (ws, _) in &m.workspaces {
@@ -1112,7 +1116,7 @@ impl Root {
             "remove_workspace" => {
                 let key = a["workspace"].as_str().unwrap_or_default();
                 let s = self.state.read(cx);
-                let mine = s.pane(pane).map(|p| p.workspace_id.clone()).or_else(|| crate::voice::orchestrator_workspace(pane).map(str::to_string));
+                let mine = s.pane(pane).map(|p| p.workspace_id.clone());
                 if mine.is_some() && s.workspace_named(key).map(|w| w.id.clone()) == mine {
                     return Some(ToolOutcome::Done(Err("That's the workspace you're running in: it can't be removed from inside it.".into())));
                 }

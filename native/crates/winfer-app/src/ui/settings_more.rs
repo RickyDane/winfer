@@ -382,8 +382,7 @@ impl Root {
                 .child(card_row(c, "What it does", Some("Voice hands it everything that needs looking into or several steps: what changed, planning work and giving it to agents, following them up and merging. It runs winfer code with full access, without asking, except to merge, discard or close.".into()), div()))
                 .child(card_row(c, "Model", Some("A winfer code model (e.g. claude/opus). Empty uses winfer code's default. Applies to the next orchestrator.".into()), div().w(px(190.0)).child(Input::new(&orchestrator_model))).border_t_1().border_color(c.border))
                 .child(card_row(c, "Conversation", Some(if running { "Running for this workspace; it remembers what you asked.".into() } else { "Starts with your first request.".into() }), btn(c, "orchestrator-fresh", Some(IconName::RotateCcw), "Start fresh", Btn::Plain, running).on_click(cx.listener(|this, _, _, cx| {
-                    let ws = this.state.read(cx).active_workspace_id.clone();
-                    this.stop_orchestrator(&ws, cx);
+                    this.stop_conductor(cx);
                 }))).border_t_1().border_color(c.border)))
     }
 

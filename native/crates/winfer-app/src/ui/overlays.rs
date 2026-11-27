@@ -123,6 +123,7 @@ fn palette_entries(s: &AppState, recipes: Vec<(String, String)>) -> Vec<Entry> {
         add(&format!("Restore from archive: {}", s.pane_label(p)), C::Archive { target: PaneRef::Id(p.id.clone()), restore: true });
     }
     add("Archived sessions", C::View(ViewTarget::Set(View::Archive)));
+    add("Home: orchestrator for every workspace", C::View(ViewTarget::Set(View::Home)));
     add("Overview of all workspaces", C::View(ViewTarget::Set(View::Overview)));
     add("Back to the workspace view", C::View(ViewTarget::Set(View::Workspace)));
     add("Session progress", overlay(Overlay::Progress));

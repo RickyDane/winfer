@@ -178,6 +178,8 @@ pub enum Overlay {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum View {
     Workspace,
+    /// Home: the orchestrator above every workspace (`ui/home_view.rs`).
+    Home,
     Overview,
     Archive,
     Page(String),
@@ -186,6 +188,7 @@ pub enum View {
 impl View {
     fn parse(s: &str) -> Self {
         match s {
+            "home" => Self::Home,
             "overview" => Self::Overview,
             "archive" => Self::Archive,
             s => s.strip_prefix("page:").map_or(Self::Workspace, |p| Self::Page(p.to_string())),
@@ -195,6 +198,7 @@ impl View {
     fn name(&self) -> String {
         match self {
             Self::Workspace => "workspace".into(),
+            Self::Home => "home".into(),
             Self::Overview => "overview".into(),
             Self::Archive => "archive".into(),
             Self::Page(p) => format!("page:{p}"),

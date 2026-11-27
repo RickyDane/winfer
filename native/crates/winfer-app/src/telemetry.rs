@@ -139,7 +139,7 @@ impl winfer_core::hooks::Hooks for CoreHooks {
         crate::backend::app().get_webview_window("main").and_then(|w| w.is_focused().ok()).unwrap_or(true)
     }
     fn orchestrated(&self, pane_id: &str) -> bool {
-        crate::voice::orchestrator_workspace(pane_id).is_some()
+        crate::voice::is_orchestrator(pane_id)
     }
 }
 

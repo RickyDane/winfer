@@ -534,6 +534,23 @@ impl Root {
     }
 
     /// `usage_status`.
+    /// Each signed-in account's overall usage left, for Home: (label, percent).
+    pub(super) fn usage_left_rows(&self, cx: &App) -> Vec<(String, f64)> {
+        let now = now_ms();
+        let s = self.state.read(cx);
+        let several = |provider: &str| self.usage.accounts.iter().filter(|a| a.provider == provider && a.signed_in).count() > 1;
+        self.usage
+            .accounts
+            .iter()
+            .filter(|a| a.signed_in)
+            .filter_map(|a| {
+                let left = winfer_core::usage::overall_left(self.usage.snapshots.get(&winfer_core::usage::usage_key(&a.id)), now)?;
+                let name = s.provider_name(&a.provider);
+                Some((if several(&a.provider) { format!("{name} · {}", a.label) } else { name }, left))
+            })
+            .collect()
+    }
+
     pub(super) fn tool_usage_status(&mut self, me: &Pane, cx: &App) -> String {
         let (provider, key) = self.limits_of(me);
         let mut lines = vec![self.usage_report(&provider, &key, cx)];

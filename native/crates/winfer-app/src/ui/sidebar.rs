@@ -492,7 +492,9 @@ impl Root {
             .on_click(cx.listener(|this, _, window, cx| this.execute(Command::Overlay { overlay: Overlay::Review, provider: None }, window, cx)));
         let history = self.nav_tab("nav-history", IconName::Clock, "History", history_tip, 0,labels, c)
             .on_click(cx.listener(|this, _, window, cx| this.execute(Command::Overlay { overlay: Overlay::History, provider: None }, window, cx)));
+        let home_nav = self.render_home_nav(false, c, cx);
         let top = div().flex().flex_col().gap_2().px_2p5().pt_2p5().pb_2()
+            .child(home_nav)
             .child(div().flex().gap_px().p(px(2.0)).rounded(px(8.0)).bg(c.app).border_1().border_color(c.edge).child(sessions).child(review).child(history));
 
         // Needs you: approve or open waiting agents without finding their pane.
@@ -767,7 +769,9 @@ impl Root {
             .hover(move |d| d.bg(c.hover).text_color(c.fg))
             .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
             .child(Icon::new(icon).size(px(15.0)));
+        let home_nav = self.render_home_nav(true, c, cx);
         let mut top = div().flex().flex_col().items_center().gap_1().pt_2p5().pb_2()
+            .child(home_nav)
             .child(rail_button("rail-search".into(), IconName::Search, "Search or jump to…".into()).on_click(cx.listener(|this, _, window, cx| this.execute(Command::Palette(None), window, cx))))
             .child(rail_button("rail-sessions".into(), IconName::Activity, "Sessions".into()).on_click(cx.listener(|this, _, window, cx| this.execute(Command::Overlay { overlay: Overlay::Progress, provider: None }, window, cx))));
         top = top.child(rail_button("rail-review".into(), IconName::Inbox, "Review".into())

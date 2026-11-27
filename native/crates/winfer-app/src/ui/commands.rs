@@ -159,6 +159,7 @@ pub static BINDINGS: LazyLock<Vec<Binding>> = LazyLock::new(|| {
     add("Mod+Ctrl+Left", None, "Make pane narrower".into(), "Layout", true, None, fixed(resize(SplitDir::Row, -RESIZE_STEP)));
     add("Mod+Ctrl+Down", None, "Make pane taller".into(), "Layout", true, None, fixed(resize(SplitDir::Col, RESIZE_STEP)));
     add("Mod+Ctrl+Up", None, "Make pane shorter".into(), "Layout", true, None, fixed(resize(SplitDir::Col, -RESIZE_STEP)));
+    add("Mod+Shift+M", Some("Ctrl+Shift+Alt+M"), "Home: orchestrator for every workspace".into(), "Workspaces", false, None, fixed(C::View(ViewTarget::Set(View::Home))));
     add("Mod+Shift+O", Some("Ctrl+Shift+Alt+O"), "Overview of all workspaces".into(), "Workspaces", false, None, fixed(C::View(ViewTarget::Toggle)));
     add("Mod+Shift+Y", Some("Ctrl+Shift+Alt+Y"), "Archived sessions".into(), "Workspaces", false, None, fixed(C::View(ViewTarget::Set(View::Archive))));
     add("Mod+Shift+A", Some("Ctrl+Shift+Alt+A"), "Archive or restore pane".into(), "Panes", false, None, fixed(C::ToggleArchiveFocused));

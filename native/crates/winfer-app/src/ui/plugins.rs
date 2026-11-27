@@ -251,6 +251,7 @@ fn view(name: &str) -> Option<ViewTarget> {
     Some(match name {
         "toggle" => ViewTarget::Toggle,
         "workspace" => ViewTarget::Set(View::Workspace),
+        "home" => ViewTarget::Set(View::Home),
         "overview" => ViewTarget::Set(View::Overview),
         "archive" => ViewTarget::Set(View::Archive),
         page => ViewTarget::Set(View::Page(page.strip_prefix("page:")?.to_string())),

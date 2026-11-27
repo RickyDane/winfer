@@ -98,8 +98,10 @@ mod updates_ui;
 pub mod voice_tools;
 #[path = "voice_ui.rs"]
 mod voice_ui;
-#[path = "voice_orchestrator.rs"]
-mod voice_orchestrator;
+#[path = "home.rs"]
+mod home;
+#[path = "home_view.rs"]
+mod home_view;
 
 use agent_api::PendingQuestions;
 use commands::Command;
@@ -357,7 +359,7 @@ pub struct Root {
     pub(super) usage_info_open: bool,
     voice: voice_ui::VoiceUi,
     /// Live voice's orchestrators, one per workspace that has used one.
-    orch: voice_orchestrator::Orchestrators,
+    home: home::Home,
     /// The tile area's bounds as of the last frame.
     tile_bounds: Bounds<Pixels>,
     drag: Option<Drag>,
@@ -476,7 +478,7 @@ impl Root {
                     this.tick_worktrees(cx);
                     this.tick_failover(cx);
                     this.deliver_bg_notes(cx);
-                    this.tick_orchestrators(cx);
+                    this.tick_home(cx);
                     this.expire_questions(cx);
                     this.tick_phone_panel(cx);
                 }).is_err() {
@@ -566,7 +568,7 @@ impl Root {
         let viewer = cx.new(|cx| ViewerPanel::new(viewer_state, cx));
         let android_state = state.clone();
         let android = cx.new(|cx| AndroidPanel::new(android_state, cx));
-        Self { android, orchestration: Default::default(), progress_ui: Default::default(), plugins: Default::default(), menu: None, sidebar: Default::default(), meters: Default::default(), search: None, worktrees: Default::default(), failover: Default::default(), usage_page: Default::default(), more: Default::default(), plugin_page: Default::default(), skill_page: Default::default(), harness_page: Default::default(), connect_page: Default::default(), connect: Default::default(), mobile: Default::default(), wakes_loaded: false, usage: Default::default(), review: review::ReviewStore { queue_tests: true, ..Default::default() }, review_opened: false, history: None, settings: None, recording: None, suspend_saving: false, viewer, side_open: Vec::new(), side_shown: None, #[cfg(debug_assertions)] dev_layer_opened: false, new_pane: None, model_dialog: None, diff_dialog: None, models: HashMap::new(), new_menu: Default::default(), pane_note: None, welcome: Default::default(), toasts: Vec::new(), questions: Default::default(), question_serial: 0, question_input: None, question_picked: Vec::new(), palette_input: None, palette_entries: Vec::new(), palette_selected: 0, bg_notes: HashMap::new(), bg_tasks: HashMap::new(), bg_popover: None, bg_ticking: false, applied_theme: None, browser, state, events: tx, terminals: HashMap::new(), code_models: HashMap::new(), code_views: HashMap::new(), code_choice: HashMap::new(), browser_window: None, updates: Default::default(), usage_info_open: false, voice: Default::default(), orch: Default::default(), tile_bounds: Bounds::default(), drag: None, save_task: None, last_saved: String::new(), focused_view: None, focus: cx.focus_handle(), workspace_focus: cx.focus_handle(), focus_outside: 0 }
+        Self { android, orchestration: Default::default(), progress_ui: Default::default(), plugins: Default::default(), menu: None, sidebar: Default::default(), meters: Default::default(), search: None, worktrees: Default::default(), failover: Default::default(), usage_page: Default::default(), more: Default::default(), plugin_page: Default::default(), skill_page: Default::default(), harness_page: Default::default(), connect_page: Default::default(), connect: Default::default(), mobile: Default::default(), wakes_loaded: false, usage: Default::default(), review: review::ReviewStore { queue_tests: true, ..Default::default() }, review_opened: false, history: None, settings: None, recording: None, suspend_saving: false, viewer, side_open: Vec::new(), side_shown: None, #[cfg(debug_assertions)] dev_layer_opened: false, new_pane: None, model_dialog: None, diff_dialog: None, models: HashMap::new(), new_menu: Default::default(), pane_note: None, welcome: Default::default(), toasts: Vec::new(), questions: Default::default(), question_serial: 0, question_input: None, question_picked: Vec::new(), palette_input: None, palette_entries: Vec::new(), palette_selected: 0, bg_notes: HashMap::new(), bg_tasks: HashMap::new(), bg_popover: None, bg_ticking: false, applied_theme: None, browser, state, events: tx, terminals: HashMap::new(), code_models: HashMap::new(), code_views: HashMap::new(), code_choice: HashMap::new(), browser_window: None, updates: Default::default(), usage_info_open: false, voice: Default::default(), home: Default::default(), tile_bounds: Bounds::default(), drag: None, save_task: None, last_saved: String::new(), focused_view: None, focus: cx.focus_handle(), workspace_focus: cx.focus_handle(), focus_outside: 0 }
     }
 
     fn schedule_save(&mut self, cx: &mut Context<Self>) {
@@ -1871,6 +1873,7 @@ impl Render for Root {
         }
         if self.state.read(cx).hydrated && !std::mem::replace(&mut self.wakes_loaded, true) {
             self.load_wakes(cx);
+            self.home_on_launch(cx);
         }
         self.sync_dialogs(window, cx);
         self.sync_orchestration(window, cx);
@@ -1888,7 +1891,18 @@ impl Render for Root {
             (s.theme.clone(), s.view(), s.sidebar_open, s.browser_open, s.browser_width as f32, tree, zoomed)
         };
         let c = theme::colors(&theme_id);
+        // Home's opening brief: when the user comes to Home after a while away.
+        let home_on = view == View::Home;
+        if home_on != self.home.shown {
+            self.home.shown = home_on;
+            if home_on {
+                self.home_opened(cx);
+            } else {
+                self.home_closed();
+            }
+        }
         let tiles = match view {
+            View::Home => self.render_home(&c, window, cx),
             View::Archive => self.render_archive(&c, window, cx),
             View::Page(key) => self.render_plugin_page(&key, &c, cx),
             _ => self.render_tiles(tree, zoomed, &c, window, cx),
