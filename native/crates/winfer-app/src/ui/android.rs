@@ -11,6 +11,7 @@ use crate::theme::{self, Colors};
 use base64::Engine as _;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
+use gpui_kit::component::input::{Escape as InputEscape, Input, InputEvent, InputState, MoveDown, MoveUp};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use openh264::decoder::Decoder;
@@ -115,6 +116,55 @@ impl Pick {
             Pick::Hosted { id, .. } => id,
         }
     }
+}
+
+/// A device the selected machine offers: its name, and what and where it is.
+#[derive(Clone)]
+struct Device {
+    pick: Pick,
+    name: String,
+    detail: String,
+}
+
+/// The panel's two pickers.
+#[derive(Clone, Copy, PartialEq)]
+enum Combo {
+    Machine,
+    Device,
+}
+
+/// What a picker's row selects.
+#[derive(Clone)]
+enum Target {
+    Machine(Option<String>),
+    Device(Pick),
+}
+
+/// A picker's row; `detail` is its second line (empty: none), `on` the one selected now.
+struct Choice {
+    target: Target,
+    icon: Icon,
+    name: String,
+    detail: String,
+    on: bool,
+}
+
+/// The picker that is open.
+struct OpenCombo {
+    which: Combo,
+    search: Entity<InputState>,
+    /// The row Enter picks, moved by the arrow keys and the pointer.
+    cursor: usize,
+    scroll: ScrollHandle,
+    /// Had the keyboard before, and gets it back.
+    before: Option<FocusHandle>,
+    _events: Subscription,
+}
+
+/// Whether every word of `query` is somewhere in `text`, in any order and case.
+fn matches_query(text: &str, query: &str) -> bool {
+    let text = text.to_lowercase();
+    query.to_lowercase().split_whitespace().all(|word| text.contains(word))
 }
 
 /// A stream from `devices.rs` (another machine's, or this Mac's simulator).
@@ -241,6 +291,9 @@ pub struct AndroidPanel {
     /// Where the phone's finger went down, for a tap or swipe without scrcpy.
     phone_press: Option<(f32, f32, Instant)>,
     focus: FocusHandle,
+    combo: Option<OpenCombo>,
+    /// A click outside just closed this picker: that click on its button must not reopen it.
+    dismissed: Option<(Combo, Instant)>,
     _poll: Task<()>,
 }
 
@@ -445,7 +498,7 @@ impl AndroidPanel {
             }
         });
         let machine = state.read(cx).rest.get("deviceMachine").and_then(Value::as_str).map(str::to_string);
-        Self { state, visible: false, status: None, starting: None, error: None, mirror: None, machine, lists: HashMap::new(), hosted: None, listing: HashSet::new(), forms: HashMap::new(), restart: 0, latest: Default::default(), shown: None, area: Bounds::default(), press: None, touching: false, last_move: None, scroll_pending: None, last_scroll: None, phone: false, phone_press: None, focus: cx.focus_handle(), _poll: poll }
+        Self { state, visible: false, status: None, starting: None, error: None, mirror: None, machine, lists: HashMap::new(), hosted: None, listing: HashSet::new(), forms: HashMap::new(), restart: 0, latest: Default::default(), shown: None, area: Bounds::default(), press: None, touching: false, last_move: None, scroll_pending: None, last_scroll: None, phone: false, phone_press: None, focus: cx.focus_handle(), combo: None, dismissed: None, _poll: poll }
     }
 
     /// Reads the device list of `machine` (None: this machine's adb devices and simulators).
@@ -531,8 +584,8 @@ impl AndroidPanel {
         self.sync_device(cx);
     }
 
-    /// The selected machine's devices that can be mirrored, with their labels.
-    fn picks(&self) -> Vec<(Pick, String)> {
+    /// The selected machine's devices that can be mirrored.
+    fn picks(&self) -> Vec<Device> {
         let mut out = Vec::new();
         let list = self.lists.get(&self.machine).and_then(|l| l.as_ref().ok());
         let android: Vec<Value> = match &self.machine {
@@ -542,19 +595,19 @@ impl AndroidPanel {
         for d in android {
             let serial = d["serial"].as_str().unwrap_or_default().to_string();
             let model = d["model"].as_str().unwrap_or_default().to_string();
-            let label = format!("{model}{} · {serial}", if d["emulator"] == true { " (emulator)" } else { "" });
-            out.push((
-                match &self.machine {
-                    None => Pick::Local(serial),
-                    Some(m) => Pick::Hosted { machine: Some(m.clone()), platform: "android", id: serial, name: model },
-                },
-                label,
-            ));
+            let detail = if d["emulator"] == true { format!("Emulator · {serial}") } else { serial.clone() };
+            let name = if model.is_empty() { serial.clone() } else { model.clone() };
+            let pick = match &self.machine {
+                None => Pick::Local(serial),
+                Some(m) => Pick::Hosted { machine: Some(m.clone()), platform: "android", id: serial, name: model },
+            };
+            out.push(Device { pick, name, detail });
         }
         for d in list.iter().flat_map(|l| l["ios"]["devices"].as_array().into_iter().flatten()).filter(|d| d["booted"] == true) {
             let name = d["name"].as_str().unwrap_or_default().to_string();
-            let label = format!("{name} (Simulator, {})", d["runtime"].as_str().unwrap_or("iOS"));
-            out.push((Pick::Hosted { machine: self.machine.clone(), platform: "ios", id: d["udid"].as_str().unwrap_or_default().to_string(), name }, label));
+            let detail = format!("Simulator · {}", d["runtime"].as_str().unwrap_or("iOS"));
+            let pick = Pick::Hosted { machine: self.machine.clone(), platform: "ios", id: d["udid"].as_str().unwrap_or_default().to_string(), name: name.clone() };
+            out.push(Device { pick, name, detail });
         }
         out
     }
@@ -565,6 +618,8 @@ impl AndroidPanel {
         self.visible = visible;
         if visible {
             self.ask_forms(cx);
+        } else {
+            self.combo = None;
         }
         self.live_changed(was, cx);
     }
@@ -599,19 +654,19 @@ impl AndroidPanel {
     }
 
     /// The device shown: the one picked last on this machine, else the first.
-    fn current(&self, cx: &App) -> Option<(Pick, String)> {
+    fn current(&self, cx: &App) -> Option<Device> {
         let picks = self.picks();
         let rest = &self.state.read(cx).rest;
         let saved = rest.get("devicePick").filter(|p| p["machine"].as_str() == self.machine.as_deref()).and_then(|p| p["id"].as_str());
         let saved = saved.or(if self.machine.is_none() { rest.get("androidSerial").and_then(Value::as_str) } else { None });
-        picks.iter().find(|(p, _)| Some(p.id()) == saved).or(picks.first()).cloned()
+        picks.iter().find(|d| Some(d.pick.id()) == saved).or(picks.first()).cloned()
     }
 
     fn sync_device(&mut self, cx: &mut Context<Self>) {
         if !self.live() {
             return;
         }
-        match self.current(cx).map(|(p, _)| p) {
+        match self.current(cx).map(|d| d.pick) {
             Some(Pick::Local(serial)) => {
                 if self.hosted.is_none() && self.mirror.as_ref().map(|m| &m.serial) == Some(&serial) {
                     return;
@@ -977,7 +1032,7 @@ impl AndroidPanel {
             "adb": status["adb"],
             "devices": status["devices"],
             "avds": status["avds"],
-            "current": self.current(cx).and_then(|(p, _)| match p {
+            "current": self.current(cx).and_then(|d| match d.pick {
                 Pick::Local(serial) => Some(serial),
                 Pick::Hosted { .. } => None,
             }),
@@ -1259,6 +1314,183 @@ impl AndroidPanel {
             .child(div().ml_2().text_size(px(10.0)).text_color(c.subtle).child(mode)))
     }
 
+    /// This machine and the paired ones that are online, plus the selected one if it isn't.
+    fn machine_choices(&self) -> Vec<Choice> {
+        let online = machines();
+        let offline = self.machine.clone().filter(|m| !online.iter().any(|(id, _)| id == m)).map(|m| {
+            let name = format!("{} (offline)", crate::connect::peer_name(&m).unwrap_or_else(|| "machine".into()));
+            (Some(m), name)
+        });
+        let servers: HashSet<String> = crate::connect::get().map(|connect| connect.peers().into_iter().filter(|p| p.kind == winfer_connect::pairing::Kind::Server).map(|p| p.peer_id).collect()).unwrap_or_default();
+        std::iter::once((None, "This machine".to_string()))
+            .chain(online.into_iter().map(|(id, name)| (Some(id), name)))
+            .chain(offline)
+            .map(|(machine, name)| {
+                let form = self.forms.get(&machine).and_then(Option::as_deref);
+                // This machine's name isn't its computer's: only what it said picks its icon.
+                let icon = machine_icon(form, if machine.is_some() { &name } else { "" }, machine.as_ref().is_some_and(|m| servers.contains(m)));
+                Choice { on: self.machine == machine, target: Target::Machine(machine), icon, name, detail: String::new() }
+            })
+            .collect()
+    }
+
+    fn device_choices(&self, cx: &App) -> Vec<Choice> {
+        let current = self.current(cx).map(|d| d.pick);
+        self.picks().into_iter().map(|d| Choice { on: current.as_ref() == Some(&d.pick), target: Target::Device(d.pick), icon: Icon::new(IconName::Smartphone), name: d.name, detail: d.detail }).collect()
+    }
+
+    /// A picker's rows that match its search.
+    fn found(&self, which: Combo, query: &str, cx: &App) -> Vec<Choice> {
+        let all = match which {
+            Combo::Machine => self.machine_choices(),
+            Combo::Device => self.device_choices(cx),
+        };
+        all.into_iter().filter(|o| matches_query(&format!("{} {}", o.name, o.detail), query)).collect()
+    }
+
+    fn toggle_combo(&mut self, which: Combo, window: &mut Window, cx: &mut Context<Self>) {
+        if self.dismissed.take().is_some_and(|(w, at)| w == which && at.elapsed() < Duration::from_millis(300)) {
+            return;
+        }
+        if self.combo.as_ref().is_some_and(|o| o.which == which) {
+            return self.close_combo(window, cx);
+        }
+        let hint = match which {
+            Combo::Machine => "Search machines",
+            Combo::Device => "Search devices",
+        };
+        let search = cx.new(|cx| InputState::new(window, cx).placeholder(hint));
+        let events = cx.subscribe_in(&search, window, |this, _, event: &InputEvent, window, cx| match event {
+            InputEvent::Change => this.reset_cursor(cx),
+            InputEvent::PressEnter { .. } => this.choose_cursor(window, cx),
+            _ => {}
+        });
+        let before = self.combo.take().and_then(|o| o.before).or_else(|| window.focused(cx));
+        search.read(cx).focus_handle(cx).focus(window, cx);
+        self.combo = Some(OpenCombo { which, search, cursor: 0, scroll: ScrollHandle::new(), before, _events: events });
+        self.reset_cursor(cx);
+    }
+
+    fn close_combo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(open) = self.combo.take() else { return };
+        if let Some(before) = open.before {
+            before.focus(window, cx);
+        }
+        cx.notify();
+    }
+
+    /// Puts the cursor on the selected row, or on the first match once something is searched.
+    fn reset_cursor(&mut self, cx: &mut Context<Self>) {
+        let Some((which, query)) = self.combo.as_ref().map(|o| (o.which, o.search.read(cx).value().to_string())) else { return };
+        let at = if query.trim().is_empty() { self.found(which, "", cx).iter().position(|o| o.on).unwrap_or(0) } else { 0 };
+        if let Some(open) = self.combo.as_mut() {
+            open.cursor = at;
+            open.scroll.scroll_to_item(at);
+        }
+        cx.notify();
+    }
+
+    fn move_cursor(&mut self, down: bool, cx: &mut Context<Self>) {
+        let Some((which, query)) = self.combo.as_ref().map(|o| (o.which, o.search.read(cx).value().to_string())) else { return };
+        let last = self.found(which, &query, cx).len().saturating_sub(1);
+        if let Some(open) = self.combo.as_mut() {
+            open.cursor = if down { (open.cursor + 1).min(last) } else { open.cursor.min(last).saturating_sub(1) };
+            open.scroll.scroll_to_item(open.cursor);
+        }
+        cx.notify();
+    }
+
+    fn choose_cursor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((which, query, cursor)) = self.combo.as_ref().map(|o| (o.which, o.search.read(cx).value().to_string(), o.cursor)) else { return };
+        let mut found = self.found(which, &query, cx);
+        if found.is_empty() {
+            return;
+        }
+        let target = found.swap_remove(cursor.min(found.len() - 1)).target;
+        self.choose(target, window, cx);
+    }
+
+    fn choose(&mut self, target: Target, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_combo(window, cx);
+        match target {
+            Target::Machine(machine) => self.pick_machine(machine, cx),
+            Target::Device(pick) => self.pick(&pick, cx),
+        }
+        cx.notify();
+    }
+
+    /// A picker: a button naming what's selected; open, a search field over the matching rows.
+    fn render_combo(&self, which: Combo, choices: Vec<Choice>, c: Colors, cx: &mut Context<Self>) -> Div {
+        let key = which as usize;
+        let open = self.combo.as_ref().filter(|o| o.which == which);
+        let (icon, name) = choices.into_iter().find(|o| o.on).map_or_else(|| (Icon::new(IconName::Smartphone), String::new()), |o| (o.icon, o.name));
+        let border = if open.is_some() { Hsla { a: 0.45, ..c.accent } } else { c.edge };
+        let trigger = div().id(("device-combo", key)).w_full().h(px(28.0)).flex().items_center().gap_1p5().rounded_md().border_1().border_color(border).bg(c.raised).px_2().text_color(c.fg).cursor_pointer().hover(move |d| d.bg(c.hover))
+            .on_click(cx.listener(move |this, _, window, cx| this.toggle_combo(which, window, cx)))
+            .child(icon.size(px(12.0)).flex_shrink_0().text_color(c.muted))
+            .child(div().flex_1().min_w_0().truncate().child(name))
+            .child(Icon::new(IconName::ChevronDown).size(px(12.0)).flex_shrink_0().text_color(c.subtle));
+        let combo = div().relative().flex_1().min_w_0().child(trigger);
+        let Some(open) = open else { return combo };
+        let query = open.search.read(cx).value().to_string();
+        let found = self.found(which, &query, cx);
+        let cursor = open.cursor.min(found.len().saturating_sub(1));
+        let mut list = div().id(("device-combo-list", key)).max_h(px(260.0)).overflow_y_scroll().track_scroll(&open.scroll).flex().flex_col().p_1();
+        if found.is_empty() {
+            let what = if which == Combo::Machine { "machine" } else { "device" };
+            list = list.child(div().px_2().py_3().text_center().text_color(c.subtle).child(format!("No {what} matches “{}”", query.trim())));
+        }
+        for (i, choice) in found.into_iter().enumerate() {
+            let Choice { target, icon, name, detail, on } = choice;
+            list = list.child(div().id(("device-combo-option", i)).flex().flex_shrink_0().items_center().gap_2().rounded_md().px_2().py_1p5().cursor_pointer()
+                .when(i == cursor, |d| d.bg(c.hover))
+                .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                    if let Some(o) = this.combo.as_mut().filter(|o| o.cursor != i) {
+                        o.cursor = i;
+                        cx.notify();
+                    }
+                }))
+                .on_click(cx.listener(move |this, _, window, cx| this.choose(target.clone(), window, cx)))
+                .child(icon.size(px(13.0)).flex_shrink_0().text_color(if on { c.accent } else { c.muted }))
+                .child(div().flex_1().min_w_0().flex().flex_col()
+                    .child(div().truncate().text_color(c.fg).when(on, |d| d.font_weight(FontWeight::MEDIUM)).child(name))
+                    .when(!detail.is_empty(), |d| d.child(div().truncate().text_size(px(10.0)).text_color(c.subtle).child(detail))))
+                .when(on, |d| d.child(Icon::new(IconName::Check).size(px(13.0)).flex_shrink_0().text_color(c.accent))));
+        }
+        let search = div().flex().items_center().gap_2().h(px(34.0)).px_2p5().border_b_1().border_color(c.edge)
+            .child(Icon::new(IconName::Search).size(px(13.0)).flex_shrink_0().text_color(c.subtle))
+            .child(div().flex_1().min_w_0().child(Input::new(&open.search).appearance(false).text_size(px(12.0))))
+            .when(!query.is_empty(), |d| d.child(div().id(("device-combo-clear", key)).rounded_sm().p_0p5().text_color(c.subtle).cursor_pointer().hover(move |d| d.bg(c.hover).text_color(c.fg))
+                .on_click(cx.listener(|this, _, window, cx| {
+                    let Some(search) = this.combo.as_ref().map(|o| o.search.clone()) else { return };
+                    search.update(cx, |s, cx| s.set_value("", window, cx));
+                    this.reset_cursor(cx);
+                }))
+                .child(Icon::new(IconName::X).size(px(12.0)))));
+        let panel = div().id(("device-combo-pop", key)).w(px(280.0)).flex().flex_col().overflow_hidden().rounded_lg().border_1().border_color(c.edge).bg(c.raised).shadow_lg().text_xs()
+            .occlude()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_mouse_down_out(cx.listener(move |this, _, window, cx| {
+                this.dismissed = Some((which, Instant::now()));
+                this.close_combo(window, cx);
+            }))
+            .capture_action(cx.listener(|this, _: &MoveDown, _, cx| {
+                cx.stop_propagation();
+                this.move_cursor(true, cx);
+            }))
+            .capture_action(cx.listener(|this, _: &MoveUp, _, cx| {
+                cx.stop_propagation();
+                this.move_cursor(false, cx);
+            }))
+            .capture_action(cx.listener(|this, _: &InputEscape, window, cx| {
+                cx.stop_propagation();
+                this.close_combo(window, cx);
+            }))
+            .child(search)
+            .child(list);
+        combo.child(deferred(anchored().snap_to_window_with_margin(px(8.0)).child(div().pt_1().child(panel))).with_priority(10))
+    }
+
     fn reconnect(&mut self, cx: &mut Context<Self>) {
         if self.hosted.take().is_some() {
             *self.latest.lock() = None;
@@ -1274,54 +1506,107 @@ impl AndroidPanel {
 impl Render for AndroidPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let c = theme::colors(&self.state.read(cx).theme);
-        let machines = machines();
-        let chip = |id: (&'static str, usize), on: bool, icon: Icon| div().id(id).flex().flex_shrink_0().items_center().gap_1().truncate().rounded_md().border_1().px_1p5().py_0p5().cursor_pointer().when(on, |d| d.border_color(c.accent).text_color(c.fg)).when(!on, |d| d.border_color(c.edge).text_color(c.muted)).child(icon.size(px(12.0)));
-        let servers: HashSet<String> = crate::connect::get().map(|connect| connect.peers().into_iter().filter(|p| p.kind == winfer_connect::pairing::Kind::Server).map(|p| p.peer_id).collect()).unwrap_or_default();
-        let icon = |machine: Option<&String>, name: &str| {
-            let form = self.forms.get(&machine.cloned()).and_then(Option::as_deref);
-            machine_icon(form, name, machine.is_some_and(|m| servers.contains(m)))
-        };
-        // Whose devices: this machine or a paired one (only offered while one is online).
-        let switcher = (!machines.is_empty() || self.machine.is_some()).then(|| {
-            let mut row = div().flex().h(px(30.0)).flex_shrink_0().items_center().gap_1().px_2().text_xs().overflow_hidden()
-                .child(chip(("machine", 0), self.machine.is_none(), icon(None, "")).on_click(cx.listener(|this, _, _, cx| this.pick_machine(None, cx))).child("This machine"));
-            let mut listed = machines.clone();
-            if let Some(m) = self.machine.as_ref().filter(|m| !machines.iter().any(|(id, _)| id == *m)) {
-                listed.push((m.clone(), format!("{} (offline)", crate::connect::peer_name(m).unwrap_or_else(|| "machine".into()))));
-            }
-            for (i, (id, name)) in listed.into_iter().enumerate() {
-                let on = self.machine.as_deref() == Some(id.as_str());
-                row = row.child(chip(("machine", i + 1), on, icon(Some(&id), &name)).on_click(cx.listener(move |this, _, _, cx| this.pick_machine(Some(id.clone()), cx))).child(name));
-            }
-            row
-        });
-        if self.machine.is_none() && self.status.is_none() {
-            return div().size_full().flex().flex_col().children(switcher).child(div().flex_1().flex().items_center().justify_center().text_xs().text_color(c.subtle).child("Looking for devices…"));
-        }
-        let picks = self.picks();
+        let machines = self.machine_choices();
         let current = self.current(cx);
-        let mut top = div().flex().h(px(36.0)).flex_shrink_0().items_center().gap_2().px_2().text_xs();
-        if picks.is_empty() {
-            top = top.child(div().flex_1().text_color(c.muted).child("No device"));
-        } else {
-            let mut row = div().flex_1().min_w_0().flex().gap_1().overflow_hidden();
-            for (i, (pick, label)) in picks.into_iter().enumerate() {
-                let on = current.as_ref().is_some_and(|(p, _)| *p == pick);
-                row = row.child(chip(("device", i), on, Icon::new(IconName::Smartphone)).on_click(cx.listener(move |this, _, _, cx| this.pick(&pick, cx))).child(label));
-            }
-            top = top.child(row);
+        // A picker whose button went away closes with it.
+        if current.is_none() && self.combo.as_ref().is_some_and(|o| o.which == Combo::Device) {
+            self.combo = None;
         }
+        let mut top = div().flex().h(px(40.0)).flex_shrink_0().items_center().gap_2().px_2().text_xs();
+        // Whose devices: this machine or a paired one (only offered while there is a choice).
+        let switchable = machines.len() > 1;
+        if switchable {
+            top = top.child(self.render_combo(Combo::Machine, machines, c, cx));
+        }
+        if self.machine.is_none() && self.status.is_none() {
+            return div().size_full().flex().flex_col().when(switchable, |d| d.child(top)).child(div().flex_1().flex().items_center().justify_center().text_xs().text_color(c.subtle).child("Looking for devices…"));
+        }
+        top = match current {
+            Some(_) => {
+                let devices = self.device_choices(cx);
+                top.child(self.render_combo(Combo::Device, devices, c, cx))
+            }
+            None => top.child(div().flex_1().min_w_0().text_color(c.muted).child("No device")),
+        };
         let body = match current {
-            Some((_, label)) => self.render_mirror(label, c, window, cx),
+            Some(d) => self.render_mirror(d.name, c, window, cx),
             None => self.render_empty(c, cx),
         };
-        div().size_full().flex().flex_col().children(switcher).child(top).child(body)
+        div().size_full().flex().flex_col().child(top).child(body)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{keycode, start_codes, to_device};
+    use super::{keycode, matches_query, start_codes, to_device};
+
+    #[gpui_kit::test]
+    fn the_device_picker_searches_and_picks(cx: &mut gpui_kit::TestAppContext) {
+        use super::{AndroidPanel, Combo};
+        use crate::model::AppState;
+        use gpui_kit::{AppContext, Modifiers, point, px};
+        use serde_json::json;
+
+        cx.update(gpui_kit::init);
+        let (panel, vcx) = cx.add_window_view(|_, cx| {
+            let app = cx.new(|_| AppState::new());
+            let mut panel = AndroidPanel::new(app, cx);
+            let device = |serial: &str, model: &str| json!({"serial": serial, "model": model, "state": "device"});
+            panel.status = Some(json!({"devices": [device("a1", "Pixel 9"), device("b2", "Galaxy S25"), device("c3", "Galaxy Tab")]}));
+            panel
+        });
+        let open = |vcx: &mut gpui_kit::VisualTestContext| {
+            vcx.update(|window, cx| {
+                panel.update(cx, |p, cx| p.toggle_combo(Combo::Device, window, cx));
+                let _ = window.draw(cx);
+            });
+            vcx.run_until_parked();
+        };
+        let current = |vcx: &mut gpui_kit::VisualTestContext| vcx.read(|cx| panel.read(cx).current(cx).map(|d| d.name));
+        vcx.run_until_parked();
+
+        // Typing filters; Enter picks the row the arrows are on.
+        open(vcx);
+        vcx.simulate_input("galaxy");
+        vcx.simulate_keystrokes("down down enter");
+        vcx.run_until_parked();
+        assert_eq!(current(vcx).as_deref(), Some("Galaxy Tab"));
+        assert!(vcx.read(|cx| panel.read(cx).combo.is_none()));
+
+        // It opens on the selected row; Escape leaves the selection alone.
+        open(vcx);
+        assert_eq!(vcx.read(|cx| panel.read(cx).combo.as_ref().map(|o| o.cursor)), Some(2));
+        vcx.simulate_keystrokes("up escape");
+        vcx.run_until_parked();
+        assert!(vcx.read(|cx| panel.read(cx).combo.is_none()));
+        assert_eq!(current(vcx).as_deref(), Some("Galaxy Tab"));
+
+        // The button opens and closes it, and a row picks on click.
+        let click = |vcx: &mut gpui_kit::VisualTestContext, y: f32| {
+            vcx.simulate_click(point(px(60.0), px(y)), Modifiers::default());
+            vcx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+            vcx.run_until_parked();
+        };
+        let is_open = |vcx: &mut gpui_kit::VisualTestContext| vcx.read(|cx| panel.read(cx).combo.is_some());
+        click(vcx, 20.0);
+        assert!(is_open(vcx));
+        click(vcx, 20.0);
+        assert!(!is_open(vcx));
+        vcx.update(|_, cx| panel.update(cx, |p, _| p.dismissed = None));
+        click(vcx, 20.0);
+        click(vcx, 95.0);
+        assert!(!is_open(vcx));
+        assert_eq!(current(vcx).as_deref(), Some("Pixel 9"));
+    }
+
+    #[test]
+    fn search_matches_words_in_any_order() {
+        assert!(matches_query("iPhone 18 Pro Simulator · iOS 27.2", "sim iphone"));
+        assert!(matches_query("Mac Studio von Ricky", "  "));
+        assert!(!matches_query("dane-server", "dane studio"));
+    }
 
     #[test]
     fn start_codes_include_the_leading_zero() {
