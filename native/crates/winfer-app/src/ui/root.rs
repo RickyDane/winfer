@@ -1097,7 +1097,7 @@ impl Root {
         };
         let header = div().flex().items_center().gap_1().pl_1().pr_2().py_1()
             .child(tab(self, cx, "side-browser", IconName::Globe, "Browser", SidePanel::Browser).rounded_tl_xl())
-            .child(tab(self, cx, "side-device", IconName::Smartphone, "Android", SidePanel::Device))
+            .child(tab(self, cx, "side-device", IconName::Smartphone, "Devices", SidePanel::Device))
             .child(tab(self, cx, "side-terminal", IconName::SquareTerminal, "Terminal", SidePanel::Terminal))
             .child(tab(self, cx, "side-viewer", IconName::FileText, "Files", SidePanel::Viewer))
             .child(div().flex_1())

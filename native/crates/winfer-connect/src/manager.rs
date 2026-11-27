@@ -123,7 +123,11 @@ pub struct Connect(Arc<Inner>);
 impl Connect {
     pub fn new(persist: Persist, kind: Kind, on: OnEvent) -> Connect {
         let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).thread_name("winfer-connect").enable_all().build().expect("tokio runtime");
-        let config = persist.config();
+        let mut config = persist.config();
+        // A server is there to be reached: Connect is always on.
+        if kind == Kind::Server {
+            config.enabled = true;
+        }
         Connect(Arc::new(Inner { rt, persist, kind, config: Mutex::new(config), peers: Mutex::default(), links: Mutex::default(), pairing: Mutex::default(), pair_seq: Mutex::new(0), lan: Mutex::default(), saving: Mutex::default(), on }))
     }
 
@@ -298,6 +302,13 @@ impl Connect {
         }
     }
 
+    /// Pairing means using Connect: it turns on (it's off by default) so the new peer connects.
+    fn on_for_pairing(&self) {
+        if !self.0.config.lock().unwrap().enabled {
+            self.set_enabled(true);
+        }
+    }
+
     pub fn set_enabled(&self, enabled: bool) {
         self.0.config.lock().unwrap().enabled = enabled;
         self.save_config();
@@ -423,6 +434,7 @@ impl Connect {
     /// Like [`Self::pair_create_link`]; `auto_confirm`: confirm the code by itself (the link's key
     /// already proves the other side, so this is for an agent that handed the link on itself).
     pub fn pair_create_link_with(&self, auto_confirm: bool) -> String {
+        self.on_for_pairing();
         let me = self.me();
         let relay_url = self.0.config.lock().unwrap().relay_url();
         let (link, key) = PairLink::new(&me, &relay_url, now_ms());
@@ -438,6 +450,7 @@ impl Connect {
         if now_ms() > link.x {
             return Err("This pair link has expired. Make a new one.".into());
         }
+        self.on_for_pairing();
         let me = self.me();
         if link.i == me.id {
             return Err("That's this winfer's own pair link.".into());
@@ -796,9 +809,7 @@ impl Connect {
     }
 
     fn pair_addrs(&self, name: String, addrs: Vec<std::net::SocketAddr>) -> Result<(), String> {
-        if !self.0.config.lock().unwrap().enabled {
-            return Err("Connect is off.".into());
-        }
+        self.on_for_pairing();
         let target = Nearby { id: String::new(), name, kind: Kind::Desktop, addrs, seen: std::time::Instant::now() };
         let me = self.me();
         let this = self.clone();

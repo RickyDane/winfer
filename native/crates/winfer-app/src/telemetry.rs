@@ -15,6 +15,8 @@
 //!   `settings_drift` once per launch (names of the preferences changed from the defaults; values
 //!   only for fixed choices like the theme), `memory_milestone` after 1, 4, 8, 24 and 72 hours up,
 //!   `effort_used` (winfer code turns per backend and reasoning effort, every 10 minutes);
+//! - `turn_speed` per winfer code turn sent from this machine: provider, model, effort, time to
+//!   first token, output tokens per second, output tokens and turn length;
 //! - `tool_used`: the agents' tool calls per tool and hour (name, calls, failures, average
 //!   time), from Claude Code's and Codex's logs; never inputs or results.
 //! - `$ai_generation` and `$ai_span` (PostHog AI Observability) for live voice: model, token
@@ -116,6 +118,9 @@ struct CoreHooks;
 impl winfer_core::hooks::Hooks for CoreHooks {
     fn turn_sent(&self, model: &str, effort: &str, ultracode: bool) {
         turn_sent(model, effort, ultracode);
+    }
+    fn turn_speed(&self, speed: &winfer_core::hooks::TurnSpeed) {
+        turn_speed(speed);
     }
     fn pane_opened(&self, provider: &str, effort: Option<&str>) {
         pane_opened(provider, effort);
@@ -275,6 +280,35 @@ pub fn turn_sent(model: &str, effort: &str, ultracode: bool) {
     let backend = provider_label(model.split('/').next().unwrap_or_default()).to_string();
     let effort = if ultracode { "ultracode".to_string() } else { plain_label(effort) };
     *t.efforts.lock().unwrap_or_else(PoisonError::into_inner).entry((backend, effort)).or_default() += 1;
+}
+
+/// A model id as reported: a plain id (`claude-opus-5-5`, `gpt-5.1-codex`) without a context
+/// suffix like `[1m]`; anything else as "other".
+fn model_label(model: &str) -> String {
+    let base = model.split('[').next().unwrap_or_default().trim();
+    let plain = !base.is_empty() && base.len() <= 64 && base.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | ':' | '/'));
+    if plain { base.to_string() } else { "other".to_string() }
+}
+
+/// The `turn_speed` event's properties: provider and model, time to first token and output speed.
+fn turn_speed_props(s: &winfer_core::hooks::TurnSpeed) -> Value {
+    let (backend, spec_model) = s.model.split_once('/').unwrap_or((s.model.as_str(), ""));
+    let model = s.actual_model.as_deref().filter(|m| !m.is_empty()).unwrap_or(spec_model);
+    let provider = provider_label(backend);
+    // A custom command's model could be anything the user typed.
+    let model = if provider == "custom" { "other".to_string() } else { model_label(model) };
+    json!({
+        "provider": provider, "model": model, "effort": plain_label(&s.effort),
+        "ttft_ms": s.ttft_ms, "ttft_secs": (s.ttft_ms as f64 / 100.0).round() / 10.0,
+        "tokens_per_sec": s.tokens_per_sec.map(|r| (f64::from(r) * 10.0).round() / 10.0),
+        "output_tokens": s.output_tokens, "duration_ms": s.duration_ms,
+    })
+}
+
+/// A winfer code turn sent from this machine finished: one `turn_speed` event per turn, so
+/// PostHog can take medians and percentiles per provider and model.
+pub fn turn_speed(s: &winfer_core::hooks::TurnSpeed) {
+    track("turn_speed", turn_speed_props(s));
 }
 
 fn report_efforts() {
@@ -730,6 +764,19 @@ mod tests {
         assert_eq!([bucket(0), bucket(1), bucket(3), bucket(7), bucket(12)], ["0", "1", "2-4", "5-9", "10+"]);
         assert_eq!(plain_label("xhigh"), "xhigh");
         assert_eq!(plain_label("my effort/x"), "other");
+    }
+
+    #[test]
+    fn turn_speed_reports_provider_and_resolved_model() {
+        let s = winfer_core::hooks::TurnSpeed {
+            model: "claude/opus".into(), actual_model: Some("claude-opus-5-5[1m]".into()), effort: "high".into(),
+            ttft_ms: 1234, tokens_per_sec: Some(48.26), output_tokens: 900, duration_ms: 20_000,
+        };
+        let p = turn_speed_props(&s);
+        assert_eq!((p["provider"].as_str(), p["model"].as_str(), p["ttft_secs"].as_f64(), p["tokens_per_sec"].as_f64()), (Some("claude"), Some("claude-opus-5-5"), Some(1.2), Some(48.3)));
+        let s = winfer_core::hooks::TurnSpeed { model: "mytool/x y".into(), actual_model: None, tokens_per_sec: None, ..s };
+        let p = turn_speed_props(&s);
+        assert_eq!((p["provider"].as_str(), p["model"].as_str(), p["tokens_per_sec"].is_null()), (Some("custom"), Some("other"), true));
     }
 
     #[test]

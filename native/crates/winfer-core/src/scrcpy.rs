@@ -6,6 +6,8 @@
 //! the device instead of as one `adb shell input` process per gesture. The protocol is internal to
 //! scrcpy and changes between versions: this speaks VERSION only (its `doc/develop.md`,
 //! `app/src/control_msg.c`).
+//!
+//! Lives in the core so a paired machine's emulators can be mirrored too (`devices.rs`).
 
 use parking_lot::Mutex;
 use sha2::{Digest, Sha256};
@@ -30,6 +32,28 @@ const MAX_SIDE: u32 = 1280;
 const ACTION_DOWN: u8 = 0;
 const ACTION_UP: u8 = 1;
 const ACTION_MOVE: u8 = 2;
+/// `SC_CONTROL_MSG_TYPE_RESET_VIDEO`: the encoder restarts, beginning with a keyframe.
+const RESET_VIDEO: u8 = 17;
+
+/// How heavy the video is: the defaults for a local mirror, lighter for one going over a link.
+#[derive(Clone, Copy, Debug)]
+pub struct Options {
+    pub bit_rate: u32,
+    pub max_fps: u32,
+    pub max_side: u32,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Options { bit_rate: 8_000_000, max_fps: 60, max_side: MAX_SIDE }
+    }
+}
+
+/// One encoded frame: a complete Annex B access unit (the parameter sets in front of keyframes).
+pub struct Frame {
+    pub data: Vec<u8>,
+    pub key: bool,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Touch {
@@ -111,7 +135,7 @@ fn read_u32(r: &mut impl Read) -> std::io::Result<u32> {
 enum Header {
     /// A new capture session (first one, or after a rotation): the video's size.
     Session(u32, u32),
-    Media { config: bool, size: usize },
+    Media { config: bool, key: bool, size: usize },
 }
 
 fn parse_header(h: &[u8; 12]) -> Header {
@@ -119,7 +143,7 @@ fn parse_header(h: &[u8; 12]) -> Header {
     if h[0] & 0x80 != 0 {
         Header::Session(word(4), word(8))
     } else {
-        Header::Media { config: h[0] & 0x40 != 0, size: word(8) as usize }
+        Header::Media { config: h[0] & 0x40 != 0, key: h[0] & 0x20 != 0, size: word(8) as usize }
     }
 }
 
@@ -197,13 +221,13 @@ pub struct Session {
 }
 
 impl Session {
-    /// Starts the server on `serial` and sends each frame (complete Annex B access units, the
-    /// parameter sets in front of keyframes) to `frames` until the session is dropped. Blocking.
-    pub fn start(serial: &str, frames: Sender<Vec<u8>>) -> Result<Session, String> {
-        Self::start_with(server_jar()?, serial, frames)
+    /// Starts the server on `serial` and sends each frame to `frames` until the session is
+    /// dropped. Blocking.
+    pub fn start(serial: &str, options: Options, frames: Sender<Frame>) -> Result<Session, String> {
+        Self::start_with(server_jar()?, serial, options, frames)
     }
 
-    fn start_with(jar: PathBuf, serial: &str, frames: Sender<Vec<u8>>) -> Result<Session, String> {
+    fn start_with(jar: PathBuf, serial: &str, options: Options, frames: Sender<Frame>) -> Result<Session, String> {
         adb_run(serial, &["push", &jar.to_string_lossy(), DEVICE_PATH])?;
         let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
         listener.set_nonblocking(true).map_err(|e| e.to_string())?;
@@ -211,17 +235,19 @@ impl Session {
         let scid = rand::random::<u32>() & 0x7fff_ffff;
         let socket = format!("localabstract:scrcpy_{scid:08x}");
         adb_run(serial, &["reverse", &socket, &format!("tcp:{port}")])?;
-        let started = Self::connect(serial, scid, &listener, frames);
+        let started = Self::connect(serial, scid, &listener, options, frames);
         let _ = adb_run(serial, &["reverse", "--remove", &socket]);
         started
     }
 
-    fn connect(serial: &str, scid: u32, listener: &TcpListener, frames: Sender<Vec<u8>>) -> Result<Session, String> {
+    fn connect(serial: &str, scid: u32, listener: &TcpListener, options: Options, frames: Sender<Frame>) -> Result<Session, String> {
         let mut cmd = android::adb(Some(serial))?;
         cmd.args(["shell", &format!("CLASSPATH={DEVICE_PATH}"), "app_process", "/", "com.genymobile.scrcpy.Server", VERSION])
             .arg(format!("scid={scid:08x}"))
-            .args(["log_level=warn", "audio=false", "max_fps=60", "video_bit_rate=8000000", "clipboard_autosync=false", "send_device_meta=false"])
-            .arg(format!("max_size={MAX_SIDE}"))
+            .args(["log_level=warn", "audio=false", "clipboard_autosync=false", "send_device_meta=false"])
+            .arg(format!("max_fps={}", options.max_fps))
+            .arg(format!("video_bit_rate={}", options.bit_rate))
+            .arg(format!("max_size={}", options.max_side))
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -321,6 +347,11 @@ impl Session {
             self.send(&msg);
         }
     }
+
+    /// Asks for a keyframe (after frames were dropped on the way to a slow link).
+    pub fn reset_video(&self) {
+        self.send(&[RESET_VIDEO]);
+    }
 }
 
 impl Drop for Session {
@@ -338,13 +369,13 @@ impl Drop for Session {
 }
 
 /// Reads packets until the socket closes; the config packet (SPS/PPS) goes in front of the next frame.
-fn video_loop(mut video: TcpStream, size: Arc<Mutex<(u32, u32)>>, frames: Sender<Vec<u8>>) {
+fn video_loop(mut video: TcpStream, size: Arc<Mutex<(u32, u32)>>, frames: Sender<Frame>) {
     let mut config: Vec<u8> = Vec::new();
     let mut h = [0; 12];
     while video.read_exact(&mut h).is_ok() {
         match parse_header(&h) {
             Header::Session(w, hh) => *size.lock() = (w, hh),
-            Header::Media { config: is_config, size: len } => {
+            Header::Media { config: is_config, key, size: len } => {
                 let mut packet = std::mem::take(&mut config);
                 let at = packet.len();
                 packet.resize(at + len, 0);
@@ -353,7 +384,7 @@ fn video_loop(mut video: TcpStream, size: Arc<Mutex<(u32, u32)>>, frames: Sender
                 }
                 if is_config {
                     config = packet;
-                } else if frames.send(packet).is_err() {
+                } else if frames.send(Frame { data: packet, key }).is_err() {
                     return;
                 }
             }
@@ -368,8 +399,8 @@ mod tests {
     #[test]
     fn parses_session_and_media_headers() {
         assert_eq!(parse_header(&[0x80, 0, 0, 0, 0, 0, 2, 0xd0, 0, 0, 5, 0]), Header::Session(720, 1280));
-        assert_eq!(parse_header(&[0x40, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 30]), Header::Media { config: true, size: 30 });
-        assert_eq!(parse_header(&[0x20, 0, 0, 0, 0, 0, 0, 9, 0, 1, 0, 0]), Header::Media { config: false, size: 65536 });
+        assert_eq!(parse_header(&[0x40, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 30]), Header::Media { config: true, key: false, size: 30 });
+        assert_eq!(parse_header(&[0x20, 0, 0, 0, 0, 0, 0, 9, 0, 1, 0, 0]), Header::Media { config: false, key: true, size: 65536 });
     }
 
     #[test]
@@ -390,7 +421,7 @@ mod tests {
         assert!(text_msgs(&long).iter().all(|m| m.len() <= 305 && std::str::from_utf8(&m[5..]).is_ok()));
     }
 
-    /// Against the first adb device: `cargo test -p winfer-app --bin winfer-native live_session -- --ignored --nocapture`.
+    /// Against the first adb device: `cargo test -p winfer-core live_session -- --ignored --nocapture`.
     #[test]
     #[ignore]
     fn live_session() {
@@ -399,9 +430,9 @@ mod tests {
         let serial = out.lines().skip(1).find_map(|l| l.strip_suffix("\tdevice")).expect("no device").to_string();
         let (tx, rx) = std::sync::mpsc::channel();
         let t = Instant::now();
-        let session = Session::start_with(jar, &serial, tx).unwrap();
+        let session = Session::start_with(jar, &serial, Options::default(), tx).unwrap();
         println!("started in {:?}, size {:?}", t.elapsed(), session.size());
-        let first = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let first = rx.recv_timeout(Duration::from_secs(5)).unwrap().data;
         println!("first frame after {:?}: {} bytes, starts {:02x?}", t.elapsed(), first.len(), &first[..8]);
         let mut decoder = openh264::decoder::Decoder::new().unwrap();
         let (mut dec, mut conv, mut frames) = (Duration::ZERO, Duration::ZERO, 0u32);
@@ -422,20 +453,20 @@ mod tests {
         let mut lat = Vec::new();
         for i in 0..8 {
             while let Ok(f) = rx.recv_timeout(Duration::from_millis(500)) {
-                take(&f);
+                take(&f.data);
             }
             let t = Instant::now();
             session.touch(Touch::Down, (0.5, 0.75));
             session.touch(Touch::Move, (0.5, if i % 2 == 0 { 0.35 } else { 0.85 }));
             let f = rx.recv_timeout(Duration::from_secs(2)).unwrap();
             lat.push(t.elapsed().as_millis());
-            take(&f);
+            take(&f.data);
             session.touch(Touch::Up, (0.5, 0.35));
         }
         let t = Instant::now();
         let mut n = 0;
         while let Ok(f) = rx.recv_timeout(Duration::from_millis(500)) {
-            take(&f);
+            take(&f.data);
             n += 1;
         }
         println!("input->frame ms {lat:?}; {n} frames in the last {:?}", t.elapsed());

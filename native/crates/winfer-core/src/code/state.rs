@@ -116,6 +116,10 @@ pub struct Rate {
     pub last_at: u64,
     pub tokens: u64,
     pub active_ms: u64,
+    /// True right after the initial sample, an idle gap (`> IDLE_MS`), or a rebase (`count < last_tokens`):
+    /// additional lines drained in the same millisecond PTY batch advance the baseline without adding
+    /// tokens over `0ms`.
+    resumed: bool,
 }
 
 impl Rate {
@@ -124,15 +128,40 @@ impl Rate {
     const IDLE_MS: u64 = 3_000;
 
     pub fn sample(&mut self, at: u64, count: u64) {
-        if self.last_at > 0 {
-            let gap = at.saturating_sub(self.last_at);
-            if count > self.last_tokens && gap <= Self::IDLE_MS {
-                self.tokens += count - self.last_tokens;
-                self.active_ms += gap;
-            }
+        if self.last_at == 0 {
+            self.last_at = at;
+            self.last_tokens = count;
+            self.resumed = true;
+            return;
         }
-        self.last_at = at;
+        // Unchanged counts (e.g. context/cost-only or thought-only usage emits) must not move
+        // `last_at`, otherwise elapsed generation time before the next token step is lost.
+        if count == self.last_tokens {
+            return;
+        }
+        if count < self.last_tokens {
+            self.last_at = self.last_at.max(at);
+            self.last_tokens = count;
+            self.resumed = true;
+            return;
+        }
+        let gap = at.saturating_sub(self.last_at);
+        if gap > Self::IDLE_MS {
+            self.last_at = at;
+            self.last_tokens = count;
+            self.resumed = true;
+            return;
+        }
+        if gap == 0 && self.resumed {
+            // Same-millisecond burst right after initial/idle/rebase: advance baseline only.
+            self.last_tokens = count;
+            return;
+        }
+        self.tokens += count - self.last_tokens;
+        self.active_ms += gap;
+        self.last_at = self.last_at.max(at);
         self.last_tokens = count;
+        self.resumed = false;
     }
 
     pub fn rate(&self) -> Option<f32> {
@@ -163,6 +192,9 @@ pub struct CodeState {
     pub sheet: Option<Sheet>,
     pub rate: Option<Rate>,
     pub last_rate: Option<f32>,
+    /// True once the backend has reported `turn_active_ms > 0` in this turn, so we never fall
+    /// through to the legacy client-side `Rate` sampler for this turn.
+    pub backend_timed: bool,
     pub turn_out_base: u64,
     pub log_task: Option<String>,
     pub task_log: Option<(String, Option<String>, Option<String>)>,
@@ -189,6 +221,11 @@ pub struct CodeState {
     pub outbox: Vec<Cmd>,
     /// A plan handed over for approval, to open in the file viewer (taken by the app).
     pub show_plan: Option<String>,
+    /// A message was sent from here and its turn hasn't started yet: that turn gets timed.
+    speed_armed: bool,
+    /// The timed turn: when it started and when the first output arrived (unix ms). Only turns
+    /// sent from here, so a remote pane's replayed history isn't reported.
+    speed: Option<(u64, Option<u64>)>,
 }
 
 impl Default for CodeState {
@@ -196,10 +233,10 @@ impl Default for CodeState {
         Self {
             session: None, model: String::new(), actual_model: None, models: Vec::new(), files: None, cwd: None, backend_session: None,
             title: None, branch: None, trim_at: 0, compact_at: 0, mcp: Vec::new(), sessions: None, breakdown: None, btw: Vec::new(),
-            sheet: None, rate: None, last_rate: None, turn_out_base: 0, log_task: None, task_log: None, mode: Mode::Ask, effort: "high".into(), ultracode: false, sub_model: None, sub_effort: None,
+            sheet: None, rate: None, last_rate: None, backend_timed: false, turn_out_base: 0, log_task: None, task_log: None, mode: Mode::Ask, effort: "high".into(), ultracode: false, sub_model: None, sub_effort: None,
             items: Vec::new(), approvals: Vec::new(), tasks: Vec::new(), todos: Vec::new(), plan_done_at: None, skills: Vec::new(),
             usage: Usage { window: 200_000, ..Default::default() }, busy: false, turn_started: None, exited: None, paused_until: None, queued: 0, outbox: Vec::new(),
-            show_plan: None,
+            show_plan: None, speed_armed: false, speed: None,
         }
     }
 }
@@ -305,6 +342,7 @@ impl CodeState {
     pub fn send(&mut self, cmd: Cmd) {
         match &cmd {
             Cmd::Send { steer: false, .. } => {
+                self.speed_armed = true;
                 if let Some(h) = crate::hooks::get() {
                     h.turn_sent(&self.model, &self.effort, self.ultracode);
                 }
@@ -354,6 +392,11 @@ impl CodeState {
     }
 
     pub fn apply(&mut self, ev: Ev) {
+        if matches!(ev, Ev::TextDelta { .. } | Ev::Text { .. } | Ev::ReasoningDelta { .. } | Ev::ToolStart { .. })
+            && let Some((_, first @ None)) = &mut self.speed
+        {
+            *first = Some(now_ms());
+        }
         match ev {
             Ev::Session { id } => self.backend_session = Some(id),
             Ev::Model { model } => {
@@ -492,9 +535,12 @@ impl CodeState {
             }
             Ev::Skills { skills } => self.skills = skills,
             Ev::Usage(u) => {
+                if u.turn_active_ms.is_some_and(|ms| ms > 0) {
+                    self.backend_timed = true;
+                }
                 let streamed = u.turn_streamed.unwrap_or(u.output);
                 let now = now_ms();
-                if self.busy {
+                if self.busy && !self.backend_timed {
                     self.rate.get_or_insert_with(Rate::default).sample(now, streamed);
                 }
                 let prev = &self.usage;
@@ -511,16 +557,17 @@ impl CodeState {
                     turn_streamed: u.turn_streamed.or(prev.turn_streamed),
                     turn_active_ms: u.turn_active_ms.or(prev.turn_active_ms),
                 };
-                if let Some(r) = self.tokens_per_second() {
-                    self.last_rate = Some(r);
-                }
+                self.last_rate = self.tokens_per_second();
             }
             Ev::Notice { text } | Ev::BgNote { text } => self.items.push(Item::Notice { key: key(), text, error: false }),
             Ev::Error { text } => self.items.push(Item::Notice { key: key(), text, error: true }),
             Ev::TurnStart => {
                 self.busy = true;
                 self.turn_started = Some(now_ms());
+                self.speed = std::mem::take(&mut self.speed_armed).then(|| (now_ms(), None));
                 self.rate = None;
+                self.last_rate = None;
+                self.backend_timed = false;
                 self.turn_out_base = self.usage.output;
                 self.usage.turn = Some(0);
                 self.usage.turn_input = Some(0);
@@ -529,8 +576,11 @@ impl CodeState {
                 self.usage.turn_active_ms = Some(0);
             }
             Ev::TurnDone => {
-                if let Some(r) = self.tokens_per_second() {
-                    self.last_rate = Some(r);
+                self.last_rate = self.tokens_per_second();
+                if let Some(speed) = self.take_turn_speed()
+                    && let Some(h) = crate::hooks::get()
+                {
+                    h.turn_speed(&speed);
                 }
                 close_reasoning(&mut self.items);
                 for i in &mut self.items {
@@ -563,11 +613,18 @@ impl CodeState {
                 self.approvals.clear();
             }
             Ev::Exited { text } => {
+                (self.speed, self.speed_armed) = (None, false);
                 self.busy = false;
                 self.exited = Some(text);
                 (self.paused_until, self.queued) = (None, 0);
             }
-            Ev::LimitWait { until, queued } => (self.paused_until, self.queued) = (until, queued),
+            Ev::LimitWait { until, queued } => {
+                // Waiting for the usage limit isn't the model's speed.
+                if until.is_some() {
+                    (self.speed, self.speed_armed) = (None, false);
+                }
+                (self.paused_until, self.queued) = (until, queued);
+            }
             Ev::Ready { session, backend_session, title, model, mode, effort, ultracode, subagent_model, subagent_effort, cwd, branch, trim_at, compact_at, mcp } => {
                 self.actual_model = if model == self.model { self.actual_model.take() } else { None };
                 // A new process: whatever the old one held for the usage limit is gone.
@@ -617,7 +674,9 @@ impl CodeState {
                 self.usage = Usage { window: self.usage.window, ..Default::default() };
                 self.rate = None;
                 self.last_rate = None;
+                self.backend_timed = false;
                 self.turn_out_base = 0;
+                (self.speed, self.speed_armed) = (None, false);
             }
             Ev::Restore { transcript } => {
                 for e in transcript {
@@ -699,14 +758,27 @@ impl CodeState {
         self.usage.turn.filter(|t| *t > 0).or(self.usage.turn_streamed.filter(|t| *t > 0)).unwrap_or_else(|| self.usage.output.saturating_sub(self.turn_out_base))
     }
 
+    /// The finished turn's speed, when it was sent from here and the model answered at all.
+    fn take_turn_speed(&mut self) -> Option<crate::hooks::TurnSpeed> {
+        let (started, first) = self.speed.take()?;
+        let first = first?;
+        Some(crate::hooks::TurnSpeed {
+            model: self.model.clone(),
+            actual_model: self.actual_model.clone(),
+            effort: if self.ultracode { "ultracode".into() } else { self.effort.clone() },
+            ttft_ms: first.saturating_sub(started),
+            tokens_per_sec: self.last_rate.filter(|r| r.is_finite() && *r > 0.0),
+            output_tokens: self.usage.turn.unwrap_or(0),
+            duration_ms: now_ms().saturating_sub(started),
+        })
+    }
+
     /// Tokens per second of the running turn (prefers backend-measured active time, else gap-filtered streamed rate).
     pub fn tokens_per_second(&self) -> Option<f32> {
-        if let Some(ms) = self.usage.turn_active_ms.filter(|ms| *ms > 0) {
-            if ms >= 500 {
-                let toks = self.usage.turn_streamed.filter(|t| *t > 0)?;
-                return Some(toks as f32 / (ms as f32 / 1000.0));
-            }
-            return None;
+        if self.backend_timed || self.usage.turn_active_ms.is_some_and(|ms| ms > 0) {
+            let ms = self.usage.turn_active_ms.filter(|ms| *ms >= 500)?;
+            let toks = self.usage.turn_streamed.filter(|t| *t > 0)?;
+            return Some(toks as f32 / (ms as f32 / 1000.0));
         }
         self.rate.as_ref().and_then(Rate::rate)
     }
@@ -1076,6 +1148,120 @@ mod tests {
             "turn_active_ms": 1000
         })));
         assert_eq!(s.tokens_per_second(), None);
+    }
+
+    #[test]
+    fn rate_sample_ignores_zero_delta_clock_resets_and_post_idle_zero_ms_bursts() {
+        // Zero-delta usage emits between token steps must not erase elapsed generation time.
+        let mut r = Rate::default();
+        r.sample(1_000, 25);
+        r.sample(1_900, 25); // unchanged count (e.g. context/thought-only update)
+        r.sample(1_950, 50); // 25 tokens over the full 950ms, not 50ms
+        let expected = 25.0 / 0.95;
+        let got = r.rate().expect("rate after 950ms");
+        assert!((got - expected).abs() < 0.05, "expected ~{expected:.2} tok/s, got {got:.2}");
+
+        // Post-idle (>3s) PTY batch with identical timestamps must not add tokens over 0ms.
+        let mut r = Rate::default();
+        r.sample(1_000, 25);
+        r.sample(1_500, 50); // 25 tok / 500ms = 50 tok/s
+        assert!((r.rate().unwrap() - 50.0).abs() < 0.01);
+        // 3.5s stall followed by 4 lines drained in the same millisecond PTY batch.
+        r.sample(5_000, 100);
+        r.sample(5_000, 150);
+        r.sample(5_000, 200);
+        r.sample(5_000, 225);
+        assert!((r.rate().unwrap() - 50.0).abs() < 0.01, "post-idle 0ms batch must not inflate rate");
+        // Next genuine active interval (500ms) resumes normally, including a second line in that active batch.
+        r.sample(5_500, 250); // +25 tok / +500ms -> 50 / 1.0s = 50 tok/s
+        assert!((r.rate().unwrap() - 50.0).abs() < 0.01);
+        r.sample(5_500, 275); // genuine active sub-burst: +25 tok / +0ms -> 75 / 1.0s = 75 tok/s
+        assert!((r.rate().unwrap() - 75.0).abs() < 0.01);
+
+        // Initial same-ms burst also advances baseline without inflating.
+        let mut r = Rate::default();
+        r.sample(1_000, 25);
+        r.sample(1_000, 75);
+        r.sample(1_500, 100); // 25 tok / 500ms = 50 tok/s
+        assert!((r.rate().unwrap() - 50.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn times_only_turns_sent_from_here_until_their_first_output() {
+        let mut s = CodeState::default();
+        s.model = "claude/opus".into();
+        // A replayed turn (no local send) isn't timed.
+        s.apply(Ev::TurnStart);
+        s.apply(Ev::TextDelta { id: "a".into(), text: "hi".into() });
+        assert!(s.speed.is_none());
+        s.apply(Ev::TurnDone);
+
+        s.submit("hello", &[], None);
+        s.apply(Ev::TurnStart);
+        s.speed = s.speed.map(|(at, first)| (at - 1500, first));
+        s.apply(Ev::ReasoningDelta { id: "r".into(), text: "hmm".into() });
+        s.apply(Ev::TextDelta { id: "b".into(), text: "later".into() });
+        s.apply(ev(json!({ "type": "usage", "context": 0, "window": 200000, "input": 0, "cached": 0, "output": 400, "turn": 400, "turn_streamed": 400, "turn_active_ms": 4000 })));
+        let speed = s.take_turn_speed().unwrap();
+        assert!((1500..1600).contains(&speed.ttft_ms));
+        assert_eq!((speed.model.as_str(), speed.output_tokens), ("claude/opus", 400));
+        assert!((speed.tokens_per_sec.unwrap() - 100.0).abs() < 0.01);
+
+        // Waiting out the usage limit drops the measurement.
+        s.submit("again", &[], None);
+        s.apply(Ev::TurnStart);
+        s.apply(Ev::LimitWait { until: Some(now_ms() + 60_000), queued: 1 });
+        s.apply(Ev::TextDelta { id: "c".into(), text: "x".into() });
+        assert!(s.take_turn_speed().is_none());
+    }
+
+    #[test]
+    fn last_rate_clears_on_turn_start_tracks_corrections_and_respects_backend_timing() {
+        let mut s = CodeState::default();
+        // Turn 1 establishes a valid rate.
+        s.apply(Ev::TurnStart);
+        s.apply(ev(json!({
+            "type": "usage", "context": 1000, "window": 200000, "input": 1000, "cached": 0, "output": 200,
+            "turn": 200, "turn_streamed": 200, "turn_active_ms": 2000
+        })));
+        s.apply(Ev::TurnDone);
+        assert!((s.last_rate.unwrap() - 100.0).abs() < 0.01);
+
+        // Turn 2 clears `last_rate` immediately and a short (<500ms) turn does not keep Turn 1's rate.
+        s.apply(Ev::TurnStart);
+        assert_eq!(s.last_rate, None);
+        s.apply(ev(json!({
+            "type": "usage", "context": 1200, "window": 200000, "input": 1200, "cached": 0, "output": 220,
+            "turn": 20, "turn_streamed": 20, "turn_active_ms": 200
+        })));
+        assert_eq!(s.tokens_per_second(), None);
+        assert_eq!(s.last_rate, None);
+        s.apply(Ev::TurnDone);
+        assert_eq!(s.last_rate, None);
+
+        // Mid-turn correction overwrites an earlier spike cleanly (and dropping below 500ms clears it).
+        s.apply(Ev::TurnStart);
+        s.apply(ev(json!({
+            "type": "usage", "context": 1500, "window": 200000, "input": 1500, "cached": 0, "output": 500,
+            "turn": 300, "turn_streamed": 300, "turn_active_ms": 1000
+        })));
+        assert!((s.last_rate.unwrap() - 300.0).abs() < 0.01);
+        s.apply(ev(json!({
+            "type": "usage", "context": 1500, "window": 200000, "input": 1500, "cached": 0, "output": 500,
+            "turn": 300, "turn_streamed": 300, "turn_active_ms": 5000
+        })));
+        assert!((s.last_rate.unwrap() - 60.0).abs() < 0.01);
+
+        // Once a turn is backend-timed, even if a later Usage reports `turn_active_ms: 0`
+        // (and even if `self.rate` happened to hold samples), it never falls through to `Rate`.
+        s.rate = Some(Rate { last_tokens: 100, last_at: 2_000, tokens: 500, active_ms: 1_000, resumed: false });
+        s.apply(ev(json!({
+            "type": "usage", "context": 1500, "window": 200000, "input": 1500, "cached": 0, "output": 500,
+            "turn": 300, "turn_streamed": 300, "turn_active_ms": 0
+        })));
+        assert!(s.backend_timed);
+        assert_eq!(s.tokens_per_second(), None);
+        assert_eq!(s.last_rate, None);
     }
 
     #[test]

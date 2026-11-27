@@ -130,7 +130,7 @@ the relay (text frames); LAN uses binary frames with the same encrypted payloads
 ## Features
 
 ### 1. Pairing & settings
-- **Settings → Connect**: enable toggle, this instance's name, Discoverable on LAN, relay URL (default `https://winfer.danehub.com`), **Nearby** (unpaired instances on the LAN with a Pair button), **Paired** list (name, online dot, LAN/Relay, RTT, last seen, Notifications toggle, Rename, Revoke), **Pair with link** (show/copy link, paste link).
+- **Settings → Connect**: enable toggle (off by default on a desktop; pairing turns it on; always on for winferd), this instance's name, Discoverable on LAN, relay URL (default `https://winfer.danehub.com`), **Nearby** (unpaired instances on the LAN with a Pair button), **Paired** list (name, online dot, LAN/Relay, RTT, last seen, Notifications toggle, Rename, Revoke), **Pair with link** (show/copy link, paste link).
 - Pair dialog on both sides with the 6-digit code, Confirm/Cancel, and clear failure states (code mismatch, timeout, cancelled on the other side).
 - Command palette: "Connect: Pair a machine…", "Connect: Open settings".
 

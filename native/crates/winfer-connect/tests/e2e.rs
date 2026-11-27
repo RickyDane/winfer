@@ -95,6 +95,9 @@ fn node(name: &str, kind: Kind, relay: &str) -> Node {
     let connect = Connect::new(Persist::new(&dir, SecretStore::memory()), kind, Arc::new(move |e| sink.lock().unwrap().push(e)));
     connect.rename(name);
     connect.set_relay_url(relay).unwrap();
+    // Off by default on a desktop (on for a server); these tests use it.
+    assert_eq!(connect.config().enabled, kind == Kind::Server);
+    connect.set_enabled(true);
     Node { connect, events }
 }
 

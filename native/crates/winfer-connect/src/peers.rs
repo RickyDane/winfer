@@ -15,7 +15,8 @@ pub const DEFAULT_RELAY_URL: &str = "https://winfer.danehub.com";
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Config {
-    #[serde(default = "yes")]
+    /// Off until the user turns it on or pairs (desktops); a server is always on.
+    #[serde(default)]
     pub enabled: bool,
     /// Advertise on the LAN and accept pair requests from it.
     #[serde(default = "yes")]
@@ -39,7 +40,7 @@ fn yes() -> bool {
 
 impl Default for Config {
     fn default() -> Self {
-        Config { enabled: true, discoverable: true, relay_url: None, instance_id: String::new(), name: None, has_peers: false }
+        Config { enabled: false, discoverable: true, relay_url: None, instance_id: String::new(), name: None, has_peers: false }
     }
 }
 

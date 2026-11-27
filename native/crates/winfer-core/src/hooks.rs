@@ -6,6 +6,8 @@ use std::sync::OnceLock;
 pub trait Hooks: Send + Sync {
     /// A chat sent a new turn (not a steer).
     fn turn_sent(&self, _model: &str, _effort: &str, _ultracode: bool) {}
+    /// A turn the user sent from here finished, with how fast the model answered.
+    fn turn_speed(&self, _speed: &TurnSpeed) {}
     /// A pane was added.
     fn pane_opened(&self, _provider: &str, _effort: Option<&str>) {}
     /// A pane got its own worktree.
@@ -24,7 +26,23 @@ pub trait Hooks: Send + Sync {
     fn stopping(&self) {}
 }
 
-static HOOKS: OnceLock<Box<dyn Hooks>> = OnceLock::new();
+/// How fast a winfer code turn was answered.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TurnSpeed {
+    /// The `backend/model` spec the turn was sent with.
+    pub model: String,
+    /// The model that actually answered (an alias resolved), when the backend said.
+    pub actual_model: Option<String>,
+    pub effort: String,
+    /// From the turn's start to the model's first output (text, reasoning or a tool call).
+    pub ttft_ms: u64,
+    /// Output tokens per second while the model streamed, when there was enough to measure.
+    pub tokens_per_sec: Option<f32>,
+    pub output_tokens: u64,
+    pub duration_ms: u64,
+}
+
+static HOOKS:OnceLock<Box<dyn Hooks>> = OnceLock::new();
 
 /// Installs the app's hooks (once).
 pub fn install(hooks: Box<dyn Hooks>) {

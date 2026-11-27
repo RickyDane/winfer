@@ -1,5 +1,4 @@
 pub mod android;
-pub mod scrcpy;
 pub mod capture;
 pub mod viewer;
 pub mod browser;

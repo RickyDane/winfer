@@ -22,4 +22,9 @@ alacritty_terminal = "0.26.0"
 base64 = "0.23.1"
 async-channel = "2"
 url.workspace = true
+# Checks the downloaded scrcpy server (scrcpy.rs).
 sha2 = "0.11.1"
+ureq = "3.4.2"
+
+[dev-dependencies]
+openh264 = "0.9"
