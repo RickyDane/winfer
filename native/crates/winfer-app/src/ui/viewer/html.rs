@@ -125,7 +125,7 @@ impl ViewerPanel {
     fn wanted_html(&self) -> Option<(String, u64)> {
         let path = self.shown.as_ref().filter(|p| is_html(p))?;
         match &self.content {
-            Content::Text { modified, .. } if !self.editing && !self.source => Some((path.clone(), *modified)),
+            Content::Text { modified, .. } if !self.editing && !self.source && !self.diff.on => Some((path.clone(), *modified)),
             _ => None,
         }
     }

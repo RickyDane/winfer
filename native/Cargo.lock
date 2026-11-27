@@ -11627,6 +11627,7 @@ dependencies = [
  "resvg 0.45.1",
  "serde",
  "serde_json",
+ "similar 3.2.1",
  "smallvec",
  "svg2pdf",
  "tauri",

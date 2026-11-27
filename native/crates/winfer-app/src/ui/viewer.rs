@@ -20,6 +20,7 @@ use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 use winfer_backend::files;
 
+mod diff;
 mod html;
 
 const IMAGE: [&str; 8] = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "ico"];
@@ -507,6 +508,7 @@ pub struct ViewerPanel {
     mermaid_source: HashSet<usize>,
     mermaid_zoom: HashMap<usize, f32>,
     html: html::HtmlView,
+    diff: diff::DiffView,
 }
 
 /// Which page of a PDF shows, how far in, and the rendered result.
@@ -528,7 +530,13 @@ impl Default for PdfView {
 impl ViewerPanel {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         cx.observe(&state, |this, _, cx| this.sync(cx)).detach();
-        Self { state, shown: None, content: Content::Loading, source: false, editor: None, editor_synced: None, editing: false, edit_base: 0, conflict: false, composing: None, comment_line: 0, jump: None, send_open: false, poll: None, pdf: PdfView::default(), mermaid_cache: HashMap::new(), mermaid_source: HashSet::new(), mermaid_zoom: HashMap::new(), html: Default::default() }
+        let mut diff = diff::DiffView::default();
+        // Development aid: start in the diff mode (`inline` or `split`).
+        if cfg!(debug_assertions) && let Ok(mode) = std::env::var("WINFER_NATIVE_VIEWER_DIFF") {
+            diff.on = true;
+            diff.split = mode == "split";
+        }
+        Self { state, shown: None, content: Content::Loading, source: false, editor: None, editor_synced: None, editing: false, edit_base: 0, conflict: false, composing: None, comment_line: 0, jump: None, send_open: false, poll: None, pdf: PdfView::default(), mermaid_cache: HashMap::new(), mermaid_source: HashSet::new(), mermaid_zoom: HashMap::new(), html: Default::default(), diff }
     }
 
     /// Shows `path` (absolute), opening its tab; `background` leaves the side panel as it is.
@@ -1352,14 +1360,28 @@ impl ViewerPanel {
                         .child("Cancel"),
                 )
         } else {
-            row.when(has_source_toggle, |d| d.child(button("viewer-source", IconName::Code, self.source).on_click(cx.listener(|this, _, _, cx| { this.source = !this.source; cx.notify(); }))))
+            let diffing = self.diff_shown();
+            let split = self.diff.split;
+            let tip = |id: &'static str, icon: IconName, active: bool, text: &'static str| button(id, icon, active).tooltip(move |window, cx| Tooltip::new(text).build(window, cx));
+            row.when_some(self.diff.counts().filter(|_| diffing), |d, (added, removed)| {
+                    d.child(div().flex().gap_1().mr_1().text_size(px(11.0)).child(div().text_color(c.success).child(format!("+{added}"))).child(div().text_color(c.danger).child(format!("−{removed}"))))
+                })
+                .when(diffing, |d| {
+                    d.child(
+                        div().flex().items_center().rounded_md().border_1().border_color(c.edge).mr_1()
+                            .child(tip("viewer-diff-inline", IconName::Rows2, !split, "Inline").on_click(cx.listener(|this, _, _, cx| this.set_diff_split(false, cx))))
+                            .child(tip("viewer-diff-split", IconName::Columns2, split, "Side by side").on_click(cx.listener(|this, _, _, cx| this.set_diff_split(true, cx)))),
+                    )
+                })
+                .when(matches!(self.content, Content::Text { .. }), |d| d.child(tip("viewer-diff", IconName::GitCompare, self.diff.on, "Changes since the last commit").on_click(cx.listener(|this, _, _, cx| this.toggle_diff(cx)))))
+                .when(has_source_toggle && !diffing, |d| d.child(button("viewer-source", IconName::Code, self.source).on_click(cx.listener(|this, _, _, cx| { this.source = !this.source; cx.notify(); }))))
                 .when(matches!(self.content, Content::Text { .. }), |d| d.child(button("viewer-edit", IconName::Pencil, false).on_click(cx.listener(|this, _, window, cx| this.begin_edit(window, cx)))))
                 .when(is_markdown, |d| d.child(button("viewer-comment", IconName::MessageSquarePlus, false).on_click(cx.listener(|this, _, window, cx| {
                     let last = if let Content::Text { line_count, .. } = &this.content { *line_count } else { 0 };
                     this.begin_comment(last, window, cx);
                 }))))
                 .when(comments > 0, |d| d.child(button("viewer-send", IconName::Send, self.send_open).on_click(cx.listener(|this, _, _, cx| { this.send_open = !this.send_open; cx.notify(); }))))
-                .child(button("viewer-reload", IconName::RotateCw, false).on_click(cx.listener(|this, _, _, cx| { this.html.loaded = None; this.load(cx); })))
+                .child(button("viewer-reload", IconName::RotateCw, false).on_click(cx.listener(|this, _, _, cx| { this.html.loaded = None; this.refresh_diff(); this.load(cx); })))
         };
         row.child(button("viewer-copy", IconName::Copy, false).on_click(cx.listener(move |_, _, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copy.clone())))))
             .child(button("viewer-reveal", IconName::FolderOpen, false).on_click(move |_, _, cx| cx.reveal_path(std::path::Path::new(&reveal))))
@@ -1445,6 +1467,7 @@ impl Render for ViewerPanel {
             Content::Failed(err) => div().p_4().text_xs().text_color(c.danger).child(err.clone()).into_any_element(),
             Content::Pdf { pages, .. } => self.render_pdf_view(*pages, c, cx),
             Content::Image(p) => div().size_full().p_2().child(img(p.clone()).size_full().object_fit(ObjectFit::Contain)).into_any_element(),
+            Content::Text { .. } if self.diff_shown() => self.render_diff(font.clone(), c, cx),
             Content::Text { text, .. } if !self.editing && is_markdown && !self.source => {
                 let text = text.clone();
                 self.render_markdown(&path, text, &theme_id, c, cx)

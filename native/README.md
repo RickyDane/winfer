@@ -116,6 +116,7 @@ needs write access to that folder) and relaunches; the new copy waits for the ol
 - `WINFER_VAULT_FILE=path`: keep the keychain values (paired phones, keys) in a file instead, so a test copy can't touch the real ones
 - `WINFER_NATIVE_LAYER=browser|palette|…`, `WINFER_NATIVE_MOBILE=1`, `WINFER_NATIVE_INSTALL_BROWSER=1`: open a layer, the phone view, or download Chromium at launch
 - `WINFER_NATIVE_URL=https://…`: loads this page in the browser panel
+- `WINFER_NATIVE_VIEWER_DIFF=inline|split`: the file viewer starts in its diff mode
 - `WINFER_NATIVE_WORKSPACE=<dir>`: opens a workspace for this folder at launch
 - `WINFER_NATIVE_LAYER=palette|new-pane|shortcuts|race|abtest|branch|page:<plugin>/<page>|broadcast|recipes|sessions|side-terminal|settings:<page>|file:<path>`: opens that layer at launch
 - `WINFER_NATIVE_HOOK_FILE=<path>`: writes the hook server's address and token there, for test clients
