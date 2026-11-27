@@ -94,7 +94,7 @@ impl Follows {
             let Some(pane) = mirror.panes.iter().find(|p| p.id == *id) else { return false };
             // A remote task's orchestrator: its task reports it already.
             let orchestrates = |t: &HomeTask| {
-                t.mode == TaskMode::Remote && t.stage.open() && t.machine.as_ref() == Some(peer) && (t.remote_pane.as_ref() == Some(id) || pane.title.starts_with(&format!("{} ·", t.title())))
+                t.mode == TaskMode::Remote && t.stage.open() && t.machine.as_ref() == Some(peer) && t.orchestrated_by(pane)
             };
             if tasks.iter().any(orchestrates) {
                 return false;

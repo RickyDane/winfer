@@ -1383,6 +1383,7 @@ async fn process_queue_item(this: WeakEntity<Root>, item: QueueItem, cx: &mut As
         }
         this.update_state(cx, |s| s.log_activity(&item.workspace_id, format!("Merged {} into {} (queue)", info.branch, info.base), Some(pane.provider.clone())));
         this.patch_queue(&id, Merged, None, Vec::new(), cx);
+        this.home_worktree_merged(&pane, cx);
     });
     Ok(())
 }
