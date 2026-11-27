@@ -160,6 +160,8 @@ pub(super) struct Home {
     pub left_at: Option<Instant>,
     /// Home is on screen.
     pub shown: bool,
+    /// When the conductor last changed (ms), for the phones' list.
+    pub touched_ms: u64,
     /// A task whose orchestrator was asked to start on a paired machine, waiting to see it there.
     pending_remote: HashMap<String, Instant>,
     /// Tool calls sent to paired machines for remote tasks: request id → task id.
@@ -545,19 +547,6 @@ impl Root {
         })
     }
 
-    /// Something the user typed for the conductor outside its chat (the Home input, the phone).
-    pub(super) fn home_say(&mut self, text: &str, cx: &mut Context<Self>) -> Result<(), String> {
-        let text = text.trim();
-        if text.is_empty() {
-            return Ok(());
-        }
-        let model = self.conductor(cx)?;
-        self.home.voice_turn = false;
-        model.update(cx, |m, cx| m.submit(text, None, cx));
-        cx.notify();
-        Ok(())
-    }
-
     pub(super) fn has_orchestrator(&self, _cx: &App) -> bool {
         self.home.conductor.is_some()
     }
@@ -613,6 +602,12 @@ impl Root {
             self.orchestrator_says(pane_id, "Home's orchestrator has a question for you.", cx);
         }
         self.remember_session(pane_id, session, cx);
+        if pane_id == CONDUCTOR {
+            if step_changed {
+                self.home.touched_ms = now_secs() * 1000;
+            }
+            self.mobile_home_changed(cx);
+        }
         if step_changed {
             cx.notify();
         }

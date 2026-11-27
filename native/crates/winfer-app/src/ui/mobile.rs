@@ -9,6 +9,7 @@ use crate::code::protocol::{Cmd, Decision};
 use crate::code::session::CodeModel;
 use std::collections::HashSet;
 use super::*;
+use crate::voice::CONDUCTOR;
 use crate::model::Workspace;
 use crate::code::names::model_name;
 use crate::request::{AgentRequest, RequestOption, describe_request};
@@ -165,12 +166,12 @@ fn provider_models_json(
 impl Root {
     /// A chat pane's process side, when this pane is one that's running.
     fn chat(&self, id: &str) -> Option<Entity<CodeModel>> {
-        self.code_models.get(id).cloned()
+        self.code_models.get(id).cloned().or_else(|| self.home_model(id))
     }
 
     /// How many of the chat's pending form the phone has answered.
     fn chat_answered(&self, id: &str, cx: &App) -> usize {
-        let Some(model) = self.code_models.get(id) else { return 0 };
+        let Some(model) = self.chat(id) else { return 0 };
         let first = model.read(cx).state.approvals.first().map(|a| a.id.clone());
         self.mobile.answers.get(id).filter(|(a, _)| Some(a) == first.as_ref()).map_or(0, |(_, v)| v.len())
     }
@@ -237,6 +238,11 @@ impl Root {
                 self.mobile_broadcast(id, true, cx);
             }
         }
+        self.push_thread(id, cx);
+    }
+
+    /// Sends a chat's transcript to the phones that have it open.
+    fn push_thread(&mut self, id: &str, cx: &mut Context<Self>) {
         let now = Instant::now();
         if let Some(phones) = self.mobile.watching.get_mut(id) {
             phones.retain(|_, until| *until > now);
@@ -308,13 +314,49 @@ impl Root {
 
     pub(super) fn mobile_mirror(&self, cx: &App) -> Value {
         let s = self.state.read(cx);
-        let panes: Vec<Value> = s.workspaces.iter().flat_map(ordered).map(|p| self.snapshot_pane(p, cx)).collect();
+        let mut panes: Vec<Value> = self.home_snapshot(cx).into_iter().collect();
+        panes.extend(s.workspaces.iter().flat_map(ordered).map(|p| self.snapshot_pane(p, cx)));
         // Not the workspaces holding other machines' tiles: those are theirs to show.
         let workspaces: Vec<Value> = s.workspaces.iter().filter(|w| w.remote.is_none()).map(|w| json!({ "id": w.id, "name": w.name, "rootDir": winfer_core::folders::expand(&w.root_dir).to_string_lossy(), "active": w.id == s.active_workspace_id })).collect();
         let providers: Vec<Value> = s.providers.iter().filter(|p| p.installed && p.id != "shell").map(|p| json!({ "id": p.id, "name": p.name })).collect();
         let compact_tools = s.rest.get("codeWeb").and_then(|v| v["compactTools"].as_bool()).unwrap_or(true);
         let show_bg_notes = s.rest.get("codeWeb").and_then(|v| v["showBgNotes"].as_bool()).unwrap_or(true);
         json!({ "panes": panes, "workspaces": workspaces, "providers": providers, "defaultProvider": s.default_provider_id(), "theme": theme_json(&s.theme), "compactTools": compact_tools, "showBgNotes": show_bg_notes })
+    }
+
+    /// Home's orchestrator as the phones see it: a chat pinned at the top of the agents list.
+    fn home_snapshot(&self, cx: &App) -> Option<Value> {
+        let s = self.state.read(cx);
+        if !s.providers.iter().any(|p| p.id == "winfer" && p.installed) {
+            return None;
+        }
+        let (status, reply) = match self.home_model(CONDUCTOR) {
+            Some(m) => {
+                let st = &m.read(cx).state;
+                let status = if st.approvals.iter().any(|a| !a.questions.is_empty()) { "needs-input" } else if st.busy { "working" } else { "idle" };
+                (status, super::home::answer_of(&st.items).filter(|_| !st.busy))
+            }
+            None => ("idle", None),
+        };
+        let open = self.home.tasks.iter().filter(|t| t.stage.open()).count();
+        let message = self.orchestrator_step(cx).or_else(|| (open > 0).then(|| format!("{open} open task{}", if open == 1 { "" } else { "s" })));
+        Some(json!({
+            "id": CONDUCTOR, "title": "Home", "workspace": "All workspaces", "workspaceId": "", "archived": false, "cwd": "",
+            "provider": "winfer", "status": status, "message": message, "updatedAt": self.home.touched_ms, "request": null, "reply": reply,
+            "config": null, "background": [], "home": true,
+        }))
+    }
+
+    /// Home's orchestrator changed: tell the phones (its status, and its thread to those reading it).
+    pub(super) fn mobile_home_changed(&mut self, cx: &mut Context<Self>) {
+        if let Some(snap) = self.home_snapshot(cx) {
+            let sig = Self::signature(&snap);
+            if self.mobile.last_sent.get(CONDUCTOR) != Some(&sig) {
+                self.mobile.last_sent.insert(CONDUCTOR.to_string(), sig);
+                send(None, json!({ "t": "status", "pane": snap, "silent": true }));
+            }
+        }
+        self.push_thread(CONDUCTOR, cx);
     }
 
     fn signature(snapshot: &Value) -> String {
@@ -487,7 +529,18 @@ impl Root {
         if kind == "pane.new" {
             return reply(self.mobile_new_pane(&req, cx));
         }
-        let pane = req["paneId"].as_str().and_then(|id| self.state.read(cx).pane(id).cloned()).filter(|p| p.remote.is_none());
+        // Home's orchestrator isn't a pane of any workspace: it gets one that stands in for it.
+        if req["paneId"] == CONDUCTOR {
+            if matches!(kind.as_str(), "pane.close") {
+                self.stop_conductor(cx);
+                return reply(json!({ "t": "ack", "ok": true }));
+            }
+            if let Err(e) = self.conductor(cx) {
+                return reply(json!({ "t": if kind == "thread.get" { "error" } else { "ack" }, "ok": false, "error": e }));
+            }
+        }
+        let home_pane = (req["paneId"] == CONDUCTOR).then(|| Pane { id: CONDUCTOR.into(), provider: "winfer".into(), title: "Home".into(), ..Default::default() });
+        let pane = home_pane.or_else(|| req["paneId"].as_str().and_then(|id| self.state.read(cx).pane(id).cloned()).filter(|p| p.remote.is_none()));
         let Some(pane) = pane else {
             return reply(json!({ "t": if kind == "thread.get" { "error" } else { "ack" }, "ok": false, "error": "That agent is gone." }));
         };

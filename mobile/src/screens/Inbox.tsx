@@ -69,8 +69,11 @@ export function Inbox({ client }: { client: DesktopClient }) {
   const ptr = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLDivElement>(null);
 
-  const found = sortPanes(state.panes).filter((p) => matchesPane(p, query, providerInfo(p.provider)?.name, state.threads[p.id]?.messages));
-  const counts = useMemo(() => countStatuses(state.panes), [state.panes]);
+  // Home's orchestrators (one per desktop) sit above the agents, outside the counts and filters.
+  const homes = state.panes.filter((p) => p.home);
+  const agents = useMemo(() => state.panes.filter((p) => !p.home), [state.panes]);
+  const found = sortPanes(agents).filter((p) => matchesPane(p, query, providerInfo(p.provider)?.name, state.threads[p.id]?.messages));
+  const counts = useMemo(() => countStatuses(agents), [agents]);
   // The filters count what the search left; the headline keeps counting everything.
   const foundCounts = countStatuses(found);
   const link = linkState(state);
@@ -198,7 +201,7 @@ export function Inbox({ client }: { client: DesktopClient }) {
           <b>{desktop}</b>
           <span>{multi && link === "online" ? `${state.machines.length - away.length} of ${state.machines.length} connected` : link === "online" ? "Connected" : link === "away" ? (state.welcome?.server ?? activeIsServer() ? "Server offline" : "Desktop offline") : link === "offline" ? "Offline" : "Connecting…"}</span>
         </div>
-        {state.panes.length > 0 && <span className="bar-chip num">{state.panes.length} active</span>}
+        {agents.length > 0 && <span className="bar-chip num">{agents.length} active</span>}
       </header>
       <div className="ptr" ref={ptr} aria-hidden>
         <Icon name="refresh" size={16} />
@@ -206,9 +209,15 @@ export function Inbox({ client }: { client: DesktopClient }) {
       <div className="scroll tabbed" ref={scroller}>
         <section className="hero">
           <h1>Agents</h1>
-          <p>{summary(counts, state.panes.length)}</p>
+          <p>{summary(counts, agents.length)}</p>
         </section>
-        {state.panes.length > 0 && (
+        {homes.length > 0 && !query && (
+          <section className="list-group home-group">
+            <h2 className="label">Home</h2>
+            {group(homes)}
+          </section>
+        )}
+        {agents.length > 0 && (
           <form
             className="pick-search agent-search"
             role="search"
@@ -283,8 +292,8 @@ export function Inbox({ client }: { client: DesktopClient }) {
               <span className="empty-mark">
                 <img src="./icons/logo.svg" alt="" />
               </span>
-              <h3>{!state.panes.length ? "No agents running" : found.length ? "Nothing here" : "No matches"}</h3>
-              <p className="sub">{state.panes.length ? (found.length ? "Try another filter." : "Try another search.") : canStart ? "Tap + below, or start one in winfer; it appears here live." : "Start one in winfer and it appears here, live."}</p>
+              <h3>{!agents.length ? "No agents running" : found.length ? "Nothing here" : "No matches"}</h3>
+              <p className="sub">{agents.length ? (found.length ? "Try another filter." : "Try another search.") : canStart ? "Tap + below, or start one in winfer; it appears here live." : "Start one in winfer and it appears here, live."}</p>
             </div>
           )}
         </div>

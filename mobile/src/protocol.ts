@@ -68,6 +68,8 @@ export interface Pane {
   config?: PaneConfig | null;
   /** Subagents and background shells still running, as the desktop's pane header shows them. Older desktops don't send it. */
   background?: BgItem[];
+  /** Home's orchestrator (the desktop's chat above every workspace), not a workspace's agent. */
+  home?: boolean;
 }
 
 /** A running subagent (`kind: "agent"`) or background shell of a pane. */
