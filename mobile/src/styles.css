@@ -429,6 +429,40 @@ textarea, input, .md, .ask-code, .ask-q p, .turn-user p, .screen-text, .tool-bod
 .bg-text { flex: 1; min-width: 0; font: 11.5px var(--mono); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .bg-card .num { font: 11px var(--mono); color: var(--subtle); }
 
+/* The pane header's background pill and its sheet, as the desktop's. */
+.bg-chip {
+  flex: none; display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 9px;
+  border-radius: 999px; border: 1px solid color-mix(in srgb, var(--accent) 26%, transparent);
+  background: color-mix(in srgb, var(--accent) 13%, transparent); font-size: 11.5px; font-weight: 500; color: var(--muted);
+  white-space: nowrap; transition: background 0.15s, color 0.15s;
+}
+.bg-chip[data-open], .bg-chip:active { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--fg); }
+.bg-chip-part { display: flex; align-items: center; gap: 4px; }
+.bg-chip-part svg { color: var(--accent); }
+.bg-chip .num { font: 500 11.5px var(--mono); color: var(--fg); }
+.bg-chip-pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: bg-pulse 1.6s ease-in-out infinite; }
+@keyframes bg-pulse { 50% { opacity: 0.3; } }
+.bg-chip-dot { width: 3px; height: 3px; border-radius: 50%; background: color-mix(in srgb, var(--subtle) 60%, transparent); }
+@media (max-width: 520px) { .bg-chip-word { display: none; } }
+.bg-list { list-style: none; margin: 0; padding: 4px 8px 10px; display: flex; flex-direction: column; gap: 2px; max-height: 60vh; overflow-y: auto; }
+.bg-list li { display: flex; align-items: center; gap: 10px; padding: 9px 8px; border-radius: var(--r-lg); }
+.bg-list-icon { flex: none; display: grid; place-items: center; width: 26px; height: 26px; border-radius: var(--r-lg); --tone: var(--accent); background: color-mix(in srgb, var(--tone) 14%, transparent); color: var(--tone); }
+.bg-list li[data-kind="shell"] .bg-list-icon { --tone: var(--ok); }
+.bg-list-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.bg-list-top { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.bg-list-top b { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; font-weight: 500; }
+.bg-list-sub { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.bg-list-tag { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 1px 6px; border-radius: 5px; background: var(--hover); font-size: 10.5px; color: var(--subtle); }
+.bg-list-top .num { flex: none; margin-left: auto; font: 11px var(--mono); color: var(--subtle); }
+.bg-list-detail { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 11.5px var(--mono); color: var(--subtle); }
+.bg-stop {
+  flex: none; display: flex; align-items: center; gap: 5px; height: 30px; padding: 0 10px; border-radius: var(--r-lg);
+  background: color-mix(in srgb, var(--danger) 11%, transparent); color: var(--danger); font-size: 12px; font-weight: 500;
+}
+.bg-stop:disabled { opacity: 0.5; }
+.bg-stop .spinner { width: 10px; height: 10px; border-width: 1.5px; }
+.bg-err { margin: 0 16px 12px; }
+
 .end-mark { display: flex; align-items: center; gap: 12px; margin: 14px 0 2px; font-size: 11px; color: var(--subtle); white-space: nowrap; }
 .end-mark::before, .end-mark::after { content: ""; flex: 1; height: 1px; background: var(--border); }
 .end-mark span { display: inline-flex; align-items: center; gap: 5px; }

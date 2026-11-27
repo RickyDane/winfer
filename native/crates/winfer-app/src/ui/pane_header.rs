@@ -587,6 +587,7 @@ impl Root {
             });
         }
         list.retain(|t| t.status == "running");
+        self.mobile_bg_changed(&pane_id, cx);
         if self.bg_popover.as_ref().is_some_and(|(p, _)| *p == pane_id) && self.running_bg_items(&pane_id, cx).is_empty() {
             self.bg_popover = None;
         }
@@ -648,6 +649,50 @@ impl Root {
             }
         }
         out
+    }
+
+    /// Stops a running subagent (`winfer code` task) or background shell (MCP `bg` task) of a pane.
+    pub(super) fn stop_bg_item(&mut self, pane_id: &str, id: &str, from_code: bool, cx: &mut Context<Self>) {
+        if from_code {
+            if let Some(model) = self.code_models.get(pane_id) {
+                let id = id.to_string();
+                model.update(cx, |m, cx| m.send(crate::code::protocol::Cmd::StopTask(id), cx));
+            }
+        } else {
+            let _ = winfer_backend::harness::bg::stop(id);
+            if let Some(list) = self.bg_tasks.get_mut(pane_id) {
+                list.retain(|t| t.id != id);
+            }
+            if self.running_bg_items(pane_id, cx).is_empty() {
+                self.bg_popover = None;
+            }
+            self.mobile_bg_changed(pane_id, cx);
+        }
+        cx.notify();
+    }
+
+    /// Stops a pane's background item by id, as the phone asks; false when it isn't running.
+    pub(super) fn stop_bg_item_by_id(&mut self, pane_id: &str, id: &str, cx: &mut Context<Self>) -> bool {
+        let Some(from_code) = self.running_bg_items(pane_id, cx).into_iter().find(|t| t.id == id).map(|t| t.from_code) else { return false };
+        self.stop_bg_item(pane_id, id, from_code, cx);
+        true
+    }
+
+    /// The header's running subagents and background shells, for the phones (the pane snapshot's `background`).
+    pub(super) fn mobile_bg_items(&self, pane_id: &str, cx: &App) -> Vec<Value> {
+        self.running_bg_items(pane_id, cx)
+            .into_iter()
+            .map(|t| {
+                let kind = if t.agent.is_some() { "agent" } else { "shell" };
+                let label = match (&t.agent, &t.model) {
+                    (Some(a), Some(m)) => format!("{a} · {}", crate::code::names::model_name(m, None)),
+                    (Some(a), None) => a.clone(),
+                    (None, _) => "shell".to_string(),
+                };
+                let detail = if t.agent.is_some() { t.recent_lines.last().cloned().or(t.last) } else { t.description.clone().or(t.last) };
+                serde_json::json!({ "id": t.id, "kind": kind, "title": t.title, "label": label, "detail": detail, "startedAt": t.started_at })
+            })
+            .collect()
     }
 
     /// Compact pill on the pane header showing running subagents and background shells.
@@ -827,21 +872,7 @@ impl Root {
                                     .tooltip(|window, cx| Tooltip::new("Stop this background task").build(window, cx))
                                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                                     .on_click(cx.listener(move |this, _, _, cx| {
-                                        if stop_code {
-                                            if let Some(model) = this.code_models.get(&stop_pid) {
-                                                let id = stop_id.clone();
-                                                model.update(cx, |m, cx| m.send(crate::code::protocol::Cmd::StopTask(id), cx));
-                                            }
-                                        } else {
-                                            let _ = winfer_backend::harness::bg::stop(&stop_id);
-                                            if let Some(list) = this.bg_tasks.get_mut(&stop_pid) {
-                                                list.retain(|t| t.id != stop_id);
-                                            }
-                                            if this.running_bg_items(&stop_pid, cx).is_empty() {
-                                                this.bg_popover = None;
-                                            }
-                                        }
-                                        cx.notify();
+                                        this.stop_bg_item(&stop_pid, &stop_id, stop_code, cx);
                                     }))
                                     .child(Icon::new(IconName::Square).size(px(9.0)))
                                     .child("Stop"),

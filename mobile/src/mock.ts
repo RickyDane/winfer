@@ -43,6 +43,11 @@ const PANES: Pane[] = [
     updatedAt: now - 20_000,
     request: null,
     reply: null,
+    background: [
+      { id: "t-explore", kind: "agent", title: "Find the relay's auth checks", label: "Explore · Haiku 4.5", detail: "Grep \"verifyToken\" in src/", startedAt: now - 74_000 },
+      { id: "t-review", kind: "agent", title: "Review the worker diff", label: "general-purpose", detail: "Read src/worker.ts", startedAt: now - 31_000 },
+      { id: "t-dev", kind: "shell", title: "wrangler dev", label: "shell", detail: "Ready on http://localhost:8787", startedAt: now - 5 * min },
+    ],
   },
   {
     id: "p-q",
@@ -420,6 +425,9 @@ export class MockClient extends BaseClient {
         return { t: "ack", id, ok: true };
       case "interrupt":
         this.update(msg.paneId, { status: "idle", message: "Interrupted", request: null });
+        return { t: "ack", id, ok: true };
+      case "bg.stop":
+        this.update(msg.paneId, { background: this.panes.find((p) => p.id === msg.paneId)?.background?.filter((t) => t.id !== msg.taskId) });
         return { t: "ack", id, ok: true };
       case "pane.close":
         this.panes = this.panes.filter((p) => p.id !== msg.paneId);

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import type { DesktopClient } from "../client";
 import { ago, firstMessages, go, haptic, useClient, useTick, vtName } from "../hooks";
-import { isFreeText, type Message, type Pane, type RequestOption } from "../protocol";
+import { isFreeText, type BgItem, type Message, type Pane, type RequestOption } from "../protocol";
 import { Composer, Pill, PillIcon } from "./Composer";
 import { activeIsServer } from "../pairing";
 import { forMachine } from "../multi";
@@ -237,6 +237,91 @@ function Background({ items }: { items: Message[] }) {
   );
 }
 
+const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
+
+/** The desktop header's pill: how many subagents and background shells are running; tap for the list. */
+function BgChip({ items, open, onOpen }: { items: BgItem[]; open: boolean; onOpen: () => void }) {
+  const agents = items.filter((t) => t.kind === "agent").length;
+  const shells = items.length - agents;
+  const label = [agents && plural(agents, "subagent"), shells && plural(shells, "background shell")].filter(Boolean).join(" · ");
+  return (
+    <button className="bg-chip" data-open={open || undefined} aria-label={`${label} running`} onClick={() => (haptic(5), onOpen())}>
+      <span className="bg-chip-pulse" aria-hidden />
+      {agents > 0 && (
+        <span className="bg-chip-part">
+          <Icon name="bot" size={12} />
+          <b className="num">{agents}</b>
+          <span className="bg-chip-word">{agents === 1 ? "agent" : "agents"}</span>
+        </span>
+      )}
+      {agents > 0 && shells > 0 && <span className="bg-chip-dot" aria-hidden />}
+      {shells > 0 && (
+        <span className="bg-chip-part">
+          <Icon name="terminal" size={12} />
+          <b className="num">{shells}</b>
+          <span className="bg-chip-word">{shells === 1 ? "shell" : "shells"}</span>
+        </span>
+      )}
+    </button>
+  );
+}
+
+/** The desktop's "In the background" popover: each running subagent and shell, with a stop button. */
+function BgSheet({ client, paneId, items, ready, onClose }: { client: DesktopClient; paneId: string; items: BgItem[]; ready: boolean; onClose: () => void }) {
+  useTick(1000);
+  const [stopping, setStopping] = useState<Set<string>>(new Set());
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    if (!items.length) onClose();
+  }, [items.length, onClose]);
+  const stop = async (t: BgItem) => {
+    if (stopping.has(t.id)) return;
+    haptic([6, 30, 6]);
+    setErr(null);
+    setStopping((s) => new Set(s).add(t.id));
+    try {
+      await client.request({ t: "bg.stop", paneId, taskId: t.id });
+    } catch (e) {
+      setErr((e as Error).message);
+      setStopping((s) => {
+        const next = new Set(s);
+        next.delete(t.id);
+        return next;
+      });
+    }
+  };
+  const agents = items.filter((t) => t.kind === "agent").length;
+  const shells = items.length - agents;
+  const sub = [agents && plural(agents, "subagent"), shells && plural(shells, "shell")].filter(Boolean).join(" · ") + " running";
+  return (
+    <Sheet label="In the background" title="In the background" sub={sub} onClose={onClose}>
+      <ul className="bg-list">
+        {items.map((t) => (
+          <li key={t.id} data-kind={t.kind}>
+            <span className="bg-list-icon" aria-hidden>
+              <Icon name={t.kind === "agent" ? "bot" : "terminal"} size={13} />
+            </span>
+            <div className="bg-list-body">
+              <div className="bg-list-top">
+                <b>{t.title}</b>
+                <span className="num">{clock(Date.now() - t.startedAt)}</span>
+              </div>
+              <div className="bg-list-sub">
+                <span className="bg-list-tag">{t.label}</span>
+                <span className="bg-list-detail">{t.detail || (t.kind === "agent" ? "starting…" : "running…")}</span>
+              </div>
+            </div>
+            <button className="bg-stop" disabled={!ready || stopping.has(t.id)} aria-label={`Stop ${t.title}`} onClick={() => stop(t)}>
+              {stopping.has(t.id) ? <span className="spinner" aria-hidden /> : <Icon name="stop" size={10} />} Stop
+            </button>
+          </li>
+        ))}
+      </ul>
+      {err && <p className="inline-error bg-err">{err}</p>}
+    </Sheet>
+  );
+}
+
 /** Where the turn ended, as the desktop's "Worked for…" divider. */
 function EndMark({ pane }: { pane: Pane }) {
   useTick(30_000);
@@ -305,7 +390,7 @@ export function Thread({ client, paneId }: { client: DesktopClient; paneId: stri
   const [picked, setPicked] = useState<number | null>(null);
   /** A "Type something" row the composer answers. */
   const [typing, setTyping] = useState<number | null>(null);
-  const [picker, setPicker] = useState<"model" | "effort" | "menu" | null>(null);
+  const [picker, setPicker] = useState<"model" | "effort" | "menu" | "bg" | null>(null);
   const [confirm, setConfirm] = useState(false);
   const scroller = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
@@ -450,6 +535,8 @@ export function Thread({ client, paneId }: { client: DesktopClient; paneId: stri
       .finally(() => setBusy(null));
   };
 
+  const closePicker = useCallback(() => setPicker(null), []);
+
   const closeSession = () => {
     if (!pane) return;
     if (pane.status === "working" && !confirm) return setConfirm(true);
@@ -513,6 +600,7 @@ export function Thread({ client, paneId }: { client: DesktopClient; paneId: stri
             )}
           </span>
         </div>
+        {pane?.background?.length ? <BgChip items={pane.background} open={picker === "bg"} onOpen={() => setPicker("bg")} /> : null}
         {pane && (
           <button className="icon-btn" aria-label="More" onClick={() => (haptic(5), setConfirm(false), setPicker("menu"))}>
             <Icon name="more" size={18} />
@@ -705,6 +793,7 @@ export function Thread({ client, paneId }: { client: DesktopClient; paneId: stri
       </footer>
       {picker === "model" && pane && cfg && <ModelPicker client={client} pane={pane} config={cfg} online={ready} onClose={() => setPicker(null)} />}
       {picker === "effort" && pane && cfg && <EffortPicker client={client} pane={pane} config={cfg} online={ready} onClose={() => setPicker(null)} />}
+      {picker === "bg" && pane && <BgSheet client={client} paneId={pane.id} items={pane.background ?? []} ready={ready} onClose={closePicker} />}
       {picker === "menu" && pane && (
         <Sheet label="Agent" title={pane.title} sub={`${pane.workspace} · ${STATUS_LABEL[pane.status]}`} onClose={() => setPicker(null)}>
           <div className="sheet-body">

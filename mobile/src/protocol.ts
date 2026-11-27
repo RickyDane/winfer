@@ -66,6 +66,20 @@ export interface Pane {
   request: PaneRequest | null;
   reply: string | null;
   config?: PaneConfig | null;
+  /** Subagents and background shells still running, as the desktop's pane header shows them. Older desktops don't send it. */
+  background?: BgItem[];
+}
+
+/** A running subagent (`kind: "agent"`) or background shell of a pane. */
+export interface BgItem {
+  id: string;
+  kind: "agent" | "shell";
+  title: string;
+  /** "Explore · Haiku 4.5", or "shell". */
+  label: string;
+  /** Its latest line of output or call, or what it was started for. */
+  detail: string | null;
+  startedAt: number;
 }
 
 /** A `visualize` report, normalised by the desktop (`viz::Report::to_json`). */
@@ -205,6 +219,7 @@ export type PhoneMsg =
   | { t: "pane.set"; paneId: string; model?: string; effort?: string }
   | { t: "pane.new"; workspaceId: string; provider?: string; text?: string; model?: string; effort?: string }
   | { t: "pane.close"; paneId: string }
+  | { t: "bg.stop"; paneId: string; taskId: string }
   | { t: "push.subscribe"; subscription: PushSubscriptionJSON }
   | { t: "push.unsubscribe" }
   // The side panel (see "Side panel" in docs/mobile/protocol.md).

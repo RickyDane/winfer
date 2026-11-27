@@ -41,6 +41,8 @@ pub(super) struct MobileBridge {
     push_pending: HashSet<String>,
     /// A chat pane's model, effort, mode and branch at the last look, to tell the phones when it changes.
     chat_cfg: HashMap<String, String>,
+    /// A pane's running subagents and background shells at the last look, to tell the phones when they change.
+    bg_sig: HashMap<String, String>,
 }
 
 fn now_ms() -> f64 {
@@ -220,6 +222,7 @@ impl Root {
         {
             self.mobile_broadcast(id, true, cx);
         }
+        self.mobile_bg_changed(id, cx);
         let was = self.mobile.chat_asking.contains(id);
         if asking != was {
             if asking {
@@ -292,12 +295,14 @@ impl Root {
             reply = None;
         }
         let config = self.chat(&pane.id).map(|m| chat_config(&m.read(cx).state));
+        let background = self.mobile_bg_items(&pane.id, cx);
         json!({
             "id": pane.id, "title": s.pane_label(pane),
             "workspace": s.workspaces.iter().find(|w| w.id == pane.workspace_id).map_or("", |w| w.name.as_str()),
             "workspaceId": pane.workspace_id, "archived": pane.archived,
             "provider": if pane.provider == "shell" { None } else { Some(pane.provider.clone()) },
             "status": status, "message": message, "updatedAt": updated, "request": request, "reply": reply, "config": config,
+            "background": background,
         })
     }
 
@@ -316,6 +321,18 @@ impl Root {
         let mut v = snapshot.clone();
         v["updatedAt"] = json!(0);
         v.to_string()
+    }
+
+    /// A pane's running subagents or background shells changed: tell the phones, quietly.
+    pub(super) fn mobile_bg_changed(&mut self, id: &str, cx: &App) {
+        let items = self.mobile_bg_items(id, cx);
+        let empty = items.is_empty();
+        let sig = Value::Array(items).to_string();
+        // Nothing ran yet: the phones' snapshot already says so.
+        let before = self.mobile.bg_sig.insert(id.to_string(), sig.clone());
+        if before.as_ref() != Some(&sig) && !(before.is_none() && empty) {
+            self.mobile_broadcast(id, true, cx);
+        }
     }
 
     fn mobile_broadcast(&mut self, id: &str, silent: bool, cx: &App) {
@@ -630,6 +647,15 @@ impl Root {
             "pane.close" => {
                 self.execute(Command::Close(target), window, cx);
                 reply(ok);
+            }
+            "bg.stop" => {
+                let id = req["taskId"].as_str().unwrap_or_default();
+                if self.stop_bg_item_by_id(&pane.id, id, cx) {
+                    log(self, "Stopped a background task from your phone".into(), cx);
+                    reply(ok);
+                } else {
+                    reply(json!({ "t": "ack", "ok": false, "error": "That task isn't running anymore." }));
+                }
             }
             other => reply(json!({ "t": "error", "error": format!("unknown request {other}") })),
         }
