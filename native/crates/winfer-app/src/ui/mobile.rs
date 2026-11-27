@@ -753,7 +753,7 @@ impl Root {
             return json!({ "t": "ack", "ok": false, "error": "That workspace is gone." });
         };
         let wanted = req["provider"].as_str().filter(|p| *p != "default").map_or_else(|| s.default_provider_id(), str::to_string);
-        let Some(name) = s.providers.iter().find(|p| p.id == wanted && p.installed && p.id != "shell").map(|p| p.name.clone()) else {
+        let Some(name) = s.providers.iter().find(|p| p.id == wanted && p.installed).map(|p| p.name.clone()) else {
             return json!({ "t": "ack", "ok": false, "error": "That agent isn't installed on the desktop." });
         };
         let prompt = req["text"].as_str().map(str::trim).filter(|t| !t.is_empty()).map(str::to_string);

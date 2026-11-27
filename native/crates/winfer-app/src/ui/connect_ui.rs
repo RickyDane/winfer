@@ -138,6 +138,10 @@ pub(super) struct ConnectClient {
     seq: u64,
     /// Requests waiting for an answer: id → what to say if it fails.
     pending: HashMap<String, String>,
+    /// Terminals asked for and not yet answered (request ids): their tile opens here.
+    terminal_requests: HashSet<String>,
+    /// Terminals started on a peer (peer, pane), to open once its pane list has them.
+    terminal_opens: Vec<(String, String)>,
     /// When each peer last told us its user was at it.
     active_at: HashMap<String, Instant>,
     last_notified: HashMap<String, Instant>,
@@ -584,7 +588,8 @@ impl Root {
                     loaded: true,
                     server: ServerInfo::parse(&msg["server"]),
                 };
-                self.connect.mirrors.insert(peer, mirror);
+                self.connect.mirrors.insert(peer.clone(), mirror);
+                self.open_new_terminals(&peer, window, cx);
                 cx.notify();
             }
             "file.open" => {
@@ -614,6 +619,7 @@ impl Root {
                     self.connect_notify(&peer, &pane, cx);
                 }
                 self.sync_remote_tiles(&peer, &pane, cx);
+                self.open_new_terminals(&peer, window, cx);
                 cx.notify();
             }
             "term.snapshot" | "term.out" | "term.exit" | "term.reclaim" => self.on_term_reply(&peer, msg, cx),
@@ -657,6 +663,13 @@ impl Root {
                     && msg["ok"] == true
                 {
                     self.toast(done, cx);
+                }
+                if self.connect.terminal_requests.remove(id)
+                    && msg["ok"] == true
+                    && let Some(pane) = msg["paneId"].as_str()
+                {
+                    self.connect.terminal_opens.push((peer.clone(), pane.to_string()));
+                    self.open_new_terminals(&peer, window, cx);
                 }
                 if let Some(failure) = self.connect.pending.remove(id)
                     && msg["ok"] != true
@@ -838,7 +851,8 @@ impl Root {
         cx.notify();
     }
 
-    /// Starts a session on a paired machine, in its first (or given) workspace.
+    /// Starts a session on a paired machine, in its first (or given) workspace. A plain
+    /// terminal also opens as a tile here.
     pub(super) fn remote_new_pane(&mut self, peer: &str, workspace: Option<String>, provider: Option<String>, cx: &mut Context<Self>) {
         let Some(mirror) = self.connect.mirrors.get(peer) else { return };
         let Some(ws) = workspace.or_else(|| mirror.workspaces.first().map(|w| w.0.clone())) else {
@@ -846,11 +860,27 @@ impl Root {
             return;
         };
         let mut msg = json!({"t": "pane.new", "workspaceId": ws});
+        let terminal = provider.as_deref() == Some("shell");
         if let Some(p) = provider {
             msg["provider"] = json!(p);
         }
         let name = crate::connect::peer_name(peer).unwrap_or_else(|| "the other machine".into());
-        self.connect_request(peer, msg, Some(format!("Couldn't start a session on {name}")));
+        let id = self.connect_request(peer, msg, Some(format!("Couldn't start a session on {name}")));
+        if terminal {
+            self.connect.terminal_requests.insert(id);
+        }
+    }
+
+    /// Opens the terminals asked for on `peer` that its pane list now has.
+    fn open_new_terminals(&mut self, peer: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(mirror) = self.connect.mirrors.get(peer) else { return };
+        let (ready, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut self.connect.terminal_opens)
+            .into_iter()
+            .partition(|(p, pane)| p == peer && mirror.panes.iter().any(|m| &m.id == pane));
+        self.connect.terminal_opens = waiting;
+        for (peer, pane) in ready {
+            self.open_remote_pane(&peer, &pane, window, cx);
+        }
     }
 
     /// Links that came up before the app was listening: ask for their panes, and hand them ours
@@ -1912,7 +1942,7 @@ impl Root {
     }
 
     /// A workspace's menu on a paired machine (right-click on it): a session with each agent
-    /// installed there, its browser, files, and removing it.
+    /// installed there, a plain terminal, its browser, files, and removing it.
     fn remote_workspace_menu(&self, peer: &str, ws: &str) -> Vec<MenuItem> {
         let Some(mirror) = self.connect.mirrors.get(peer) else { return Vec::new() };
         let mut items = Vec::new();
@@ -1922,6 +1952,8 @@ impl Root {
             items.push(MenuItem::run(label, move |this: &mut Root, _: &mut Window, cx: &mut Context<Root>| this.remote_new_pane(&peer, Some(ws.clone()), Some(provider.clone()), cx)));
         }
         items.push(MenuItem::Separator);
+        let (p, w) = (peer.to_string(), ws.to_string());
+        items.push(MenuItem::run("Open terminal", move |this: &mut Root, _: &mut Window, cx: &mut Context<Root>| this.remote_new_pane(&p, Some(w.clone()), Some("shell".into()), cx)));
         let (p, w) = (peer.to_string(), ws.to_string());
         items.push(MenuItem::run("Show its browser", move |this: &mut Root, _: &mut Window, cx: &mut Context<Root>| this.show_remote_browser(&p, Some(&w), cx)));
         let (p, w) = (peer.to_string(), ws.to_string());
