@@ -1742,6 +1742,17 @@ impl Root {
                 format!("{} started on {machine}: a task orchestrator there plans and runs it in {workspace}, and reports to you.", task.title())
             }
         };
+        let mode = match task.mode {
+            TaskMode::Light => "light",
+            TaskMode::Fork => "fork",
+            TaskMode::Remote => "remote",
+        };
+        // A fork's own agent is its orchestrator (winfer code on the task orchestrators' model);
+        // the agents it starts report `pane_opened` themselves.
+        match task.mode {
+            TaskMode::Light => crate::telemetry::home_task_started(mode, agent.as_deref(), model.as_deref()),
+            TaskMode::Fork | TaskMode::Remote => crate::telemetry::home_task_started(mode, Some("winfer"), home_settings(self.state.read(cx)).task_model.as_deref()),
+        }
         Ok(reply)
     }
 

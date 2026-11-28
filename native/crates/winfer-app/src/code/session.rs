@@ -112,7 +112,9 @@ impl CodeModel {
         });
         let pane_id = pane.id.clone();
         let plan_sidebar = false;
-        let model = Self { pane_id: pane_id.clone(), state: CodeState::default(), session: session.clone(), app, lines: LineBuffer::default(), pending: Vec::new(), flushing: false, draft: String::new(), draft_rev: 0, attachments: Vec::new(), plan_sidebar, screen_at: 0, mentions: Vec::new() };
+        let mut state = CodeState::default();
+        state.surface = crate::voice::surface(&pane_id);
+        let model = Self { pane_id: pane_id.clone(), state, session: session.clone(), app, lines: LineBuffer::default(), pending: Vec::new(), flushing: false, draft: String::new(), draft_rev: 0, attachments: Vec::new(), plan_sidebar, screen_at: 0, mentions: Vec::new() };
         cx.spawn(async move |this, cx| {
             while let Ok(first) = rx.recv().await {
                 let mut batch = vec![first];
@@ -169,7 +171,8 @@ impl CodeModel {
     /// Forgets the transcript, before the history is replayed from the start (a remote chat
     /// pane re-attaching to its machine).
     pub fn reset(&mut self, cx: &mut Context<Self>) {
-        self.state = CodeState::default();
+        let surface = std::mem::take(&mut self.state).surface;
+        self.state.surface = surface;
         self.lines = LineBuffer::default();
         cx.notify();
     }
