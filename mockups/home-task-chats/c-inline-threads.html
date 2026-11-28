@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Home task chats · C · Inline threads</title>
+<link rel="stylesheet" href="shared.css" />
+<style>
+  .thread { border: 1px solid var(--edge); border-radius: 14px; background: #0e0e10; overflow: hidden; }
+  .thread.on { border-color: #7c8cff66; }
+  .thread.needs { border-color: #fbbf2466; }
+  .th-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px 8px 12px; cursor: pointer; }
+  .th-head:hover { background: var(--hover); }
+  .th-head .goal { font-size: 12.5px; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .th-head .sum { font-size: 11px; color: var(--subtle); white-space: nowrap; }
+  .th-head .chev { color: var(--subtle); transition: transform .15s; }
+  .thread.open .th-head .chev { transform: rotate(90deg); }
+  .th-body { display: none; border-top: 1px solid var(--border); }
+  .thread.open .th-body { display: block; }
+  .th-agents { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--border); background: var(--panel); }
+  .th-msgs { position: relative; padding: 10px 14px 6px 30px; display: flex; flex-direction: column; gap: 9px; }
+  .th-msgs::before { content: ""; position: absolute; left: 17px; top: 10px; bottom: 10px; width: 2px; border-radius: 1px; background: var(--border-strong); }
+  .th-msgs .m-user { max-width: 90%; font-size: 13px; }
+  .th-msgs .m-text { font-size: 13px; }
+  .earlier { font-size: 11.5px; color: var(--accent); cursor: pointer; }
+  .th-dock { padding: 0 14px 0 30px; }
+  .th-dock .ask-card { box-shadow: none; }
+  .th-comp { padding: 0 14px 12px 30px; }
+  .th-comp .composer-box { max-width: none; padding: 7px 10px 6px; border-radius: 10px; }
+  .th-comp .composer-box .ph { font-size: 12.5px; min-height: 18px; }
+  .th-foot { display: flex; align-items: center; gap: 6px; padding: 0 14px 10px 30px; }
+  .hoist { flex-shrink: 0; margin: 8px 22px 0; display: flex; align-items: center; gap: 8px; padding: 7px 12px; border-radius: 10px; background: #fbbf2414; border: 1px solid #fbbf2440; color: var(--warning); font-size: 12px; }
+  .hoist .btn { color: var(--fg); }
+  .rail .card .thr { font-size: 11px; color: var(--subtle); display: flex; gap: 5px; align-items: center; }
+  .scen { max-width: 1440px; margin: 0 auto 10px; padding: 0 24px; display: flex; gap: 6px; align-items: center; font-size: 12px; color: var(--subtle); }
+  .flash { animation: flash 1s ease-out; }
+  @keyframes flash { 0% { box-shadow: 0 0 0 3px #7c8cff88; } 100% { box-shadow: 0 0 0 0 transparent; } }
+</style>
+</head>
+<body>
+<div class="note">
+  <h1><a class="back" href="index.html">← all variants</a> C · Threads inline in the Home chat</h1>
+  <section><h2>Idea</h2><p>Every task lives as a collapsible thread right under the Home message that started it, like Slack replies inline. Expanded, it shows the agent's latest turns, its pending question/approval and a small reply box that talks to that agent. Fork threads get agent chips in the thread header. The rail stays as an index: clicking a card scrolls to its thread and expands it. Needs-you items are hoisted into a banner at the top.</p></section>
+  <section><h2>Pros</h2><ul><li>Context is kept: why a task exists sits right above it</li><li>Several tasks can be open at once, answered in one scroll</li><li>Home chat never goes away</li></ul></section>
+  <section><h2>Cons</h2><ul><li>Long threads bloat the Home transcript; needs "show earlier" + height caps</li><li>Many composers; keyboard focus gets ambiguous</li><li>Hardest to build: nested CodeView transcripts inside a CodeView</li></ul></section>
+  <section><h2>home_view.rs changes</h2><ul><li>New <code>home.expanded: HashSet&lt;(task, agent)&gt;</code> instead of <code>home.thread</code>; tab row removed</li><li>Conductor transcript gets a "task thread" item kind anchored to the <code>update_task</code> call; renders a trimmed child <code>CodeView</code> (last N items + dock + mini composer)</li><li><code>open_task_card</code> → expand + scroll-to-anchor</li><li>Hoisted needs-you banner from <code>home.tasks</code> stages</li></ul></section>
+</div>
+<div class="scen">Jump to: <button class="btn sm" onclick="jump('t2','orch')">T2 fork · question</button><button class="btn sm" onclick="jump('t2','backend')">T2 · backend approval</button><button class="btn sm" onclick="jump('t1')">T1 light</button><button class="btn sm" onclick="jump('t3')">T3 remote</button><button class="btn sm" onclick="collapseAll()">Collapse all</button></div>
+<div id="app"></div>
+<script src="shared.js"></script>
+<script>
+const st = { t2: { open: true, a: 'orch' }, t1: { open: false, a: 'a' }, t3: { open: true, a: 'orch' }, t4: { open: false, a: 'orch' }, t5: { open: false, a: 'a' } };
+let flash = null;
+function toggle(id) { st[id].open = !st[id].open; render(); }
+function agentSel(id, a) { st[id].a = a; render(); }
+function jump(id, a) { st[id].open = true; if (a) st[id].a = a; flash = id; render(); document.getElementById('th-' + id).scrollIntoView({ block: 'start', behavior: 'smooth' }); }
+function collapseAll() { Object.values(st).forEach(s => s.open = false); render(); }
+const summary = { t2: '4 agents · 23 turns', t1: 'Claude · 9 turns', t3: '14 turns · +64 -91', t4: '8 turns', t5: '5 turns' };
+function thread(id) {
+  const t = task(id), s = st[id], a = AG(t, s.a), fork = t.mode === 'fork';
+  const label = fork ? (s.a === 'orch' ? 'orchestrator' : a.name) : t.machine ? `orchestrator on ${t.machine}` : 'Claude';
+  const all = CHATS[`${id}/${s.a}`] || [];
+  return `<div id="th-${id}" class="thread${s.open ? ' open' : ''}${t.stage === 'needs' ? ' needs' : ''}${flash === id ? ' flash' : ''}">
+    <div class="th-head" onclick="toggle('${id}')"><span class="chev">${I('chev', 13)}</span><b style="font-size:11.5px;color:var(--muted)">T${t.n}</b>${pill(t.stage)}${t.machine ? `<span class="machine">${I('server')}${t.machine}</span>` : ''}<span class="goal">${t.goal}</span>
+      ${fork && !s.open ? `<span style="display:flex;gap:3px">${t.agents.map(x => `<span class="sdot sd-${x.status}"></span>`).join('')}</span>` : ''}<span class="sum">${I('thread', 11)}</span><span class="sum">${summary[id]}</span></div>
+    <div class="th-body">
+      ${fork ? `<div class="th-agents">${agentChips(t, s.a, 'agentSel')}<span class="grow"></span>${paneMenu(t, s.a, 'm-' + id)}</div>` : ''}
+      <div class="th-msgs">${all.length > 3 ? `<span class="earlier">Show ${all.length - 3} earlier</span>` : ''}${itemsFrom(id, s.a, Math.max(0, all.length - 3))}</div>
+      <div class="th-dock">${pending(id, s.a, true)}</div>
+      <div class="th-comp">${composer(`${label}`, { model: t.model, ph: `Reply to ${label}…` }).replace('class="composer"', 'class="x"')}</div>
+      <div class="th-foot"><button class="btn sm ghost" onclick="toggle('${id}')">${I('down', 12)} Collapse</button><span class="grow"></span>${fork ? '' : `<button class="btn sm ghost">${I('ext', 12)} Open pane <span class="kbd">${a.pane}</span></button><button class="btn sm ghost">${I('branch', 12)} Worktree</button>`}${fork ? `<button class="btn sm ghost">${I('ext', 12)} Open ${a.name}'s pane</button>` : ''}</div>
+    </div></div>`;
+}
+function itemsFrom(id, a, from) { const k = `${id}/${a}`, saved = CHATS[k]; CHATS[k] = saved.slice(from); const h = items(id, a); CHATS[k] = saved; return h; }
+const H = (html) => `<div><div class="who"><span class="avatar" style="background:#7c8cff">H</span><b>Home</b></div><div class="m-text">${html}</div></div>`;
+function render() {
+  const chat = `
+    <div class="m-user">Add CSV export to the reports page in web, and fix that flaky login test in api while you're at it.</div>
+    ${H('<p>Forked CSV export with its own orchestrator; the login flake is a one-agent fix.</p>')}
+    ${thread('t2')}${thread('t1')}
+    <div class="m-user">Also bump tokio on the hetzner box and start the 0.42 release on the studio.</div>
+    ${H('<p>Started both on the other machines.</p>')}
+    ${thread('t3')}${thread('t4')}
+    <div class="m-event">yesterday</div>${thread('t5')}`;
+  const main = `<div class="panel main"><div class="tabs"><span class="tab on">${I('home', 12)}Home</span><span class="grow"></span><span class="step">Idle · 4 tasks open</span><button class="iconbtn">${I('restart', 13)}</button></div>
+    <div class="hoist">${I('shield', 14)}<span><b>2 waiting in T2</b>: export scope question · backend wants to run pnpm add</span><span class="grow"></span><button class="btn sm" onclick="jump('t2','orch')">Answer</button><button class="btn sm" onclick="jump('t2','backend')">Approve</button></div>
+    <div class="chat" id="chat"><div class="chat-inner" style="max-width:820px">${chat}</div></div>${composer('Home', { model: 'Opus 4.6', ph: 'Ask Home… (replies in threads go to their agent)' })}</div>`;
+  const rail = `<div class="panel rail"><div class="rail-scroll"><div class="sec">Tasks <span class="c">4</span></div><div class="cards">
+    ${TASKS.map(t => card(t, st[t.id].open, `onclick="jump('${t.id}')"`).replace('<div class="meta">' + tile(t.ws), `<div class="thr">${I('thread', 11)}${st[t.id].open ? 'expanded in chat' : 'thread · ' + summary[t.id]}</div><div class="meta">` + tile(t.ws))).join('')}</div>
+    <div class="subtle" style="font-size:11px;padding:10px 4px">Cards jump to their thread in the chat.</div></div></div>`;
+  document.getElementById('app').innerHTML = windowChrome(main + rail);
+  flash = null;
+}
+render();
+</script>
+</body>
+</html>

@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Home task chats · A · Drill-in</title>
+<link rel="stylesheet" href="shared.css" />
+<style>
+  .crumbs { display: flex; align-items: center; gap: 4px; min-width: 0; font-size: 12.5px; }
+  .crumb { height: 26px; display: inline-flex; align-items: center; gap: 6px; padding: 0 8px; border-radius: 7px; color: var(--muted); white-space: nowrap; }
+  .crumb:hover { background: var(--hover); color: var(--fg); }
+  .crumb.cur { color: var(--fg); font-weight: 500; }
+  .crumb .goal { max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+  .crumbs .sepc { color: var(--subtle); }
+  .homebadge { font-size: 10.5px; color: var(--accent); background: #7c8cff24; border-radius: 5px; padding: 1px 6px; }
+  .subhead { flex-shrink: 0; display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--border); }
+  .subhead .lbl { font-size: 11px; color: var(--subtle); text-transform: uppercase; letter-spacing: .06em; font-weight: 600; margin-right: 4px; }
+  .peek { margin: 8px 22px 0; display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 10px; border: 1px dashed var(--edge); font-size: 12px; color: var(--muted); cursor: pointer; }
+  .peek:hover { background: var(--hover); }
+  .slide { animation: slide .18s ease-out; }
+  @keyframes slide { from { transform: translateX(18px); opacity: 0; } to { transform: none; opacity: 1; } }
+  .scen { max-width: 1440px; margin: 0 auto 10px; padding: 0 24px; display: flex; gap: 6px; align-items: center; font-size: 12px; color: var(--subtle); }
+</style>
+</head>
+<body>
+<div class="note">
+  <h1><a class="back" href="index.html">← all variants</a> A · Drill-in stack <span class="tag">RECOMMENDED</span></h1>
+  <section><h2>Idea</h2><p>Clicking a card pushes the task's chat into the same chat panel Home uses. A breadcrumb <b>Home › T2 › backend</b> replaces the tab row; back is the breadcrumb, <span class="kbd">Esc</span> or <span class="kbd">⌘[</span>. The task rail stays, so switching tasks is one click and cards show which one is open. Fork agents are a chip row under the breadcrumb.</p></section>
+  <section><h2>Pros</h2><ul><li>Full width for the transcript, approvals, diffs</li><li>Smallest change: generalizes today's <code>home.thread</code></li><li>One composer, always obvious who it talks to</li></ul></section>
+  <section><h2>Cons</h2><ul><li>Home chat is hidden while you're in a task (a peek strip shows new Home replies)</li><li>Comparing two tasks side by side isn't possible</li></ul></section>
+  <section><h2>home_view.rs changes</h2><ul><li><code>home.thread: Option&lt;String&gt;</code> → <code>Option&lt;(task_id, agent_id)&gt;</code>, plus a back stack</li><li><code>open_task_card</code>: every mode sets <code>home.thread</code>; no more <code>home_focus_pane</code>/<code>WorkspaceSwitch</code></li><li><code>home_view_for</code> resolves light panes and remote panes (remote via the peer's CodeModel proxy)</li><li><code>render_home_chat</code>: tab row → breadcrumb + agent chips; pane/worktree go to a ⋯ menu</li></ul></section>
+</div>
+<div class="scen">Jump to: <button class="btn sm" onclick="go(null)">Home chat</button><button class="btn sm" onclick="go('t2','orch')">T2 fork · question</button><button class="btn sm" onclick="go('t2','backend')">T2 · backend approval</button><button class="btn sm" onclick="go('t1','a')">T1 light</button><button class="btn sm" onclick="go('t3','orch')">T3 remote · ready</button></div>
+<div id="app"></div>
+<script src="shared.js"></script>
+<script>
+let cur = { t: 't2', a: 'orch' };
+function go(t, a) { cur = t ? { t, a: a || task(t).agents[0].id } : null; render(); }
+function render() {
+  let main;
+  if (!cur) {
+    main = `<div class="panel main"><div class="tabs"><span class="tab on">${I('home', 12)}Home</span><span class="grow"></span><span class="step">Idle · 4 tasks open</span><button class="iconbtn">${I('restart', 13)}</button></div>
+      <div class="chat"><div class="chat-inner slide">${HOME_CHAT}</div></div>${composer('Home', { model: 'Opus 4.6', ph: 'Ask Home for something to build…' })}</div>`;
+  } else {
+    const t = task(cur.t), a = AG(t, cur.a);
+    const isFork = t.mode === 'fork';
+    main = `<div class="panel main"><div class="tabs" style="gap:2px">
+        <div class="crumbs"><button class="crumb" onclick="go(null)">${I('back', 13)}${I('home', 12)}Home<span class="homebadge">1 new</span></button><span class="sepc">${I('chev', 11)}</span>
+        <button class="crumb${isFork && cur.a !== 'orch' ? '' : ' cur'}" onclick="go('${t.id}')">T${t.n}<span class="goal">${t.goal}</span></button>
+        ${isFork && cur.a !== 'orch' ? `<span class="sepc">${I('chev', 11)}</span><span class="crumb cur"><span class="sdot sd-${a.status}"></span>${a.name}</span>` : ''}</div>
+        <span class="grow"></span>${pill(t.stage)}${t.machine ? `<span class="machine">${I('server')}${t.machine}</span>` : ''}
+        <button class="btn sm ghost" title="Leave Home: focus the real pane">${I('ext', 12)} Pane</button>${paneMenu(t, cur.a, 'm1')}</div>
+      ${isFork ? `<div class="subhead"><span class="lbl">Agents</span>${agentChips(t, cur.a, 'go')}</div>` : ''}
+      <div class="peek" onclick="go(null)">${I('home', 12)}<b style="color:var(--fg);font-weight:500">Home:</b> T3 is ready to merge; T2 needs you twice.<span class="grow"></span><span class="subtle">Esc to go back</span></div>
+      <div class="chat"><div class="chat-inner slide" style="max-width:820px">${items(t.id, cur.a)}</div></div>
+      <div class="dock"><div class="dock-inner" style="max-width:820px">${pending(t.id, cur.a)}</div></div>
+      ${composer(isFork ? (cur.a === 'orch' ? `T${t.n} orchestrator` : `${a.name} (T${t.n})`) : t.machine ? `T${t.n} orchestrator on ${t.machine}` : `T${t.n} · Claude`, { model: t.model, style: '' })}</div>`;
+  }
+  const rail = `<div class="panel rail"><div class="rail-scroll"><div class="sec">Tasks <span class="c">4</span></div><div class="cards">
+    ${TASKS.map(t => card(t, cur && cur.t === t.id, `onclick="go('${t.id}')"`)).join('')}</div>
+    <div class="subtle" style="font-size:11px;padding:10px 4px">Click a card to open its chat here. <span class="kbd">⌥</span>-click focuses the pane instead.</div></div></div>`;
+  document.getElementById('app').innerHTML = windowChrome(main + rail); settle();
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && cur) go(null); });
+render();
+</script>
+</body>
+</html>
