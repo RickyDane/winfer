@@ -18,11 +18,16 @@ pub fn models() -> Vec<ModelInfo> {
     if crate::env::find_command("claude").is_none() {
         return Vec::new();
     }
+    catalog()
+}
+
+/// The aliases offered, with the task tier Home's list_models shows (see its model guide).
+fn catalog() -> Vec<ModelInfo> {
     [
-        ("fable", "Fable", "most capable"),
-        ("opus", "Opus", "complex work"),
-        ("sonnet", "Sonnet", "everyday coding"),
-        ("haiku", "Haiku", "fast"),
+        ("fable", "Fable", "not used for tasks"),
+        ("opus", "Opus", "big/large tasks"),
+        ("sonnet", "Sonnet", "medium–big tasks"),
+        ("haiku", "Haiku", "fast · small tasks"),
     ]
     .iter()
     .map(|(id, label, detail)| ModelInfo {
@@ -1504,6 +1509,17 @@ fn edit_diff(name: &str, input: &Value) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn catalog_details_name_the_task_tiers() {
+        let details: Vec<String> = catalog().into_iter().map(|m| format!("{} {}", m.spec, m.detail)).collect();
+        assert_eq!(details, [
+            "claude/fable Claude Code · not used for tasks",
+            "claude/opus Claude Code · big/large tasks",
+            "claude/sonnet Claude Code · medium–big tasks",
+            "claude/haiku Claude Code · fast · small tasks",
+        ]);
+    }
+
     #[test]
     fn skill_cards_show_the_skill_name() {
         use serde_json::json;

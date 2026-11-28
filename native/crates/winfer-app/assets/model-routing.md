@@ -13,20 +13,27 @@ Use only specs it lists; never invent one.
   use its own provider's models; switching providers means a new agent.
 
 ## Pick by the kind of work
-- Software engineering that needs judgment → Claude. Its largest model (Opus class) for
+- Software engineering that needs judgment → Claude. Opus (`claude/opus`) for big or large work:
   architecture, multi-file refactors, subtle or concurrency bugs, security, migrations, code review
-  of risky changes, and anything that already failed once. Its mid model (Sonnet class) is the
-  default for ordinary features, bug fixes and tests in a real codebase.
+  of risky changes, and anything that already failed once. Sonnet (`claude/sonnet`) is the
+  default for medium to medium-big work: ordinary features, bug fixes and tests in a real codebase.
 - Everyday, well-specified work → Codex/GPT or Gemini. Scripts and shell, config and CI edits,
   dependency bumps, renames, boilerplate, data wrangling, docs and READMEs, commit messages,
   explaining code, quick questions. They're fast and save Claude usage for the hard parts.
 - Lots to read → Gemini. Huge logs, long docs, a sweep over a big unfamiliar codebase, research,
   comparing many files, reading screenshots or designs.
 - Tiny and mechanical (one-line fix, run a command, rename) → the smallest/fastest model there is
-  (Haiku class, a `-fast`/mini variant, Gemini 4 Hydrogen) at low effort.
+  (Claude Haiku, a `-fast`/mini variant, Gemini 4 Hydrogen) at low effort.
 - Effort: low for mechanical work, the default for most, high only for hard reasoning. Never max
   effort by default; it's slow and expensive.
 - When two choices are close, take the cheaper and faster one: you can always switch up.
+
+## Claude: three models, never Fable
+- Small or fast Claude work → Haiku (`claude/haiku`).
+- Medium to medium-big work → Sonnet (`claude/sonnet`).
+- Big or large work → Opus (`claude/opus`).
+- Never pick Claude Fable (`claude/fable`): not for the hardest work, not after failures, not when
+  moving up or reviewing. Opus is the ceiling. Only the user naming Fable allows it.
 
 ## Gemini: only two models
 - Small or mechanical Gemini work → Gemini 4 Hydrogen (`agy/gemini-4-hydrogen`).
@@ -46,7 +53,7 @@ Good moments, at a step boundary (after a turn finished, not every turn):
 - Plan or investigate on a strong model, then hand the implementation to a cheaper one, or the
   other way round: let a fast model gather facts, then a strong one make the hard change.
 - Stuck: the same failure twice, going in circles, or an approach that keeps breaking → move up to
-  a stronger model, or to the other family for fresh eyes.
+  a stronger model (up to Opus at most, never Fable), or to the other family for fresh eyes.
 - The hard part is done and what's left is routine (tests to fix up, docs, cleanup) → move down.
 - Review: have a different family look over finished work before you call it ready.
 - Usage running out (above).
