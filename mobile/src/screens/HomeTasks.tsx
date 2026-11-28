@@ -49,6 +49,7 @@ export function HomeTasks({ homes, panes }: { homes: Pane[]; panes: Pane[] }) {
                       <span className="task-stage" data-stage={t.stage}>
                         {STAGE_LABEL[t.stage] ?? t.stage}
                       </span>
+                      {["planning", "running", "checking"].includes(t.stage) && <span className="spinner" aria-hidden />}
                       <span className="time">{ago(t.updatedAt)}</span>
                     </span>
                     <span className="task-goal">{t.goal}</span>

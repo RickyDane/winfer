@@ -2,6 +2,7 @@
 //! what needs the user, the tasks, the reviews, every machine's workspaces and usage left.
 //! The rail is built from app state; no model is involved.
 
+use crate::ui::code_view::spinner;
 use super::commands::{Command, PaneRef, ViewTarget};
 use super::home::{HomeTask, Stage, TaskMode, home_settings};
 use super::home_nav::{self, Refs, Who};
@@ -664,6 +665,7 @@ impl Root {
                             .gap_2()
                             .child(div().text_size(px(11.5)).font_weight(FontWeight::SEMIBOLD).text_color(c.muted).child(t.title()))
                             .child(pill(t.stage.label(), color))
+                            .when(matches!(t.stage, Stage::Planning | Stage::Running | Stage::Checking), |d| d.child(spinner(color, 12.0, SharedString::from(format!("home-task-sp-{}", t.id)))))
                             .children(t.machine.as_deref().and_then(machine_name).map(|m| machine_chip(&m, c)))
                             .child(div().flex_1())
                             .child(

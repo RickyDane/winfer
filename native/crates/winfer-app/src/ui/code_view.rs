@@ -1345,7 +1345,7 @@ pub(super) fn rise<E: Styled + IntoElement + 'static>(el: E, id: impl Into<Eleme
     })
 }
 
-fn spinner(color: Hsla, size: f32, id: impl Into<ElementId>) -> AnimationElement<Icon> {
+pub(super) fn spinner(color: Hsla, size: f32, id: impl Into<ElementId>) -> AnimationElement<Icon> {
     Icon::new(IconName::LoaderCircle).size(px(size)).text_color(color)
         .with_animation(id, Animation::new(Duration::from_millis(900)).repeat().with_max_fps(30.0), |i, t| i.rotate(radians(t * std::f32::consts::TAU)))
 }
