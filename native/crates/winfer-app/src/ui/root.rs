@@ -102,6 +102,8 @@ mod voice_ui;
 mod home;
 #[path = "home_follow.rs"]
 mod home_follow;
+#[path = "home_nav.rs"]
+pub(super) mod home_nav;
 #[path = "home_view.rs"]
 mod home_view;
 
@@ -1774,6 +1776,10 @@ impl Render for Root {
             }
         }
         #[cfg(debug_assertions)]
+        if self.state.read(cx).hydrated && !self.dev_layer_opened {
+            self.home_demo(cx);
+        }
+        #[cfg(debug_assertions)]
         if self.state.read(cx).hydrated && !std::mem::replace(&mut self.dev_layer_opened, true) {
             match std::env::var("WINFER_NATIVE_LAYER").as_deref() {
                 Ok("palette") => self.execute(Command::Palette(None), window, cx),
@@ -2014,6 +2020,8 @@ impl Render for Root {
                 } else if this.handle_shortcut(event, window, cx) {
                     cx.stop_propagation();
                 } else if event.keystroke.key == "escape" && this.close_top_layer(window, cx) {
+                    cx.stop_propagation();
+                } else if this.home_back_key(event, cx) {
                     cx.stop_propagation();
                 }
             }))

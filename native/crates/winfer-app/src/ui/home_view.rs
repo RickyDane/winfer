@@ -4,9 +4,12 @@
 
 use super::commands::{Command, PaneRef, ViewTarget};
 use super::home::{HomeTask, Stage, TaskMode, home_settings};
+use super::home_nav::{self, Refs, Who};
+use super::menu::MenuItem;
 use super::sidebar::{card_bg, monogram_tile};
 use super::*;
-use crate::voice::task_pane;
+use crate::model::AgentStatus;
+use crate::voice::{CONDUCTOR, task_pane};
 use gpui_kit::component::tooltip::Tooltip;
 
 const RAIL_WIDTH: f32 = 320.0;
@@ -36,6 +39,35 @@ fn section(c: Colors, title: &str, count: Option<usize>) -> Div {
         .text_color(c.subtle)
         .child(title.to_string())
         .children(count.filter(|n| *n > 0).map(|n| div().font_weight(FontWeight::NORMAL).child(n.to_string())))
+}
+
+/// Something waiting for the user in a task: (task id, the agent pane to open, what it asks).
+type Waiting = (String, Option<String>, String);
+
+/// An agent's status dot.
+fn status_color(status: AgentStatus, c: &Colors) -> Hsla {
+    match status {
+        AgentStatus::Working => c.success,
+        AgentStatus::NeedsInput => c.warning,
+        AgentStatus::Error => c.danger,
+        AgentStatus::Done => c.subtle,
+        AgentStatus::Idle => c.border_strong,
+    }
+}
+
+/// A paired machine's name, by its peer id.
+fn machine_name(peer: &str) -> Option<String> {
+    crate::connect::peer_name(peer).or_else(|| (cfg!(debug_assertions) && peer == DEMO_PEER).then(|| "mac-studio".to_string()))
+}
+
+/// The machine a remote task of the Home demo runs on (`WINFER_NATIVE_HOME_DEMO`).
+const DEMO_PEER: &str = "demo-peer";
+
+/// A paired machine's name with a server icon (task cards, a remote task's chat).
+fn machine_chip(name: &str, c: Colors) -> Div {
+    div().flex_shrink_0().flex().items_center().gap_1().px_1p5().h(px(18.0)).rounded(px(5.0)).bg(Hsla { a: 0.14, ..c.accent }).text_color(c.accent).text_size(px(10.5)).font_weight(FontWeight::MEDIUM)
+        .child(Icon::new(IconName::Server).size(px(10.5)))
+        .child(name.to_string())
 }
 
 fn pill(text: &str, color: Hsla) -> Div {
@@ -79,108 +111,496 @@ impl Root {
         Some(view)
     }
 
+    /// Home's task numbers and paired machines, which its chats turn into links and chips.
+    fn home_refs(&self) -> Refs {
+        let mut tasks: Vec<u32> = self.home.tasks.iter().map(|t| t.number).collect();
+        tasks.sort_unstable();
+        tasks.dedup();
+        let mut machines: Vec<String> = crate::connect::get().map(|c| c.peers().into_iter().map(|p| p.name).filter(|n| !n.trim().is_empty()).collect()).unwrap_or_default();
+        if cfg!(debug_assertions) && self.home.tasks.iter().any(|t| t.machine.as_deref() == Some(DEMO_PEER)) {
+            machines.push("mac-studio".into());
+        }
+        Refs { tasks, machines }
+    }
+
     fn render_home_chat(&mut self, c: Colors, window: &mut Window, cx: &mut Context<Self>) -> Div {
-        // The thread on screen: the conductor (started when Home first shows), or a forked task.
         if let Some(t) = self.home.thread.clone()
-            && self.task(&t).is_none_or(|x| x.mode != TaskMode::Fork)
+            && self.task(&t).is_none()
         {
             self.home.thread = None;
         }
-        let pane = self.home_thread_pane();
-        let started = match &self.home.thread {
-            None => self.conductor(cx).map(|_| ()),
-            Some(t) => {
-                let t = t.clone();
-                self.home_fork_model(&t, cx)
-            }
-        };
-        let body: AnyElement = match started.and_then(|_| self.home_view_for(&pane, window, cx).ok_or_else(|| "Couldn't open the chat.".to_string())) {
+        // The conductor runs whenever Home shows: its latest reply is quoted above a task's chat.
+        let started = self.conductor(cx).map(|_| ());
+        let refs = self.home_refs();
+        for v in self.home.views.values() {
+            v.update(cx, |v, cx| v.set_refs(refs.clone(), cx));
+        }
+        let waiting = self.home_waiting(cx);
+        let panel = |d: Div| d.flex_1().min_w_0().h_full().flex().flex_col().overflow_hidden().rounded_2xl().border_1().border_color(c.edge).bg(c.panel);
+        if let Some(task_id) = self.home.thread.clone()
+            && let Some(t) = self.task(&task_id).cloned()
+        {
+            let waiting: Vec<_> = waiting.into_iter().filter(|w| w.0 != task_id).collect();
+            return panel(div()).children(self.render_task_chat(&t, &waiting, c, window, cx));
+        }
+
+        let body: AnyElement = match started.and_then(|_| self.home_view_for(CONDUCTOR, window, cx).ok_or_else(|| "Couldn't open the chat.".to_string())) {
             Ok(view) => div().flex_1().min_h_0().child(view).into_any_element(),
             Err(e) => div().flex_1().flex().items_center().justify_center().p_6().text_size(px(13.0)).text_color(c.muted).child(e).into_any_element(),
         };
-
-        // Thread tabs: Home, then the forked tasks still open.
-        let forks: Vec<HomeTask> = self.home.tasks.iter().filter(|t| t.mode == TaskMode::Fork && t.stage.open()).cloned().collect();
-        let tab = |id: SharedString, label: String, on: bool| {
-            div()
-                .id(id)
-                .flex()
-                .items_center()
-                .gap_1p5()
-                .h(px(26.0))
-                .px_2p5()
-                .rounded(px(7.0))
-                .text_size(px(12.0))
-                .cursor_pointer()
-                .when(on, |d| d.bg(c.active).text_color(c.fg).font_weight(FontWeight::MEDIUM))
-                .when(!on, |d| d.text_color(c.muted).hover(move |d| d.bg(c.hover).text_color(c.fg)))
-                .child(label)
-        };
-        let mut tabs = div().flex().items_center().gap_1().min_w_0().overflow_hidden().child(
-            tab("home-tab-conductor".into(), "Home".into(), self.home.thread.is_none())
-                .child(Icon::new(IconName::LayoutDashboard).size(px(12.0)))
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.home.thread = None;
-                    cx.notify();
-                })),
-        );
-        for t in &forks {
-            let on = self.home.thread.as_deref() == Some(t.id.as_str());
-            let id = t.id.clone();
-            let busy = self.fork_step(&t.id, cx).is_some();
-            tabs = tabs.child(
-                tab(SharedString::from(format!("home-tab-{}", t.id)), t.title(), on)
-                    .tooltip({
-                        let tip = format!("{} · {}", t.goal, t.workspace);
-                        move |window, cx| Tooltip::new(tip.clone()).build(window, cx)
-                    })
-                    .when(busy, |d| d.child(div().size(px(6.0)).rounded_full().bg(c.success)))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.home.thread = Some(id.clone());
-                        cx.notify();
-                    })),
-            );
-        }
-        let step = match &self.home.thread {
-            None => self.orchestrator_step(cx),
-            Some(t) => self.fork_step(t, cx),
-        };
-        let on_conductor = self.home.thread.is_none();
-        // The thread's running subagents and background shells (e.g. a release it watches), as on agent panes.
-        let bg_chip = self.render_bg_chip(&pane, c, cx);
+        let step = self.orchestrator_step(cx);
+        // The conductor's running subagents and background shells (e.g. a release it watches), as on agent panes.
+        let bg_chip = self.render_bg_chip(CONDUCTOR, c, cx);
+        let title = div().flex().items_center().gap_1p5().h(px(26.0)).px_2p5().rounded(px(7.0)).text_size(px(12.0)).bg(c.active).text_color(c.fg).font_weight(FontWeight::MEDIUM).child(Icon::new(IconName::LayoutDashboard).size(px(12.0))).child("Home");
         let header = div()
             .flex()
             .items_center()
             .gap_2()
             .h(px(40.0))
+            .flex_shrink_0()
             .px_2()
             .border_b_1()
             .border_color(c.edge)
-            .child(tabs)
+            .child(title)
             .child(div().flex_1())
             .children(step.map(|s| div().max_w(px(260.0)).truncate().text_size(px(11.5)).text_color(c.subtle).child(s)))
             .children(bg_chip)
-            .when(on_conductor, |d| {
-                d.child(
-                    div()
-                        .id("home-fresh")
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .h(px(24.0))
-                        .px_2()
-                        .rounded_md()
-                        .text_size(px(11.5))
-                        .text_color(c.muted)
-                        .cursor_pointer()
-                        .hover(move |d| d.bg(c.hover).text_color(c.fg))
-                        .tooltip(|window, cx| Tooltip::new("Start a new conversation with Home's orchestrator (tasks stay)").build(window, cx))
-                        .on_click(cx.listener(|this, _, _, cx| this.stop_conductor(cx)))
-                        .child(Icon::new(IconName::RotateCcw).size(px(12.0)))
-                        .child("New chat"),
-                )
+            .child(
+                div()
+                    .id("home-fresh")
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .h(px(24.0))
+                    .px_2()
+                    .rounded_md()
+                    .text_size(px(11.5))
+                    .text_color(c.muted)
+                    .cursor_pointer()
+                    .hover(move |d| d.bg(c.hover).text_color(c.fg))
+                    .tooltip(|window, cx| Tooltip::new("Start a new conversation with Home's orchestrator (tasks stay)").build(window, cx))
+                    .on_click(cx.listener(|this, _, _, cx| this.stop_conductor(cx)))
+                    .child(Icon::new(IconName::RotateCcw).size(px(12.0)))
+                    .child("New chat"),
+            );
+        panel(div()).child(header).children(self.render_waiting(&waiting, c, cx)).child(body)
+    }
+
+    /// What a task's chat shows: its picked agent, else its main chat. A remote task's
+    /// orchestrator gets a tile here (as the sidebar opens one), streamed like any.
+    fn home_who(&mut self, t: &HomeTask, cx: &mut Context<Self>) -> Who {
+        let who = {
+            let s = self.state.read(cx);
+            let remote = t.machine.clone().and_then(|peer| {
+                let pane = t.remote_pane.clone().or_else(|| self.connect.mirrors.get(&peer)?.panes.iter().find(|p| t.orchestrated_by(p)).map(|p| p.id.clone()))?;
+                Some((peer, pane))
             });
-        div().flex_1().min_w_0().h_full().flex().flex_col().overflow_hidden().rounded_2xl().border_1().border_color(c.edge).bg(c.panel).child(header).child(body)
+            let tile = remote.as_ref().and_then(|(peer, pane)| s.all_panes().find(|p| p.remote.as_ref().is_some_and(|r| r.peer == *peer && r.pane == *pane)).map(|p| p.id.clone()));
+            let picked = self.home.agent.get(&t.id).map(String::as_str);
+            home_nav::who(t.mode, picked, &t.panes, |p| s.pane(p).is_some(), tile, remote)
+        };
+        match who {
+            // The demo's remote task: a local chat stands in for that machine's tile.
+            Who::Remote(peer, pane) if cfg!(debug_assertions) && peer == DEMO_PEER => if self.state.read(cx).pane(&pane).is_some() { Who::Pane(pane) } else { Who::Nothing },
+            Who::Remote(peer, pane) => self.remote_tile(&peer, &pane, cx).map_or(Who::Nothing, Who::Pane),
+            w => w,
+        }
+    }
+
+    /// What to call an agent of a task: its pane's name, or "Orchestrator".
+    fn agent_label(&self, t: &HomeTask, who: &Who, cx: &App) -> String {
+        match who {
+            Who::Pane(_) if t.mode == TaskMode::Remote => match t.machine.as_deref().and_then(machine_name) {
+                Some(m) => format!("Orchestrator on {m}"),
+                None => "Orchestrator".into(),
+            },
+            Who::Pane(id) => {
+                let s = self.state.read(cx);
+                s.pane(id).map_or_else(|| "Agent".into(), |p| s.pane_label(p))
+            }
+            _ => "Orchestrator".into(),
+        }
+    }
+
+    /// A task's chat inside Home: breadcrumb, its agents (a fork), Home's latest reply, the chat.
+    fn render_task_chat(&mut self, t: &HomeTask, waiting: &[Waiting], c: Colors, window: &mut Window, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let who = self.home_who(t, cx);
+        let label = self.agent_label(t, &who, cx);
+        let conductor_items = self.home_model(CONDUCTOR).map(|m| m.read(cx).state.items.clone()).unwrap_or_default();
+        let new = home_nav::new_replies(&conductor_items, self.home.seen);
+        let latest = home_nav::latest_reply(&conductor_items);
+        let picked = matches!(who, Who::Pane(_)) && t.mode == TaskMode::Fork;
+        let crumb = |id: &'static str| div().id(id).flex().items_center().gap_1p5().h(px(26.0)).px_2().rounded(px(7.0)).text_size(px(12.5)).min_w_0().cursor_pointer().text_color(c.muted).hover(move |d| d.bg(c.hover).text_color(c.fg));
+        let sep = || Icon::new(IconName::ChevronRight).size(px(11.0)).text_color(c.subtle);
+        let tip = super::commands::keys_for(&Command::View(ViewTarget::Set(View::Home)), self.state.read(cx)).map_or("Back to Home (Esc, ⌘[)".to_string(), |k| format!("Back to Home (Esc, ⌘[, {k})"));
+        let home_crumb = crumb("home-crumb-home")
+            .flex_shrink_0()
+            .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+            .on_click(cx.listener(|this, _, _, cx| this.home_back(cx)))
+            .child(Icon::new(IconName::ChevronLeft).size(px(13.0)))
+            .child(Icon::new(IconName::LayoutDashboard).size(px(12.0)))
+            .child("Home")
+            .when(new > 0, |d| d.child(div().px_1p5().rounded(px(5.0)).bg(Hsla { a: 0.16, ..c.accent }).text_color(c.accent).text_size(px(10.5)).child(format!("{new} new"))));
+        let task_id = t.id.clone();
+        let task_crumb = crumb("home-crumb-task")
+            .when(!picked, |d| d.text_color(c.fg).font_weight(FontWeight::MEDIUM))
+            .on_click(cx.listener(move |this, _, _, cx| this.home_drill(&task_id, Some(None), cx)))
+            .child(div().flex_shrink_0().child(t.title()))
+            .child(div().min_w_0().max_w(px(320.0)).truncate().text_color(if picked { c.subtle } else { c.muted }).font_weight(FontWeight::NORMAL).child(t.goal.clone()));
+        let crumbs = div().flex().items_center().gap_0p5().min_w_0().overflow_hidden().child(home_crumb).child(sep()).child(task_crumb).when(picked, |d| {
+            let status = match &who {
+                Who::Pane(id) => self.state.read(cx).pane(id).map(|p| p.status).unwrap_or_default(),
+                _ => AgentStatus::Idle,
+            };
+            d.child(sep()).child(div().flex().items_center().gap_1p5().px_2().flex_shrink_0().text_size(px(12.5)).text_color(c.fg).font_weight(FontWeight::MEDIUM).child(div().size(px(6.0)).rounded_full().bg(status_color(status, &c))).child(label.clone()))
+        });
+
+        let shown = match &who {
+            Who::Pane(id) => Some(id.clone()),
+            _ => None,
+        };
+        let step = match &who {
+            Who::Orchestrator => self.fork_step(&t.id, cx),
+            _ => None,
+        };
+        let bg_chip = self.render_bg_chip(shown.as_deref().map_or_else(|| task_pane(&t.id), str::to_string).as_str(), c, cx);
+        let (pane_btn, menu_btn) = (shown.clone(), t.clone());
+        let ghost = |id: &'static str| div().id(id).flex().items_center().gap_1().h(px(24.0)).px_2().rounded_md().text_size(px(11.5)).text_color(c.muted).cursor_pointer().hover(move |d| d.bg(c.hover).text_color(c.fg));
+        let header = div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .h(px(40.0))
+            .flex_shrink_0()
+            .px_2()
+            .border_b_1()
+            .border_color(c.edge)
+            .child(crumbs)
+            .child(div().flex_1())
+            .children(step.map(|s| div().max_w(px(220.0)).truncate().text_size(px(11.5)).text_color(c.subtle).child(s)))
+            .children(bg_chip)
+            .child(pill(t.stage.label(), stage_color(t.stage, &c)))
+            .children(t.machine.as_deref().and_then(machine_name).map(|m| machine_chip(&m, c)))
+            .child(
+                ghost("home-task-pane")
+                    .tooltip(|window, cx| Tooltip::new("Leave Home and show this agent's pane").build(window, cx))
+                    .on_click(cx.listener(move |this, _, window, cx| match &pane_btn {
+                        Some(p) => this.home_focus_pane(p, window, cx),
+                        None => this.home_show_panes(&menu_btn.clone(), window, cx),
+                    }))
+                    .child(Icon::new(IconName::ExternalLink).size(px(12.0)))
+                    .child("Pane"),
+            )
+            .child({
+                let (t2, shown2) = (t.clone(), shown.clone());
+                ghost("home-task-more").px_1().tooltip(|window, cx| Tooltip::new("More").build(window, cx)).on_click(cx.listener(move |this, _, window, cx| {
+                    let items = this.task_menu(&t2, shown2.as_deref(), cx);
+                    let at = window.mouse_position();
+                    this.open_menu(at, None, items, cx);
+                }))
+                .child(Icon::new(IconName::Ellipsis).size(px(14.0)))
+            });
+
+        let mut out: Vec<AnyElement> = vec![header.into_any_element()];
+        if t.mode == TaskMode::Fork {
+            out.push(self.render_agent_chips(t, &who, c, cx).into_any_element());
+        }
+        if let Some(text) = latest {
+            out.push(
+                div()
+                    .id("home-strip")
+                    .flex_shrink_0()
+                    .mx_3()
+                    .mt_2()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .px_2p5()
+                    .py_1p5()
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(c.edge)
+                    .text_size(px(12.0))
+                    .text_color(c.muted)
+                    .cursor_pointer()
+                    .hover(move |d| d.bg(c.hover))
+                    .on_click(cx.listener(|this, _, _, cx| this.home_back(cx)))
+                    .child(Icon::new(IconName::LayoutDashboard).size(px(12.0)).text_color(c.subtle))
+                    .child(div().flex_shrink_0().text_color(c.fg).font_weight(FontWeight::MEDIUM).child("Home:"))
+                    .child(div().flex_1().min_w_0().truncate().child(text))
+                    .child(div().flex_shrink_0().text_size(px(11.0)).text_color(c.subtle).child("Esc to go back"))
+                    .into_any_element(),
+            );
+        }
+        out.extend(self.render_waiting(waiting, c, cx).map(IntoElement::into_any_element));
+        out.push(self.render_task_body(t, &who, &label, c, window, cx));
+        out
+    }
+
+    /// A fork's orchestrator and agents, to switch between.
+    fn render_agent_chips(&self, t: &HomeTask, who: &Who, c: Colors, cx: &mut Context<Self>) -> Div {
+        let s = self.state.read(cx);
+        let chip = |id: SharedString, on: bool| {
+            div().id(id).flex().items_center().gap_1p5().h(px(26.0)).px_2p5().rounded(px(7.0)).text_size(px(12.0)).cursor_pointer().border_1()
+                .when(on, |d| d.bg(c.active).border_color(c.edge).text_color(c.fg))
+                .when(!on, |d| d.border_color(gpui::transparent_black()).text_color(c.muted).hover(move |d| d.bg(c.hover).text_color(c.fg)))
+        };
+        let busy = self.fork_step(&t.id, cx).is_some();
+        let needs = self.home_model(&task_pane(&t.id)).is_some_and(|m| !m.read(cx).state.approvals.is_empty());
+        let orch_color = if needs { c.warning } else if busy { c.success } else { c.subtle };
+        let task_id = t.id.clone();
+        let mut row = div().flex().flex_wrap().items_center().gap_1().flex_shrink_0().px_2().py_1p5().border_b_1().border_color(c.edge)
+            .child(div().px_1().mr_1().text_size(px(10.5)).font_weight(FontWeight::SEMIBOLD).text_color(c.subtle).child("AGENTS"))
+            .child(chip("home-agent-orch".into(), *who == Who::Orchestrator)
+                .on_click(cx.listener(move |this, _, _, cx| this.home_drill(&task_id, Some(None), cx)))
+                .child(div().size(px(6.0)).rounded_full().bg(orch_color))
+                .child("Orchestrator"));
+        for p in t.panes.iter().filter_map(|p| s.pane(p)) {
+            let on = *who == Who::Pane(p.id.clone());
+            let (task_id, pane_id) = (t.id.clone(), p.id.clone());
+            let approvals = self.code_models.get(&p.id).is_some_and(|m| !m.read(cx).state.approvals.is_empty());
+            let status = if approvals { AgentStatus::NeedsInput } else { p.status };
+            row = row.child(chip(SharedString::from(format!("home-agent-{}", p.id)), on)
+                .on_click(cx.listener(move |this, _, _, cx| this.home_drill(&task_id, Some(Some(pane_id.clone())), cx)))
+                .child(div().size(px(6.0)).rounded_full().bg(status_color(status, &c)))
+                .child(div().max_w(px(180.0)).truncate().child(s.pane_label(p))));
+        }
+        row
+    }
+
+    fn render_task_body(&mut self, t: &HomeTask, who: &Who, label: &str, c: Colors, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let hint = format!("Message {label} ({})…", t.title());
+        let note = |text: String| div().flex_1().flex().flex_col().items_center().justify_center().gap_3().p_6().text_size(px(13.0)).text_color(c.muted).child(text);
+        match who {
+            Who::Orchestrator => {
+                if self.home_model(&task_pane(&t.id)).is_none() && !t.stage.open() {
+                    let id = t.id.clone();
+                    return note(format!("{} is closed; its orchestrator isn't running.", t.title()))
+                        .child(div().id("home-resume").h(px(28.0)).px_3().flex().items_center().rounded_lg().border_1().border_color(c.edge).text_size(px(12.5)).text_color(c.fg).cursor_pointer().hover(move |d| d.bg(c.hover))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if let Err(e) = this.open_fork(&id, cx) {
+                                    this.toast(e, cx);
+                                }
+                                cx.notify();
+                            }))
+                            .child("Resume its orchestrator"))
+                        .into_any_element();
+                }
+                let pane = task_pane(&t.id);
+                match self.home_fork_model(&t.id, cx).and_then(|_| self.home_view_for(&pane, window, cx).ok_or_else(|| "Couldn't open the chat.".to_string())) {
+                    Ok(view) => {
+                        view.update(cx, |v, cx| v.set_placeholder(&hint, window, cx));
+                        div().flex_1().min_h_0().child(view).into_any_element()
+                    }
+                    Err(e) => note(e).into_any_element(),
+                }
+            }
+            Who::Pane(id) => {
+                let provider = self.state.read(cx).pane(id).map(|p| p.provider.clone()).unwrap_or_default();
+                if self.uses_code(&provider, id, cx)
+                    && let Some(view) = self.code_view(id, window, cx)
+                {
+                    view.update(cx, |v, cx| v.set_placeholder(&hint, window, cx));
+                    return div().flex_1().min_h_0().child(view).into_any_element();
+                }
+                // An agent CLI: its terminal, answered right here.
+                div().flex_1().min_h_0().p_2().child(self.terminal(id, cx)).into_any_element()
+            }
+            Who::Remote(..) | Who::Nothing => {
+                let why = match t.mode {
+                    TaskMode::Remote => format!("{}'s orchestrator isn't reachable: its machine is offline or the pane closed there.", t.title()),
+                    _ => format!("No agent of {} is open anymore.", t.title()),
+                };
+                note(why).into_any_element()
+            }
+        }
+    }
+
+    /// The ⋯ menu of a task's chat: the pane, the worktree, all the task's panes, closing it.
+    fn task_menu(&self, t: &HomeTask, shown: Option<&str>, cx: &App) -> Vec<MenuItem> {
+        let s = self.state.read(cx);
+        let mut items = Vec::new();
+        let pane = shown.and_then(|p| s.pane(p));
+        if let Some(p) = pane {
+            let id = p.id.clone();
+            items.push(MenuItem::run(format!("Open {}'s pane", s.pane_label(p)), move |this, window, cx| this.home_focus_pane(&id, window, cx)));
+        }
+        let worktree = pane.and_then(|p| p.worktree.as_ref().map(|w| w.path.clone())).or_else(|| t.worktrees.iter().find(|w| std::path::Path::new(w).exists()).cloned());
+        if let Some(p) = pane.filter(|p| p.worktree.is_some()) {
+            items.push(MenuItem::command("Show changes", Command::ShowChanges(PaneRef::Id(p.id.clone()))));
+        }
+        if let Some(path) = worktree {
+            items.push(MenuItem::run(if cfg!(target_os = "macos") { "Open worktree in Finder" } else { "Open worktree in Explorer" }, move |_, _, _| super::sidebar::reveal_path(&path)));
+        }
+        let all = t.clone();
+        let n = t.panes.iter().filter(|p| s.pane(p).is_some()).count();
+        items.push(MenuItem::run(if n > 1 { format!("Show all {n} panes") } else { "Show in its workspace".to_string() }, move |this, window, cx| this.home_show_panes(&all, window, cx)));
+        if t.stage.open() {
+            let id = t.id.clone();
+            items.push(MenuItem::Separator);
+            items.push(MenuItem::run("Close task (its agents stay)", move |this, _, cx| this.close_task(&id, Stage::Cancelled, cx)).danger());
+        }
+        items
+    }
+
+    /// Leaves Home for the task's workspace (or its machine's tile), where all its panes are.
+    fn home_show_panes(&mut self, t: &HomeTask, window: &mut Window, cx: &mut Context<Self>) {
+        match (t.mode, t.machine.clone()) {
+            (TaskMode::Remote, Some(_)) => {
+                if let Who::Pane(id) = self.home_who(t, cx) {
+                    self.home_focus_pane(&id, window, cx);
+                }
+            }
+            _ => match t.panes.iter().find(|p| self.state.read(cx).pane(p).is_some()).cloned() {
+                Some(p) => self.home_focus_pane(&p, window, cx),
+                None => {
+                    if let Some(ws) = t.workspace_id.clone() {
+                        self.update_state(cx, |s| s.set_view(View::Workspace));
+                        self.execute(Command::WorkspaceSwitch(ws), window, cx);
+                    }
+                }
+            },
+        }
+    }
+
+    /// Opens a task's chat in Home. `pick`: None keeps the agent picked before; Some(None) its
+    /// main chat; Some(Some(pane)) that agent.
+    pub(super) fn home_drill(&mut self, task_id: &str, pick: Option<Option<String>>, cx: &mut Context<Self>) {
+        if self.home.thread.is_none() {
+            self.home.seen = self.home_model(CONDUCTOR).map_or(0, |m| m.read(cx).state.items.len());
+        }
+        self.home.thread = Some(task_id.to_string());
+        match pick {
+            Some(Some(p)) => {
+                self.home.agent.insert(task_id.to_string(), p);
+            }
+            Some(None) => {
+                self.home.agent.remove(task_id);
+            }
+            None => {}
+        }
+        if self.state.read(cx).view() != View::Home {
+            self.update_state(cx, |s| s.set_view(View::Home));
+        }
+        cx.notify();
+    }
+
+    /// Back from a task's chat to Home's.
+    pub(super) fn home_back(&mut self, cx: &mut Context<Self>) {
+        if self.home.thread.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    /// Esc or ⌘[ in a task's chat: back to Home's. Esc only when the chat wouldn't use it (nothing
+    /// typed, not working, nothing asked; a terminal agent keeps Esc).
+    pub(super) fn home_back_key(&mut self, e: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
+        let k = &e.keystroke;
+        if self.home.thread.is_none() || self.state.read(cx).view() != View::Home || self.menu.is_some() {
+            return false;
+        }
+        let cmd_bracket = k.key == "[" && k.modifiers.platform && !k.modifiers.shift && !k.modifiers.alt && !k.modifiers.control;
+        let esc = k.key == "escape" && !k.modifiers.modified();
+        if !cmd_bracket && !esc {
+            return false;
+        }
+        if esc && !self.home_chat_idle(cx) {
+            return false;
+        }
+        self.home_back(cx);
+        true
+    }
+
+    /// The task chat on screen is idle: a chat with nothing typed, working or asked.
+    fn home_chat_idle(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(t) = self.home.thread.clone().and_then(|t| self.task(&t).cloned()) else { return false };
+        let (model, view) = match self.home_who(&t, cx) {
+            Who::Orchestrator => (self.home_model(&task_pane(&t.id)), self.home.views.get(&task_pane(&t.id)).cloned()),
+            Who::Pane(id) => match self.code_models.get(&id) {
+                Some(m) => (Some(m.clone()), self.code_views.get(&id).cloned()),
+                None => return false,
+            },
+            _ => return true,
+        };
+        let quiet = model.is_none_or(|m| {
+            let st = &m.read(cx).state;
+            !st.busy && st.approvals.is_empty() && st.sheet.is_none()
+        });
+        quiet && view.is_none_or(|v| v.read(cx).composer_empty(cx))
+    }
+
+    /// What waits for the user in each task: approvals and questions of its agents and
+    /// orchestrator, agents needing input, or the task's own "needs you".
+    fn home_waiting(&self, cx: &App) -> Vec<Waiting> {
+        let s = self.state.read(cx);
+        let first = |m: Option<&Entity<crate::code::session::CodeModel>>| m.and_then(|m| m.read(cx).state.approvals.first().cloned());
+        let mut out = Vec::new();
+        for t in super::home::listed_tasks(&self.home.tasks).into_iter().filter(|t| t.stage.open()) {
+            // A fork's orchestrator (its questions wait in its approvals), the agent panes, and a
+            // remote task's orchestrator tile; each one's first pending approval.
+            let orch = first(self.home_model(&task_pane(&t.id)).as_ref());
+            let agents: Vec<_> = t.panes.iter().filter_map(|p| s.pane(p)).map(|p| (Some(p.id.clone()), s.pane_label(p), first(self.code_models.get(&p.id)), p.status == AgentStatus::NeedsInput)).collect();
+            let tile = match (&t.machine, &t.remote_pane) {
+                (Some(peer), Some(pane)) if t.mode == TaskMode::Remote => s.all_panes().find(|p| p.remote.as_ref().is_some_and(|r| r.peer == *peer && r.pane == *pane)),
+                _ => None,
+            };
+            let tile = tile.map(|p| (None, "Orchestrator".to_string(), first(self.code_models.get(&p.id)), p.status == AgentStatus::NeedsInput));
+            let all: Vec<_> = std::iter::once((None, "Orchestrator".to_string(), orch, false)).chain(agents).chain(tile).collect();
+            let askers: Vec<home_nav::Asker> = all.iter().map(|(pane, name, a, needs)| home_nav::Asker { pane: pane.clone(), name: name.clone(), approval: a.as_ref(), needs_input: *needs }).collect();
+            let needs_you = (t.stage == Stage::NeedsYou).then_some(t.summary.as_str());
+            out.extend(home_nav::task_waiting(&t.title(), &askers, needs_you).into_iter().map(|(pane, text)| (t.id.clone(), pane, text)));
+        }
+        out
+    }
+
+    /// The "needs you" banner: what waits in the tasks, each a click away.
+    fn render_waiting(&self, waiting: &[Waiting], c: Colors, cx: &mut Context<Self>) -> Option<Div> {
+        if waiting.is_empty() {
+            return None;
+        }
+        let mut row = div().flex_1().min_w_0().flex().flex_wrap().items_center().gap_1p5();
+        for (i, (task, agent, text)) in waiting.iter().take(4).enumerate() {
+            let (task, agent) = (task.clone(), agent.clone());
+            row = row.child(
+                div()
+                    .id(SharedString::from(format!("home-wait-{i}")))
+                    .max_w(px(360.0))
+                    .truncate()
+                    .h(px(22.0))
+                    .px_2()
+                    .flex()
+                    .items_center()
+                    .rounded_md()
+                    .bg(Hsla { a: 0.10, ..c.warning })
+                    .text_color(c.fg)
+                    .cursor_pointer()
+                    .hover(move |d| d.bg(Hsla { a: 0.2, ..c.warning }))
+                    .on_click(cx.listener(move |this, _, _, cx| this.home_drill(&task, Some(agent.clone()), cx)))
+                    .child(text.clone()),
+            );
+        }
+        if waiting.len() > 4 {
+            row = row.child(div().text_color(c.subtle).child(format!("+{} more", waiting.len() - 4)));
+        }
+        Some(
+            div()
+                .flex_shrink_0()
+                .mx_3()
+                .mt_2()
+                .flex()
+                .items_center()
+                .gap_2()
+                .px_2p5()
+                .py_1p5()
+                .rounded_lg()
+                .border_1()
+                .border_color(Hsla { a: 0.35, ..c.warning })
+                .bg(Hsla { a: 0.06, ..c.warning })
+                .text_size(px(12.0))
+                .child(Icon::new(IconName::ShieldQuestionMark).size(px(14.0)).text_color(c.warning))
+                .child(div().flex_shrink_0().font_weight(FontWeight::SEMIBOLD).text_color(c.warning).child(format!("{} waiting", waiting.len())))
+                .child(row),
+        )
     }
 
     /// A forked task's orchestrator for its thread, started (or resumed) when the user opens it.
@@ -245,6 +665,7 @@ impl Root {
                             .gap_2()
                             .child(div().text_size(px(11.5)).font_weight(FontWeight::SEMIBOLD).text_color(c.muted).child(t.title()))
                             .child(pill(t.stage.label(), color))
+                            .children(t.machine.as_deref().and_then(machine_name).map(|m| machine_chip(&m, c)))
                             .child(div().flex_1())
                             .child(
                                 div()
@@ -304,6 +725,22 @@ impl Root {
                 Some(id) => self.home_focus_pane(&id, window, cx),
                 None => self.toast(format!("No pane {rest} here."), cx),
             }
+        } else if let Some(name) = target.strip_prefix("machine/") {
+            // A machine chip: its task (the one needing the user first), else its workspaces.
+            let peer = crate::connect::get().and_then(|c| c.peers().into_iter().find(|p| p.name == name)).map(|p| p.peer_id);
+            let task = peer.as_ref().and_then(|peer| {
+                let mut on: Vec<&HomeTask> = super::home::listed_tasks(&self.home.tasks).into_iter().filter(|t| t.machine.as_ref() == Some(peer) && t.stage.open()).collect();
+                on.sort_by_key(|t| t.stage != Stage::NeedsYou);
+                on.first().map(|t| t.id.clone())
+            });
+            match (task, peer) {
+                (Some(t), _) => self.home_drill(&t, None, cx),
+                (None, Some(peer)) => {
+                    self.connect.expanded.insert(peer);
+                    self.toast(format!("{name} has no open task; its workspaces are in the sidebar."), cx);
+                }
+                (None, None) => self.toast(format!("{name} isn't paired anymore."), cx),
+            }
         } else if let Some(name) = target.strip_prefix("workspace/") {
             if let Some(id) = self.state.read(cx).workspace_named(name).map(|w| w.id.clone()) {
                 self.execute(Command::WorkspaceSwitch(id), window, cx);
@@ -311,31 +748,9 @@ impl Root {
         }
     }
 
-    /// A task card was clicked: a fork's thread opens; a light task's agent gets focus.
-    fn open_task_card(&mut self, t: &HomeTask, window: &mut Window, cx: &mut Context<Self>) {
-        match t.mode {
-            TaskMode::Fork if t.stage.open() => {
-                self.home.thread = Some(t.id.clone());
-                cx.notify();
-            }
-            TaskMode::Light | TaskMode::Fork => {
-                if let Some(p) = t.panes.iter().find(|p| self.state.read(cx).pane(p).is_some()).cloned() {
-                    self.home_focus_pane(&p, window, cx);
-                } else if let Some(ws) = t.workspace_id.clone() {
-                    self.update_state(cx, |s| s.set_view(View::Workspace));
-                    self.execute(Command::WorkspaceSwitch(ws), window, cx);
-                }
-            }
-            TaskMode::Remote => {
-                // Its orchestrator's pane, shown here as a tile of that machine's workspace.
-                let (Some(peer), Some(pane)) = (t.machine.clone(), t.remote_pane.clone()) else { return };
-                if let Some(local) = self.state.read(cx).workspaces.iter().flat_map(|w| &w.panes).find(|p| p.remote.as_ref().is_some_and(|r| r.peer == peer && r.pane == pane)).map(|p| p.id.clone()) {
-                    self.home_focus_pane(&local, window, cx);
-                } else {
-                    self.toast("Open that machine's workspace from the sidebar to see this task's orchestrator.", cx);
-                }
-            }
-        }
+    /// A task card (or a link to it) was clicked: its chat opens inside Home.
+    fn open_task_card(&mut self, t: &HomeTask, _window: &mut Window, cx: &mut Context<Self>) {
+        self.home_drill(&t.id, None, cx);
     }
 
     /// Home's entry in the sidebar.
@@ -368,6 +783,61 @@ impl Root {
             .child(Icon::new(IconName::LayoutDashboard).size(px(14.0)))
             .child(div().flex_1().child("Home"))
             .children(dot)
+    }
+
+    /// Development aid (`WINFER_NATIVE_HOME_DEMO=1`, with `WINFER_NATIVE_CODE_DEMO=home`): Home with
+    /// a light, a forked, a remote and a merged task whose chats play scripts;
+    /// `WINFER_NATIVE_HOME_TASK=2` (or `2/backend`) opens that task's chat.
+    #[cfg(debug_assertions)]
+    pub(super) fn home_demo(&mut self, cx: &mut Context<Self>) {
+        if std::env::var_os("WINFER_NATIVE_HOME_DEMO").is_none() {
+            return;
+        }
+        self.load_home(cx);
+        if self.home.tasks.is_empty() {
+            let (ws_id, ws) = {
+                let s = self.state.read(cx);
+                (s.active_workspace_id.clone(), s.workspaces.iter().find(|w| w.id == s.active_workspace_id).map_or("web".to_string(), |w| w.name.clone()))
+            };
+            let add = |this: &mut Self, title: &str, cx: &mut Context<Self>| -> String {
+                this.state.update(cx, |s, cx| {
+                    let id = s.add_pane("winfer", crate::model::AddPane { worktree: Some(false), custom_title: Some(title.to_string()), ..Default::default() });
+                    cx.notify();
+                    id
+                })
+            };
+            let light = add(self, "fix-login-flake", cx);
+            let fork: Vec<String> = ["backend", "frontend", "tests"].iter().map(|t| add(self, t, cx)).collect();
+            let remote = add(self, "Task 3 · mac-studio", cx);
+            let now = super::home::now_secs();
+            let task = |n: u32, goal: &str, mode: TaskMode, stage: Stage, panes: Vec<String>, model: &str| HomeTask {
+                id: format!("t{n}-demo"), number: n, goal: goal.into(), workspace: ws.clone(), workspace_id: Some(ws_id.clone()), mode, stage, panes, model: Some(model.into()), created: now, updated: now + u64::from(10 - n), ..Default::default()
+            };
+            let mut r = task(3, "Bump tokio to 1.48 and fix the deprecations", TaskMode::Remote, Stage::Ready, Vec::new(), "claude/opus");
+            r.machine = Some(DEMO_PEER.into());
+            r.remote_pane = Some(remote);
+            r.workspace = "mac-studio/core".into();
+            r.workspace_id = None;
+            self.home.tasks = vec![
+                task(2, "Add CSV export to the reports page", TaskMode::Fork, Stage::NeedsYou, fork, "claude/opus"),
+                task(1, "Fix the flaky login e2e test on CI", TaskMode::Light, Stage::Running, vec![light], "claude/sonnet"),
+                r,
+                HomeTask { worktrees: vec!["/tmp".into()], ..task(4, "Dark mode toggle on the settings page", TaskMode::Light, Stage::Merged, Vec::new(), "claude/sonnet") },
+            ];
+            // Their chats start now (as when the workspace showed them), so what they ask shows.
+            for p in self.home.tasks.iter().flat_map(|t| t.panes.clone().into_iter().chain(t.remote_pane.clone())).collect::<Vec<_>>() {
+                self.code_model(&p, cx);
+            }
+        }
+        self.update_state(cx, |s| s.set_view(View::Home));
+        if let Ok(target) = std::env::var("WINFER_NATIVE_HOME_TASK") {
+            let (n, agent) = target.split_once('/').map_or((target.as_str(), None), |(n, a)| (n, Some(a)));
+            if let Some(t) = super::home::find_task(&self.home.tasks, &serde_json::json!(n)).cloned() {
+                let s = self.state.read(cx);
+                let pane = agent.and_then(|a| t.panes.iter().find(|p| s.pane(p).is_some_and(|p| p.custom_title.as_deref() == Some(a))).cloned());
+                self.home_drill(&t.id, Some(pane), cx);
+            }
+        }
     }
 
     /// Opens Home at launch when the user wants it (Settings → Home).

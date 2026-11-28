@@ -157,6 +157,39 @@ pub fn script(mode: &str) -> Vec<(u64, Step)> {
                 steps.push((900, Ev(json!({ "type": "task_log", "id": "bg-demo", "file": "/tmp/web-os-demo/watch.log", "text": lines.join("\n") }))));
             }
         }
+        // `WINFER_NATIVE_CODE_DEMO=home` (see `session::demo_mode`): Home's conductor, a fork's
+        // orchestrator, an agent asking to run something, an agent at work.
+        "home-conductor" => {
+            steps.truncate(2);
+            steps.push((300, Type("Add CSV export to the reports page in web, fix the flaky login test in api, and bump tokio on mac-studio\r")));
+            steps.push((300, Ev(json!({ "type": "turn_start" }))));
+            for (i, t) in ["Task 2 · fork · web", "Task 1 · light · api", "Task 3 · remote · mac-studio"].into_iter().enumerate() {
+                steps.push((200, Ev(json!({ "type": "tool_start", "id": format!("h{i}"), "name": "winfer · update_task", "title": t, "input": {} }))));
+                steps.push((200, Ev(json!({ "type": "tool_end", "id": format!("h{i}"), "ok": true, "output": "ok" }))));
+            }
+            steps.push((400, Ev(json!({ "type": "text", "id": "ha1", "text": "Three tasks are under way:\n\n- **Task 2**: CSV export is the bigger one, so it has its own orchestrator and three agents.\n- Task 1: the login flake is a one-agent fix.\n- Task 3 runs on mac-studio and is ready to merge.\n\nTask 2 needs you: its orchestrator asks what the export should include." }))));
+            steps.push((200, Ev(json!({ "type": "turn_done" }))));
+        }
+        "home-orch" => {
+            steps.truncate(2);
+            steps.push((300, Type("Add CSV export to the reports page. Respect the current filters, stream big exports, cover it with an e2e test.\r")));
+            steps.push((300, Ev(json!({ "type": "turn_start" }))));
+            steps.push((300, Ev(json!({ "type": "text", "id": "o1", "text": "Plan: three agents in their own worktrees off `main`.\n\n- **backend**: `GET /reports/:id/export.csv`, streamed\n- **frontend**: Export button and a progress toast\n- **tests**: Playwright e2e for a 10k-row report" }))));
+            for (i, t) in ["backend · Sonnet · winfer/t2-backend", "frontend · Sonnet · winfer/t2-frontend", "tests · Haiku · winfer/t2-tests"].into_iter().enumerate() {
+                steps.push((200, Ev(json!({ "type": "tool_start", "id": format!("s{i}"), "name": "winfer · spawn_agent", "title": t, "input": {} }))));
+                steps.push((200, Ev(json!({ "type": "tool_end", "id": format!("s{i}"), "ok": true, "output": "started" }))));
+            }
+            steps.push((300, Ev(json!({ "type": "text", "id": "o2", "text": "**tests** is done and green on its branch; **backend** waits for an install approval.\n\nBefore **frontend** wires the button I need one decision: should Export include only the rows the current filters show (my pick), the whole report, or ask every time?" }))));
+            steps.push((200, Ev(json!({ "type": "turn_done" }))));
+        }
+        "home-ask" => {
+            steps[2] = (1500, Type("Add GET /reports/:id/export.csv. Stream the rows and reuse the ReportQuery filters.\r"));
+            steps.truncate(16);
+        }
+        "home-work" => {
+            steps[2] = (1500, Type("Find why login.spec.ts fails about 1 in 8 runs on CI and fix it, no retries.\r"));
+            steps.truncate(15);
+        }
         "model" => steps.push((1200, Type("/model\r"))),
         "mode" => steps.push((1200, Type("/mode\r"))),
         "effort" => steps.push((1200, Type("/effort\r"))),

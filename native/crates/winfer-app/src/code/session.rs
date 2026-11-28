@@ -130,8 +130,9 @@ impl CodeModel {
         #[cfg(debug_assertions)]
         if std::env::var_os("WINFER_NATIVE_CODE_DEMO").is_some() {
             let tx = tx.clone();
+            let mode = demo_mode(&pane);
             cx.spawn(async move |this, cx| {
-                for (delay, step) in super::demo::script(&std::env::var("WINFER_NATIVE_CODE_DEMO").unwrap_or_default()) {
+                for (delay, step) in super::demo::script(&mode) {
                     cx.background_executor().timer(Duration::from_millis(delay)).await;
                     if let super::demo::Step::Gate(file) = &step {
                         while std::fs::remove_file(file).is_err() {
@@ -444,4 +445,20 @@ mod tests {
         let t = screen_text(&s);
         assert!(t.contains("> hi") && t.contains("hello") && t.contains("Context handoff: Fable 5.2 → Gemini 4 Neon"));
     }
+}
+
+/// The demo script a chat plays: `WINFER_NATIVE_CODE_DEMO`, or with `home` one per kind of Home chat.
+#[cfg(debug_assertions)]
+fn demo_mode(pane: &Pane) -> String {
+    let mode = std::env::var("WINFER_NATIVE_CODE_DEMO").unwrap_or_default();
+    if mode != "home" {
+        return mode;
+    }
+    match crate::voice::home_pane(&pane.id) {
+        Some(crate::voice::HomePane::Conductor) => "home-conductor",
+        Some(crate::voice::HomePane::Task(_)) => "home-orch",
+        None if matches!(pane.custom_title.as_deref(), Some("backend")) => "home-ask",
+        None => "home-work",
+    }
+    .into()
 }
