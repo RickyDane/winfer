@@ -1001,7 +1001,7 @@ impl Root {
                 let _ = this.update(cx, |this, cx| {
                     let diff = match merged {
                         Ok(diff) => diff,
-                        Err(err) => return this.toast(format!("Merge not possible: {err}"), cx),
+                        Err(err) => return this.toast_err("Merge not possible", err, cx),
                     };
                     this.record_merge_of(&winner, diff.as_ref().map(review::diff_stats), cx);
                     this.set_review_status_for(&winner.id, ReviewStatus::Merged, cx);

@@ -535,7 +535,7 @@ impl Root {
                 }
                 Err(err) => {
                     this.plugins.start = HostStart::Failed;
-                    this.toast(format!("Plugins can't run: {err}"), cx);
+                    this.toast_err("Plugins can't run", err, cx);
                     false
                 }
             });
@@ -611,7 +611,7 @@ impl Root {
                 };
                 match waiting {
                     Waiting::Mcp(call) => agent_api::respond(&call, ok, text),
-                    Waiting::Toast(plugin) if !ok => self.toast(format!("Plugin “{plugin}” failed: {text}"), cx),
+                    Waiting::Toast(plugin) if !ok => self.toast_err(format!("Plugin “{plugin}” failed"), text, cx),
                     Waiting::Toast(_) => {}
                 }
             }
@@ -653,7 +653,7 @@ impl Root {
             "execute" => {
                 let result = self.run_bus(&a["command"], window, cx).map(|_| Value::Null);
                 if let Err(e) = &result {
-                    self.toast(format!("A plugin sent a command winfer couldn't run: {e}"), cx);
+                    self.toast_err("A plugin sent a command winfer couldn't run", e, cx);
                 }
                 self.reply_to_host(id, result);
             }
@@ -799,7 +799,7 @@ impl Root {
         }
         for command in tool.commands.unwrap_or_default() {
             if let Err(e) = self.run_bus(&fill_template(&command, &args), window, cx) {
-                self.toast(format!("Plugin “{}” failed: {e}", tool.plugin), cx);
+                self.toast_err(format!("Plugin “{}” failed", tool.plugin), e, cx);
                 break;
             }
         }

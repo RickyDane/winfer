@@ -1,7 +1,7 @@
 //! Update checks and installs, the "What's new" dialog and Settings → Updates (port of
 //! `features/updates/updater.ts`, `WhatsNew.tsx` and the update footer of `SettingsModal.tsx`).
 
-use super::commands::Command;
+use super::commands::{Command, Toast, ToastKind};
 use super::*;
 use crate::backend;
 use crate::updates::{self, Channel, ReleaseChanges};
@@ -530,7 +530,7 @@ impl Root {
                     Err(err) => {
                         this.updates.error = Some(err.clone());
                         if !quiet {
-                            this.toast(format!("Couldn't check for updates: {err}"), cx);
+                            this.toast_err("Couldn't check for updates", err, cx);
                         }
                     }
                 }
@@ -605,7 +605,7 @@ impl Root {
                 Err(err) => {
                     this.updates.installing = None;
                     this.updates.status_seq += 1;
-                    this.toast_with_label(format!("Couldn't install winfer {}: {err}", a.version), "Download".into(), Command::DownloadUpdate, cx);
+                    this.push_toast(Toast::new(ToastKind::Error, format!("Couldn't install winfer {}", a.version)).detail(err.to_string()).action("Download", Command::DownloadUpdate), cx);
                     cx.notify();
                 }
             });

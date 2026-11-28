@@ -285,7 +285,7 @@ impl Root {
                     }
                 }
                 if let Err(err) = result {
-                    this.toast(format!("Update failed: {err}"), cx);
+                    this.toast_err("Update failed", err, cx);
                 }
                 cx.notify();
             });

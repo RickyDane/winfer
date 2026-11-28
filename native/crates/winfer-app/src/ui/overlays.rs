@@ -4,6 +4,7 @@
 use super::commands::{BINDINGS, Command, PaneRef, ViewTarget, chord_for, format_chord, keys_for};
 use super::*;
 use crate::model::Overlay;
+use gpui_kit::component::text::TextView;
 use crate::model::layout::{PRESETS, Preset};
 use gpui_kit::component::input::{Input, InputEvent, InputState, MoveDown, MoveUp};
 
@@ -498,27 +499,183 @@ impl Root {
     }
 
     pub(super) fn render_toasts(&self, c: &Colors, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if self.toasts.is_empty() {
+        let items = &self.toasts.items;
+        if items.is_empty() {
             return None;
         }
         let c = *c;
-        let cards = self.toasts.iter().enumerate().map(|(i, toast)| {
-            let button = toast.action.clone().map(|(label, action)| {
-                toast_action_button(("toast-action", i).into(), label, &c)
+        let spread = self.toasts.spread();
+        let mono = crate::fonts::mono(cx);
+        let n = items.len();
+        let shown = if spread { n.min(TOAST_SPREAD_MAX) } else { n.min(3) };
+        let cards: Vec<AnyElement> = items[n - shown..].iter().map(|t| self.render_toast(t, spread, &mono, c, cx).into_any_element()).collect();
+        let deck = toast_deck(cards, spread, c.app)
+            .id("toast-deck")
+            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                this.toasts.hovered = *hovered;
+                cx.notify();
+            }));
+        let hidden = n.saturating_sub(3);
+        let pill = (hidden > 0 && (!spread || self.toasts.pinned)).then(|| {
+            let label = if self.toasts.pinned { "Show less".to_string() } else { format!("+{hidden} more") };
+            div()
+                .id("toast-more")
+                .flex_shrink_0()
+                .px_2p5()
+                .h(px(22.0))
+                .flex()
+                .items_center()
+                .rounded_full()
+                .bg(c.raised)
+                .border_1()
+                .border_color(c.border_strong)
+                .text_size(px(11.5))
+                .text_color(c.muted)
+                .cursor_pointer()
+                .hover(|d| d.text_color(c.fg))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.toasts.pinned = !this.toasts.pinned;
+                    cx.notify();
+                }))
+                .child(label)
+                .into_any_element()
+        });
+        Some(toast_stack([deck.into_any_element()], pill).into_any_element())
+    }
+
+    fn render_toast(&self, t: &commands::Toast, spread: bool, mono: &SharedString, c: Colors, cx: &mut Context<Self>) -> Div {
+        use commands::{ToastChip, ToastKind};
+        let color = toast_color(t.kind, c);
+        let id = t.id;
+        let icon = match t.kind {
+            ToastKind::Progress => super::updates_ui::spinning_icon(IconName::LoaderCircle, 15.0, Some(color), ("toast-spin", id as usize)).into_any_element(),
+            k => Icon::new(match k {
+                ToastKind::Success => IconName::CircleCheck,
+                ToastKind::Error => IconName::CircleX,
+                ToastKind::Warning => IconName::TriangleAlert,
+                ToastKind::Agent => IconName::Bot,
+                _ => IconName::Info,
+            })
+            .size(px(15.0))
+            .text_color(color)
+            .into_any_element(),
+        };
+        let md = |key: &str, text: &SharedString| {
+            TextView::markdown(SharedString::from(format!("toast-{id}-{key}")), text.clone())
+                .style(super::super::code_view::md_style(c))
+                .on_link_click(|href, _, _, cx| cx.open_url(href))
+        };
+        let mut body = div().flex_1().min_w_0().flex().flex_col().gap(px(2.0)).child(div().text_size(px(13.0)).font_weight(FontWeight::MEDIUM).text_color(c.fg).child(md("t", &t.title)));
+        if let Some(detail) = &t.detail {
+            body = body.child(if t.kind == ToastKind::Error {
+                let shown: String = if detail.chars().count() > 400 { detail.chars().take(400).chain("…".chars()).collect() } else { detail.to_string() };
+                div()
+                    .mt_0p5()
+                    .px(px(7.0))
+                    .py(px(5.0))
+                    .rounded(px(6.0))
+                    .bg(Hsla { a: 0.07, ..c.danger })
+                    .border_1()
+                    .border_color(Hsla { a: 0.15, ..c.danger })
+                    .font_family(mono.clone())
+                    .text_size(px(11.5))
+                    .text_color(c.muted)
+                    .whitespace_normal()
+                    .child(shown)
+                    .into_any_element()
+            } else {
+                div().text_size(px(12.0)).text_color(c.muted).child(md("d", detail)).into_any_element()
+            });
+        }
+        if !t.chips.is_empty() {
+            body = body.child(div().mt_1().flex().flex_wrap().gap_1().children(t.chips.iter().map(|chip| match chip {
+                ToastChip::Machine(name) => super::home_view::machine_chip(name, c).into_any_element(),
+                ToastChip::Workspace(name) => div()
+                    .h(px(18.0))
+                    .px(px(6.0))
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .rounded(px(5.0))
+                    .bg(c.hover)
+                    .text_size(px(10.5))
+                    .text_color(c.muted)
+                    .child(Icon::new(IconName::FolderOpen).size(px(10.5)).text_color(c.subtle))
+                    .child(name.clone())
+                    .into_any_element(),
+            })));
+        }
+        let mut buttons: Vec<AnyElement> = t
+            .actions
+            .iter()
+            .enumerate()
+            .map(|(i, (label, action))| {
+                let action = action.clone();
+                toast_button(("toast-action", (id as usize) * 16 + i).into(), label.clone(), i == 0, &c)
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.execute(action.clone(), window, cx);
+                        this.dismiss_toast(id, cx);
                     }))
                     .into_any_element()
-            });
-            toast_card(toast.text.clone(), button, &c).into_any_element()
+            })
+            .collect();
+        if t.kind == ToastKind::Error && let Some(detail) = t.detail.clone() {
+            let copy = format!("{}: {detail}", t.title);
+            buttons.push(
+                toast_button(("toast-copy", id as usize).into(), "Copy error".into(), buttons.is_empty(), &c)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()));
+                        this.toast_ok("Error copied", cx);
+                    }))
+                    .into_any_element(),
+            );
+        }
+        if !buttons.is_empty() {
+            body = body.child(div().mt_1p5().flex().flex_wrap().gap_1p5().children(buttons));
+        }
+        let close = spread.then(|| {
+            div()
+                .id(("toast-close", id as usize))
+                .flex_shrink_0()
+                .size(px(18.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(5.0))
+                .text_color(c.subtle)
+                .cursor_pointer()
+                .hover(|d| d.bg(c.active).text_color(c.fg))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(move |this, _, _, cx| this.dismiss_toast(id, cx)))
+                .child(Icon::new(IconName::X).size(px(12.0)))
+                .into_any_element()
         });
-        Some(toast_stack(cards).into_any_element())
+        let left = match (t.left, t.life) {
+            (Some(left), Some(life)) if !life.is_zero() => Some(left.as_secs_f32() / life.as_secs_f32()),
+            _ => None,
+        };
+        toast_card(icon, body, close, left.map(|f| (f, color)), &c)
     }
 }
 
-const TOAST_MAX_W: f32 = 420.0;
+const TOAST_MAX_W: f32 = 370.0;
+/// At most this many cards when the deck fans out; older ones wait below the fold.
+const TOAST_SPREAD_MAX: usize = 8;
 
-fn toast_stack(cards: impl IntoIterator<Item = AnyElement>) -> Div {
+fn toast_color(kind: commands::ToastKind, c: Colors) -> Hsla {
+    use commands::ToastKind::*;
+    match kind {
+        Success => c.success,
+        Error => c.danger,
+        Warning => c.warning,
+        Agent => c.claude,
+        Info | Progress => c.accent,
+    }
+}
+
+/// Bottom-right column: the deck, then the "+N more" pill. Only the cards take clicks.
+fn toast_stack(deck: impl IntoIterator<Item = AnyElement>, pill: Option<AnyElement>) -> Div {
     div()
         .absolute()
         .bottom(px(16.0))
@@ -527,52 +684,103 @@ fn toast_stack(cards: impl IntoIterator<Item = AnyElement>) -> Div {
         .flex()
         .flex_col()
         .items_end()
-        .child(div().w_full().max_w(px(TOAST_MAX_W)).flex().flex_col().gap_2().items_end().children(cards))
+        .child(div().w_full().max_w(px(TOAST_MAX_W)).flex().flex_col().gap_1p5().items_end().children(deck).children(pill))
 }
 
-fn toast_action_button(id: ElementId, label: SharedString, c: &Colors) -> Stateful<Div> {
+/// Newest card last. Collapsed: the newest on top and the next two peeking out above it,
+/// narrower and fainter; spread: all of them in a column.
+fn toast_deck(cards: Vec<AnyElement>, spread: bool, dim: Hsla) -> Div {
+    if spread {
+        return div().w_full().flex().flex_col().gap_1p5().children(cards);
+    }
+    let n = cards.len();
+    let mut deck = div().relative().w_full();
+    for (i, card) in cards.into_iter().enumerate() {
+        let depth = n - 1 - i;
+        deck = if depth == 0 {
+            deck.child(card)
+        } else {
+            let inset = px(8.0 * depth as f32);
+            deck.child(
+                div()
+                    .absolute()
+                    .top(px(-10.0 * depth as f32))
+                    .left(inset)
+                    .right(inset)
+                    .h_full()
+                    .overflow_hidden()
+                    .rounded(px(12.0))
+                    .child(card)
+                    .child(div().absolute().inset_0().rounded(px(12.0)).bg(Hsla { a: if depth == 1 { 0.45 } else { 0.7 }, ..dim })),
+            )
+        };
+    }
+    deck
+}
+
+fn toast_button(id: ElementId, label: SharedString, primary: bool, c: &Colors) -> Stateful<Div> {
+    let (bg, fg) = if primary { (c.accent, c.on_accent) } else { (c.active, c.fg) };
     div()
         .id(id)
         .flex_shrink_0()
         .whitespace_nowrap()
-        .rounded_md()
-        .bg(c.accent)
-        .px_2()
-        .py_0p5()
-        .text_color(c.on_accent)
+        .h(px(24.0))
+        .px(px(9.0))
+        .flex()
+        .items_center()
+        .rounded(px(6.0))
+        .bg(bg)
+        .text_size(px(12.0))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(fg)
         .cursor_pointer()
+        .hover(|d| d.opacity(0.9))
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .child(label)
 }
 
-fn toast_card(text: SharedString, button: Option<AnyElement>, c: &Colors) -> Div {
+/// A card: kind icon, body (title, detail, chips, buttons), × when spread, and a countdown line
+/// (`left`: the fraction of its time left, in the kind's colour).
+fn toast_card(icon: AnyElement, body: Div, close: Option<AnyElement>, left: Option<(f32, Hsla)>, c: &Colors) -> Div {
     let shadow = BoxShadow {
-        color: hsla(0.0, 0.0, 0.0, if c.light { 0.08 } else { 0.25 }),
-        offset: point(px(0.0), px(2.0)),
-        blur_radius: px(8.0),
+        color: hsla(0.0, 0.0, 0.0, if c.light { 0.10 } else { 0.40 }),
+        offset: point(px(0.0), px(8.0)),
+        blur_radius: px(24.0),
         spread_radius: px(0.0),
         inset: false,
     };
     div()
+        .relative()
+        .w_full()
         .flex()
-        .items_center()
-        .gap_2()
-        .max_w_full()
-        .rounded_md()
+        .items_start()
+        .gap(px(10.0))
+        .rounded(px(12.0))
         .bg(c.raised)
         .border_1()
-        .border_color(c.border)
+        .border_color(c.border_strong)
         .shadow(vec![shadow])
-        .px_3()
-        .py_1p5()
-        .text_xs()
-        .text_color(c.fg)
-        .child(div().min_w_0().flex_shrink(1.0).overflow_hidden().whitespace_normal().child(text))
-        .children(button)
+        .px(px(12.0))
+        .py(px(11.0))
+        .child(div().pt(px(1.0)).flex_shrink_0().child(icon))
+        .child(body)
+        .children(close)
+        .when_some(left, |d, (frac, color)| {
+            d.child(
+                div()
+                    .absolute()
+                    .left(px(12.0))
+                    .right(px(12.0))
+                    .bottom_0()
+                    .h(px(2.0))
+                    .child(div().h_full().w(relative(frac.clamp(0.0, 1.0))).rounded(px(1.0)).bg(Hsla { a: 0.5, ..color })),
+            )
+        })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{TOAST_MAX_W, score, toast_action_button, toast_card, toast_stack};
+    use super::{TOAST_MAX_W, score, toast_button, toast_card, toast_stack};
 
     #[test]
     fn scoring_prefers_word_starts() {
@@ -610,12 +818,14 @@ mod tests {
                 let m_btn = self.measured.clone();
                 let m_bg = self.measured.clone();
                 let button = self.action.clone().map(|label| {
-                    toast_action_button(("toast-action", 0usize).into(), label, &c)
+                    toast_button(("toast-action", 0usize).into(), label, true, &c)
                         .relative()
                         .child(canvas(move |b, _, _| { m_btn.borrow_mut().button = Some(b); }, |_, _, _, _| {}).absolute().inset_0())
                         .into_any_element()
                 });
-                let card = toast_card(self.text.clone(), button, &c)
+                let body = div().flex_1().min_w_0().flex().flex_col().child(div().whitespace_normal().child(self.text.clone())).children(button.map(|b| div().mt_1p5().flex().child(b)));
+                let icon = div().size(px(15.0)).into_any_element();
+                let card = toast_card(icon, body, None, Some((0.5, c.accent)), &c)
                     .relative()
                     .child(canvas(move |b, _, _| { m_card.borrow_mut().card = Some(b); }, |_, _, _, _| {}).absolute().inset_0())
                     .into_any_element();
@@ -634,7 +844,7 @@ mod tests {
                                 m_bg.borrow_mut().bg_clicked = true;
                             }),
                     )
-                    .child(toast_stack([card]))
+                    .child(toast_stack([card], None))
             }
         }
 
@@ -677,15 +887,14 @@ mod tests {
         assert!(card.size.height > btn.size.height + px(8.0), "expected wrapped multiline card, got card_h={} btn_h={}", f32::from(card.size.height), f32::from(btn.size.height));
         assert!(bg_clicked, "toast stack must not block clicks outside toast cards");
 
-        // 2. Short toast without action hugs content instead of stretching to max width or collapsing.
+        // 2. Deck cards share one width so the ones behind line up, however short the text.
         let (short_card, _, _) = measure(cx, 900.0, "Copied to the clipboard", None);
-        assert!(short_card.size.width > px(80.0) && short_card.size.width < px(260.0), "short toast width unexpected: {}", f32::from(short_card.size.width));
+        assert!((short_card.size.width - px(TOAST_MAX_W)).abs() < px(2.5), "short toast width unexpected: {}", f32::from(short_card.size.width));
         assert!(short_card.right() <= px(900.0 - 15.5));
 
-        // 3. Short toast with action hugs content and keeps the action inside.
+        // 3. Short toast with action keeps the action inside.
         let (short_action_card, short_action_btn, _) = measure(cx, 900.0, "Race finished", Some("Results"));
         let short_action_btn = short_action_btn.expect("button measured");
-        assert!(short_action_card.size.width < px(260.0), "short action toast stretched unexpectedly: {}", f32::from(short_action_card.size.width));
         assert!(short_action_btn.right() <= short_action_card.right() - px(10.0));
 
         // 4. Long toast without action wraps within max width.

@@ -928,10 +928,11 @@ impl Root {
         if std::env::var_os("WINFER_NATIVE_ORCHESTRATE").is_some() {
             eprintln!("[orchestrator] {text}");
         }
-        let who = match home_pane(pane_id) {
-            Some(HomePane::Task(t)) => self.task(t).map_or_else(|| "Task".to_string(), |t| format!("{} · {}", t.title(), t.workspace)),
-            _ => "Home".to_string(),
+        let task = match home_pane(pane_id) {
+            Some(HomePane::Task(t)) => self.task(t).map(|t| (t.title(), t.workspace.clone(), t.machine.clone())),
+            _ => None,
         };
+        let who = task.as_ref().map_or_else(|| "Home".to_string(), |(title, ws, _)| format!("{title} · {ws}"));
         // While live voice runs, it speaks what the user isn't reading on Home.
         if self.live_voice_on() && (self.home.voice_turn || !self.home_thread_on_screen(pane_id, cx)) {
             self.voice_note(format!("Orchestrator: {text}"));
@@ -941,7 +942,14 @@ impl Root {
             return;
         }
         let short: String = text.chars().take(MAX_TOAST).collect();
-        self.toast(format!("{who}: {short}"), cx);
+        let mut toast = super::commands::Toast::new(super::commands::ToastKind::Agent, task.as_ref().map_or_else(|| "Home".to_string(), |(title, _, _)| title.to_string())).detail(short.clone());
+        if let Some((_, ws, machine)) = &task {
+            toast = toast.chip(super::commands::ToastChip::Workspace(ws.clone().into()));
+            if let Some(m) = machine {
+                toast = toast.chip(super::commands::ToastChip::Machine(m.clone().into()));
+            }
+        }
+        self.push_toast(toast, cx);
         if !status::window_focused() {
             let notification = json!({ "paneId": pane_id, "title": who, "body": short, "kind": "info" });
             backend::background(move || {

@@ -381,7 +381,7 @@ pub struct Root {
     side_open: Vec<String>,
     side_shown: Option<String>,
     applied_theme: Option<String>,
-    toasts: Vec<commands::Toast>,
+    toasts: commands::Toasts,
     questions: std::collections::VecDeque<PendingQuestions>,
     question_serial: u64,
     question_input: Option<Entity<gpui_kit::component::input::InputState>>,
@@ -572,7 +572,7 @@ impl Root {
         let viewer = cx.new(|cx| ViewerPanel::new(viewer_state, cx));
         let android_state = state.clone();
         let android = cx.new(|cx| AndroidPanel::new(android_state, cx));
-        Self { android, orchestration: Default::default(), progress_ui: Default::default(), plugins: Default::default(), menu: None, sidebar: Default::default(), meters: Default::default(), search: None, worktrees: Default::default(), failover: Default::default(), usage_page: Default::default(), more: Default::default(), plugin_page: Default::default(), skill_page: Default::default(), harness_page: Default::default(), connect_page: Default::default(), connect: Default::default(), mobile: Default::default(), wakes_loaded: false, usage: Default::default(), review: review::ReviewStore { queue_tests: true, ..Default::default() }, review_opened: false, history: None, settings: None, recording: None, suspend_saving: false, viewer, side_open: Vec::new(), side_shown: None, #[cfg(debug_assertions)] dev_layer_opened: false, new_pane: None, model_dialog: None, diff_dialog: None, models: HashMap::new(), new_menu: Default::default(), pane_note: None, welcome: Default::default(), toasts: Vec::new(), questions: Default::default(), question_serial: 0, question_input: None, question_picked: Vec::new(), palette_input: None, palette_entries: Vec::new(), palette_selected: 0, bg_notes: HashMap::new(), bg_tasks: HashMap::new(), bg_popover: None, bg_ticking: false, applied_theme: None, browser, state, events: tx, terminals: HashMap::new(), code_models: HashMap::new(), code_views: HashMap::new(), code_choice: HashMap::new(), browser_window: None, updates: Default::default(), usage_info_open: false, voice: Default::default(), home: Default::default(), tile_bounds: Bounds::default(), drag: None, save_task: None, last_saved: String::new(), focused_view: None, focus: cx.focus_handle(), workspace_focus: cx.focus_handle(), focus_outside: 0 }
+        Self { android, orchestration: Default::default(), progress_ui: Default::default(), plugins: Default::default(), menu: None, sidebar: Default::default(), meters: Default::default(), search: None, worktrees: Default::default(), failover: Default::default(), usage_page: Default::default(), more: Default::default(), plugin_page: Default::default(), skill_page: Default::default(), harness_page: Default::default(), connect_page: Default::default(), connect: Default::default(), mobile: Default::default(), wakes_loaded: false, usage: Default::default(), review: review::ReviewStore { queue_tests: true, ..Default::default() }, review_opened: false, history: None, settings: None, recording: None, suspend_saving: false, viewer, side_open: Vec::new(), side_shown: None, #[cfg(debug_assertions)] dev_layer_opened: false, new_pane: None, model_dialog: None, diff_dialog: None, models: HashMap::new(), new_menu: Default::default(), pane_note: None, welcome: Default::default(), toasts: Default::default(), questions: Default::default(), question_serial: 0, question_input: None, question_picked: Vec::new(), palette_input: None, palette_entries: Vec::new(), palette_selected: 0, bg_notes: HashMap::new(), bg_tasks: HashMap::new(), bg_popover: None, bg_ticking: false, applied_theme: None, browser, state, events: tx, terminals: HashMap::new(), code_models: HashMap::new(), code_views: HashMap::new(), code_choice: HashMap::new(), browser_window: None, updates: Default::default(), usage_info_open: false, voice: Default::default(), home: Default::default(), tile_bounds: Bounds::default(), drag: None, save_task: None, last_saved: String::new(), focused_view: None, focus: cx.focus_handle(), workspace_focus: cx.focus_handle(), focus_outside: 0 }
     }
 
     fn schedule_save(&mut self, cx: &mut Context<Self>) {
@@ -1783,6 +1783,7 @@ impl Render for Root {
         if self.state.read(cx).hydrated && !std::mem::replace(&mut self.dev_layer_opened, true) {
             match std::env::var("WINFER_NATIVE_LAYER").as_deref() {
                 Ok("palette") => self.execute(Command::Palette(None), window, cx),
+                Ok("toasts") => self.toast_demo(cx),
                 Ok("new-pane") => self.update_state(cx, |s| s.overlay = crate::model::Overlay::NewPane),
                 Ok("shortcuts") => self.execute(Command::CheatSheet, window, cx),
                 Ok("branch") => self.update_state(cx, |s| s.overlay = crate::model::Overlay::Branch),
