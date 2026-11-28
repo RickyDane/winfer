@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Toasts · mockups</title>
+<style>
+/* Graphite dark tokens (winfer-core/assets/themes.json, winfer-app theme.rs) */
+:root{--app:#09090b;--panel:#111113;--raised:#161619;--hover:#1c1c20;--active:#232328;--border:#1f1f23;--bs:#2c2c31;--edge:#252529;
+--fg:#ececf0;--muted:#a1a1aa;--subtle:#71717a;--accent:#7c8cff;--ok:#4ade80;--warn:#fbbf24;--err:#f87171;--info:#7c8cff;--card:#141417;
+--sans:"Inter",-apple-system,"SF Pro Text",system-ui,sans-serif;--mono:"JetBrains Mono","SF Mono",ui-monospace,Menlo,monospace;color-scheme:dark}
+*{box-sizing:border-box}body{margin:0;font:13px/1.45 var(--sans);color:var(--fg);background:#050506;-webkit-font-smoothing:antialiased}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;padding:0}a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+code{font:11.5px var(--mono);background:var(--active);padding:1px 5px;border-radius:4px}
+.wrap{max-width:1320px;margin:0 auto;padding:28px 24px}
+h1{font-size:19px;margin:0 0 6px}.lead{color:var(--muted);max-width:900px;margin:0 0 22px}
+section.v{margin-bottom:36px}
+.vh{display:flex;align-items:center;gap:10px;margin-bottom:8px}.vh h2{margin:0;font-size:15px}
+.tag{font-size:10px;font-weight:600;padding:2px 7px;border-radius:5px;background:#7c8cff24;color:var(--accent);letter-spacing:.04em}
+.notes{display:grid;grid-template-columns:1fr 1fr 1.5fr;gap:18px;font-size:12px;color:var(--muted);margin-bottom:12px}
+.notes h3{margin:0 0 4px;font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--subtle)}
+.notes ul{margin:0;padding-left:16px}.notes pre{margin:0;font:11px/1.5 var(--mono);color:var(--muted);background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:8px 10px;white-space:pre-wrap}
+.frame{position:relative;height:740px;border-radius:14px;overflow:hidden;border:1px solid var(--bs);background:var(--app);box-shadow:0 30px 80px #000a}
+.frame .tb{height:32px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:7px;padding:0 12px}
+.frame .tb i{width:11px;height:11px;border-radius:50%;background:#3a3a40}.frame .tb i:nth-child(1){background:#ff5f57}.frame .tb i:nth-child(2){background:#febc2e}.frame .tb i:nth-child(3){background:#28c840}
+.frame .bg{position:absolute;inset:40px 8px 8px 8px;display:flex;gap:8px}
+.frame .bg div{border-radius:14px;background:var(--panel);border:1px solid var(--edge)}
+.frame .bg pre{margin:14px;font:11.5px/1.6 var(--mono);color:#3f3f46}
+.replay{margin-left:auto;font-size:11.5px;color:var(--muted);border:1px solid var(--bs);border-radius:7px;padding:3px 10px}.replay:hover{background:var(--hover);color:var(--fg)}
+.ic{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0;display:block}
+.chip{height:19px;display:inline-flex;align-items:center;gap:4px;padding:0 6px;border-radius:5px;font-size:11px;color:var(--muted);background:var(--active)}
+.chip .tile{width:12px;height:12px;border-radius:3px;font-size:8px;font-weight:700;color:#fff;display:inline-flex;align-items:center;justify-content:center}
+.spin{animation:spin 1s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
+.x{opacity:0;color:var(--subtle);width:18px;height:18px;border-radius:5px;display:flex;align-items:center;justify-content:center;transition:opacity .12s}
+.x:hover{background:var(--active);color:var(--fg)}
+.hint{position:absolute;left:16px;bottom:14px;font-size:11px;color:var(--subtle)}
+.btn{height:24px;padding:0 9px;border-radius:6px;font-size:12px;font-weight:500;background:var(--active);color:var(--fg);white-space:nowrap}.btn:hover{background:#2c2c33}
+.btn.p{background:var(--accent);color:#fff}.btn.p:hover{filter:brightness(1.1)}
+.k-ok{--k:var(--ok)}.k-err{--k:var(--err)}.k-warn{--k:var(--warn)}.k-info{--k:var(--info)}.k-prog{--k:var(--accent)}.k-agent{--k:#e08b6a}
+.enter{animation:in .22s cubic-bezier(.2,.8,.2,1)}@keyframes in{from{opacity:0;transform:translateY(10px) scale(.98)}}
+
+/* ---------- A: compact pills ---------- */
+.A .stack{position:absolute;right:16px;bottom:16px;display:flex;flex-direction:column;align-items:flex-end;gap:6px;width:440px}
+.A .t{position:relative;display:flex;align-items:center;gap:9px;max-width:100%;padding:7px 8px 7px 11px;border-radius:999px;background:var(--raised);border:1px solid var(--bs);box-shadow:0 6px 20px #0008;overflow:hidden}
+.A .t.multi{border-radius:14px;align-items:flex-start;padding:9px 8px 9px 12px}
+.A .t .k{color:var(--k)}.A .t.multi .k{margin-top:1px}
+.A .body{min-width:0;flex:1}.A .ti{font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.A .d{font-size:12px;color:var(--muted);margin-top:1px}.A .d code{font-size:11px}.A .d code.blk{display:block;white-space:pre-wrap;margin-top:3px;padding:4px 6px}
+.A .act{font-size:12px;font-weight:600;color:var(--accent);padding:2px 7px;border-radius:999px;white-space:nowrap}.A .act:hover{background:#7c8cff1f}
+.A .t:hover .x{opacity:1}
+.A .bar{position:absolute;left:0;bottom:0;height:2px;background:var(--k);opacity:.6;animation:drain var(--life) linear forwards}
+.A .t:hover .bar{animation-play-state:paused}
+@keyframes drain{from{width:100%}to{width:0}}
+
+/* ---------- B: rich cards ---------- */
+.B .stack{position:absolute;right:16px;bottom:16px;display:flex;flex-direction:column;gap:8px;width:380px}
+.B .t{position:relative;display:flex;gap:10px;padding:11px 10px 11px 14px;border-radius:10px;background:var(--card);border:1px solid var(--bs);box-shadow:0 10px 30px #000a;overflow:hidden}
+.B .t::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--k)}
+.B .kb{width:26px;height:26px;border-radius:7px;background:color-mix(in srgb,var(--k) 16%,transparent);color:var(--k);display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.B .body{flex:1;min-width:0}.B .ti{font-weight:600;display:flex;gap:6px;align-items:baseline}
+.B .ti .when{margin-left:auto;font-weight:400;font-size:11px;color:var(--subtle)}
+.B .d{font-size:12.5px;color:var(--muted);margin-top:2px}.B .d.mono{font:11.5px/1.5 var(--mono);color:#d4a5a5;background:#f871710f;border:1px solid #f8717122;border-radius:6px;padding:5px 7px;margin-top:6px}
+.B .chips{display:flex;gap:5px;margin-top:6px;flex-wrap:wrap}
+.B .acts{display:flex;gap:6px;margin-top:9px}
+.B .t:hover .x{opacity:1}.B .x{position:absolute;top:8px;right:8px}
+.B .ring{position:absolute;top:10px;right:10px;width:16px;height:16px;transition:opacity .12s}.B .t:hover .ring{opacity:0}
+.B .ring circle{fill:none;stroke-width:2}.B .ring .bgc{stroke:var(--active)}.B .ring .fgc{stroke:var(--subtle);stroke-dasharray:44;stroke-dashoffset:0;animation:ring var(--life) linear forwards;transform:rotate(-90deg);transform-origin:center}
+.B .t:hover .fgc{animation-play-state:paused}@keyframes ring{to{stroke-dashoffset:44}}
+.B .prog{height:3px;border-radius:2px;background:var(--active);margin-top:8px;overflow:hidden}.B .prog i{display:block;height:100%;background:var(--accent);width:0;transition:width .3s}
+
+/* ---------- C: notification center ---------- */
+.C .stack{position:absolute;right:16px;bottom:16px;width:370px}
+.C .deck{position:relative;height:150px}
+.C .t{position:absolute;left:0;right:0;bottom:0;padding:11px 12px;border-radius:12px;background:var(--raised);border:1px solid var(--bs);box-shadow:0 10px 30px #000a;transition:transform .25s,opacity .25s,bottom .25s;display:flex;gap:10px}
+.C .t .k{color:var(--k);margin-top:1px}.C .body{flex:1;min-width:0}.C .ti{font-weight:500}.C .d{font-size:12px;color:var(--muted);margin-top:1px}
+.C .t:nth-last-child(1){z-index:3}.C .t:nth-last-child(2){z-index:2;transform:translateY(-10px) scale(.95);opacity:.7}.C .t:nth-last-child(3){z-index:1;transform:translateY(-20px) scale(.9);opacity:.4}
+.C .t:nth-last-child(n+4){opacity:0;pointer-events:none}
+.C .deck:hover .t{position:relative;transform:none;opacity:1;margin-top:6px;bottom:auto}
+.C .deck:hover{height:auto}
+.C .deck:hover .t .x{opacity:1}
+.C .more{display:flex;justify-content:flex-end;margin-top:6px}
+.C .more button{font-size:11.5px;color:var(--muted);background:var(--raised);border:1px solid var(--bs);border-radius:999px;padding:3px 10px;display:flex;gap:6px;align-items:center}
+.C .more b{background:var(--accent);color:#fff;border-radius:999px;font-size:10px;padding:0 6px}
+.C .bell{position:absolute;top:6px;right:14px;display:flex;align-items:center;gap:6px;color:var(--muted);font-size:11.5px;z-index:5}
+.C .bell .dot{width:7px;height:7px;border-radius:50%;background:var(--accent)}
+.C .inbox{position:absolute;top:34px;right:10px;width:380px;max-height:520px;border-radius:12px;background:var(--card);border:1px solid var(--bs);box-shadow:0 20px 60px #000c;overflow:auto;z-index:6}
+.C .inbox h4{margin:0;padding:10px 12px;font-size:12px;display:flex;border-bottom:1px solid var(--border)}.C .inbox h4 span{margin-left:auto;color:var(--accent);font-weight:400}
+.C .row{display:flex;gap:9px;padding:9px 12px;border-bottom:1px solid var(--border)}.C .row:hover{background:var(--hover)}.C .row .k{color:var(--k);margin-top:1px}
+.C .row .when{font-size:10.5px;color:var(--subtle);margin-left:auto;white-space:nowrap}
+.C .grp{padding:6px 12px 3px;font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--subtle)}
+.C .uline{position:absolute;left:12px;right:12px;bottom:0;height:2px;border-radius:2px;background:var(--k);opacity:.5;animation:drain var(--life) linear forwards}
+.C .deck:hover .uline{animation-play-state:paused}
+</style></head><body><div class="wrap">
+<h1>Toast notifications: three directions</h1>
+<p class="lead">Today <code>render_toasts</code> (ui/overlays.rs) draws one plain text line per card, so markdown from agents shows raw. All three variants share the same data drawn from real call sites, render markdown (<b>bold</b>, <code>code</code>, links), and pause on hover. Use <b>Replay</b> to watch the “Pushing…” toast turn into “Pushed”.</p>
+
+<!-- ================= A ================= -->
+<section class="v A"><div class="vh"><h2>A · Compact pills</h2><span class="tag">MINIMAL</span><button class="replay" data-v="A">Replay</button></div>
+<div class="notes">
+<div><h3>Pros</h3><ul><li>Smallest change from today; covers least of the terminal</li><li>Kind icon makes errors scannable</li><li>Thin drain bar is the countdown</li></ul></div>
+<div><h3>Cons</h3><ul><li>Single line ellipsizes long errors (expands to rounded card only if there's a detail)</li><li>One action max; no chips for agent events</li></ul></div>
+<div><h3>API</h3><pre>Toast { kind, title, detail: Option&lt;md&gt;, action: Option&lt;(label, Command)&gt;, id: Option&lt;key&gt; }
+toast(text) → kind inferred: "Couldn't…/failed/not possible" → Error, "Merged/Copied/…ed" → Success, ends with "…" → Progress; first line = title, rest = detail.</pre></div></div>
+<div class="frame"><div class="tb"><i></i><i></i><i></i></div><div class="bg"><div style="width:200px"></div><div style="flex:1"><pre>$ cargo build -p winfer-app
+   Compiling winfer-app v0.9.2
+    Finished dev [unoptimized] in 14.2s</pre></div></div>
+<div class="stack" id="A"></div><div class="hint">Hover a toast: timer pauses, × appears</div></div></section>
+
+<!-- ================= B ================= -->
+<section class="v B"><div class="vh"><h2>B · Rich cards with accent edge</h2><span class="tag">RECOMMENDED</span><button class="replay" data-v="B">Replay</button></div>
+<div class="notes">
+<div><h3>Pros</h3><ul><li>Title + markdown body + several actions + chips: fits agent/task events and errors with a detail line</li><li>Error detail in a mono block (copyable)</li><li>Progress toasts update in place by id, with a bar</li></ul></div>
+<div><h3>Cons</h3><ul><li>Taller; 4 cards cover ~300px of the right pane</li><li>Needs the most call-site migration to look its best</li></ul></div>
+<div><h3>API</h3><pre>enum ToastKind { Success, Error, Info, Warning, Progress(Option&lt;f32&gt;), Agent }
+Toast { id, kind, title, detail: Option&lt;md&gt;, chips: Vec&lt;Chip&gt;, actions: Vec&lt;(label, Command)&gt; }
+toast(text) stays (Info, kind inferred as in A); add toast_ok / toast_err(title, err) and toast_update(id, …). Migrate the ~40 obvious "Couldn't …: {err}" sites to toast_err so {err} becomes the detail.</pre></div></div>
+<div class="frame"><div class="tb"><i></i><i></i><i></i></div><div class="bg"><div style="width:200px"></div><div style="flex:1"><pre>$ git push origin winfer/winfer-4</pre></div></div>
+<div class="stack" id="B"></div><div class="hint">Ring top-right = countdown · hover pauses and shows ×</div></div></section>
+
+<!-- ================= C ================= -->
+<section class="v C"><div class="vh"><h2>C · Notification center</h2><span class="tag">HISTORY</span><button class="replay" data-v="C">Replay</button></div>
+<div class="notes">
+<div><h3>Pros</h3><ul><li>Never more than one card's height on screen; the rest fan out on hover</li><li>Nothing lost: inbox keeps today's toasts (missed errors, agent events)</li><li>Unread dot in the titlebar</li></ul></div>
+<div><h3>Cons</h3><ul><li>Hides urgency: a second error sits under the top card</li><li>New UI surface (bell + inbox panel) and state to persist</li></ul></div>
+<div><h3>API</h3><pre>Same Toast as B, plus { at: Instant, read: bool }; toasts move to self.inbox on expiry instead of being dropped (cap 100). toast(text) unchanged; transient-only hints ("Command copied") flagged ephemeral so they skip the inbox.</pre></div></div>
+<div class="frame"><div class="tb"><i></i><i></i><i></i></div><div class="bell"><span class="dot"></span><svg class="ic" viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10 21a2 2 0 0 0 4 0"/></svg> 7</div>
+<div class="bg"><div style="width:200px"></div><div style="flex:1"></div></div>
+<div class="inbox" id="Cinbox" hidden></div>
+<div class="stack"><div class="deck" id="C"></div><div class="more"><button id="Cmore"><b>+3</b> more · Open inbox</button></div></div>
+<div class="hint">Hover the stack to fan it out · click “more” for the inbox</div></div></section>
+</div>
+<script>
+const I={ok:'<path d="M20 6 9 17l-5-5"/>',err:'<circle cx="12" cy="12" r="9"/><path d="M15 9l-6 6M9 9l6 6"/>',warn:'<path d="M12 3 2 20h20z"/><path d="M12 10v4M12 17h.01"/>',info:'<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
+prog:'<path class="" d="M21 12a9 9 0 1 1-9-9"/>',agent:'<rect x="4" y="5" width="16" height="14" rx="3"/><path d="M9 11h.01M15 11h.01M9 15h6"/>'};
+const ic=(k,cls='')=>`<svg class="ic k ${k=='prog'?'spin':''} ${cls}" viewBox="0 0 24 24">${I[k]}</svg>`;
+const X='<button class="x" title="Dismiss"><svg class="ic" viewBox="0 0 24 24" style="width:12px;height:12px"><path d="M6 6l12 12M18 6 6 18"/></svg></button>';
+const chips='<span class="chip"><span class="tile" style="background:#6d5df5">W</span>winfer</span><span class="chip"><svg class="ic" viewBox="0 0 24 24" style="width:11px;height:11px"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8"/></svg>studio-mac</span>';
+const D=[
+ {k:'ok',t:'Merged <code>winfer/winfer-4</code> into <code>main</code>',d:'3 files · +128 −41',a:['Undo']},
+ {k:'err',t:'Push failed',d:'fatal: unable to access \'https://github.com/winfer/winfer.git/\': Could not resolve host: github.com',mono:1,a:['Retry','Copy error']},
+ {k:'agent',t:'Task 7 finished',d:'**Ready for review**: refactored `render_toasts` and added [tests](#).',chips:1,a:['Review','Open pane']},
+ {k:'prog',t:'Pushing <code>winfer/winfer-11</code>…',id:'push'},
+];
+const extra=[{k:'warn',t:'studio-mac: 12% of the 5-hour limit left',d:'Resets at 18:40'},{k:'info',t:'Plugins reloaded'},{k:'ok',t:'Pair link copied'}];
+const md=s=>s.replace(/\*\*(.+?)\*\*/g,'<b>$1</b>').replace(/`(.+?)`/g,'<code>$1</code>').replace(/\[(.+?)\]\((.+?)\)/g,'<a href="$2">$1</a>');
+const life=x=>x.k=='prog'?'0s':(x.a?'12s':'4s');
+function A(x){const m=x.d?' multi':'';return `<div class="t k-${x.k}${m} enter" style="--life:${life(x)}" data-id="${x.id||''}">${ic(x.k)}<div class="body"><div class="ti">${x.t}</div>${x.d?`<div class="d">${x.mono?`<code class="blk">${x.d}</code>`:md(x.d)}</div>`:""}</div>${x.a?`<button class="act">${x.a[0]}</button>`:''}${X}${x.k!='prog'?'<i class="bar"></i>':''}</div>`}
+function B(x){return `<div class="t k-${x.k} enter" style="--life:${life(x)}" data-id="${x.id||''}"><div class="kb">${ic(x.k)}</div><div class="body"><div class="ti">${x.t}</div>${x.d?`<div class="d ${x.mono?'mono':''}">${x.mono?x.d:md(x.d)}</div>`:''}${x.chips?`<div class="chips">${chips}</div>`:''}${x.k=='prog'?'<div class="prog"><i></i></div>':''}${x.a?`<div class="acts">${x.a.map((l,i)=>`<button class="btn ${i?'':'p'}">${l}</button>`).join('')}</div>`:''}</div>${x.k!='prog'?'<svg class="ring" viewBox="0 0 18 18"><circle class="bgc" cx="9" cy="9" r="7"/><circle class="fgc" cx="9" cy="9" r="7"/></svg>':''}${X}</div>`}
+function C(x){return `<div class="t k-${x.k}" style="--life:${life(x)}" data-id="${x.id||''}">${ic(x.k)}<div class="body"><div class="ti">${x.t}</div>${x.d?`<div class="d">${x.mono?`<code>${x.d.slice(0,60)}…</code>`:md(x.d)}</div>`:''}${x.chips?`<div style="display:flex;gap:5px;margin-top:5px">${chips}</div>`:''}${x.a?`<div style="display:flex;gap:6px;margin-top:7px">${x.a.map((l,i)=>`<button class="btn ${i?'':'p'}">${l}</button>`).join('')}</div>`:''}</div>${X}${x.k!='prog'?'<i class="uline"></i>':''}</div>`}
+const R={A,B,C};
+function play(v){const el=document.getElementById(v);el.innerHTML='';
+ (v=="C"?D:[extra[1],extra[0],...D]).forEach((x,i)=>setTimeout(()=>{el.insertAdjacentHTML('beforeend',R[v](x))},i*350));
+ const bar=()=>el.querySelector('[data-id=push] .prog i');
+ setTimeout(()=>{const b=bar();if(b)b.style.width='60%'},1800);
+ setTimeout(()=>{const t=el.querySelector('[data-id=push]');if(!t)return;
+   t.outerHTML=R[v]({k:'ok',t:'Pushed <code>winfer/winfer-11</code> to origin',d:'Opened PR [#412](#)',a:['Open PR'],id:'push'})},3200);}
+document.querySelectorAll('.replay').forEach(b=>b.onclick=()=>play(b.dataset.v));
+document.addEventListener('click',e=>{const x=e.target.closest('.x');if(x)x.closest('.t').remove()});
+const inbox=document.getElementById('Cinbox');
+inbox.innerHTML='<h4>Notifications<span>Mark all read</span></h4><div class="grp">Now</div>'+[...D.slice(0,3),...extra].map((x,i)=>`<div class="row k-${x.k}">${ic(x.k)}<div style="flex:1;min-width:0"><div>${x.t}</div>${x.d?`<div style="font-size:12px;color:var(--muted)">${x.mono?`<code>${x.d.slice(0,48)}…</code>`:md(x.d)}</div>`:''}</div><span class="when">${i+1}m</span></div>`).join('')+'<div class="grp">Earlier</div><div class="row k-ok">'+ic('ok')+'<div style="flex:1">Merged <code>winfer/winfer-2</code> on studio-mac</div><span class="when">2h</span></div>';
+document.getElementById('Cmore').onclick=()=>inbox.hidden=!inbox.hidden;
+['A','B','C'].forEach(play);
+</script></body></html>
