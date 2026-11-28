@@ -25,6 +25,7 @@ pub mod version;
 
 pub mod code {
     pub mod bg_note;
+    pub mod home_event;
     pub mod mobile;
     pub mod names;
     pub mod protocol;

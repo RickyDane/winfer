@@ -50,7 +50,29 @@ function BgRow({ msg, fresh }: { msg: Message; fresh: boolean }) {
   );
 }
 
-const NOTICE_ICON: Record<NonNullable<Message["kind"]>, IconName> = { compact: "layers", microcompact: "minus", account: "refresh" };
+const NOTICE_ICON: Record<NonNullable<Message["kind"]>, IconName> = { compact: "layers", microcompact: "minus", account: "refresh", event: "info" };
+
+const SILENT = /^\s*\[silent\]\.?\s*$/i;
+
+const EVENT_ICON: Record<NonNullable<Message["event"]>, IconName> = { finished: "check", "needs-input": "question", error: "alert", report: "file", bg: "terminal", prompt: "info", info: "info" };
+
+/** One of Home's app events: a compact line; tap to read its question, error or report. */
+function EventRow({ msg, fresh }: { msg: Message; fresh: boolean }) {
+  const [open, setOpen] = useState(false);
+  const ev = msg.event ?? "info";
+  const more = !!msg.detail && msg.detail !== msg.text;
+  return (
+    <div className={`event-row${fresh ? " fresh" : ""}`} data-event={ev} data-open={open}>
+      <button onClick={() => more && setOpen(!open)} aria-expanded={more ? open : undefined}>
+        <span className="event-icon"><Icon name={EVENT_ICON[ev] ?? "info"} size={11} /></span>
+        <span className="event-text">{msg.text}</span>
+        {msg.ts && <span className="time">{ago(msg.ts)}</span>}
+        {more && <Icon name="right" size={14} className="bg-chev" />}
+      </button>
+      {open && more && (ev === "report" ? <div className="event-detail"><Markdown text={msg.detail!} /></div> : <pre className="bg-detail">{msg.detail}</pre>)}
+    </div>
+  );
+}
 
 /** A session note the desktop shows too: compaction, micro-compaction, an account change. */
 function NoticeRow({ msg, fresh }: { msg: Message; fresh: boolean }) {
@@ -403,7 +425,8 @@ export function Thread({ client, paneId }: { client: DesktopClient; paneId: stri
   // The desktop ends the thread with a marker while the agent is reasoning.
   const thinking = raw.at(-1)?.role === "thinking";
   const showBgNotes = useShowBgNotes(state.showBgNotes);
-  const unthought = thinking ? raw.slice(0, -1) : raw;
+  // An orchestrator's "[silent]" answer isn't a reply (newer desktops leave it out already).
+  const unthought = (thinking ? raw.slice(0, -1) : raw).filter((m) => !(m.role === "assistant" && SILENT.test(m.text)));
   const messages = showBgNotes ? unthought : unthought.filter((m) => m.role !== "bg");
   const bgRunning = messages.some((m) => m.background && m.state === "running");
 
@@ -665,6 +688,7 @@ export function Thread({ client, paneId }: { client: DesktopClient; paneId: stri
             const fresh = isFresh(m.id) ? " fresh" : "";
             if (m.report) return <div key={m.id} className={`turn-viz${fresh}`}><VizReport report={m.report} /></div>;
             if (m.role === "bg") return <BgRow key={m.id} msg={m} fresh={fresh !== ""} />;
+            if (m.role === "notice" && m.kind === "event") return <EventRow key={m.id} msg={m} fresh={fresh !== ""} />;
             if (m.role === "notice") return <NoticeRow key={m.id} msg={m} fresh={fresh !== ""} />;
             if (m.role === "user")
               return (

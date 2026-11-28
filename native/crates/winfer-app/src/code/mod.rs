@@ -3,6 +3,7 @@
 //! model (no UI, unit tested); `session` runs `winfer code --serve`.
 
 pub use winfer_core::code::bg_note;
+pub use winfer_core::code::home_event;
 pub mod commands;
 pub mod links;
 pub mod mentions;
