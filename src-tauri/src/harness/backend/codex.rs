@@ -1738,18 +1738,46 @@ pub fn models() -> Vec<ModelInfo> {
     Vec::new()
 }
 
+/// The task tier of an OpenAI model by its family (Luna, Terra, Sol, Astra), whatever the generation,
+/// for list_models and Home's model guide. None for other families: their own description stands.
+pub fn task_role(model: &str) -> Option<&'static str> {
+    let tokens: Vec<&str> = split_fast(model).0.split('-').collect();
+    if tokens.contains(&"luna") {
+        Some("fast · small tasks")
+    } else if tokens.contains(&"terra") {
+        Some("small–medium tasks")
+    } else if tokens.contains(&"sol") {
+        Some("medium–big tasks")
+    } else if tokens.contains(&"astra") {
+        Some("not used for tasks")
+    } else {
+        None
+    }
+}
+
+/// "Codex · <task tier> · <Codex's description>", leaving out whichever is missing.
+fn detail(model: &str, description: &str) -> String {
+    let mut parts = vec!["Codex"];
+    parts.extend(task_role(model));
+    if !description.is_empty() {
+        parts.push(description);
+    }
+    parts.join(" · ")
+}
+
 fn model_infos(m: &Value) -> Vec<ModelInfo> {
     let label = m["displayName"].as_str().unwrap_or(m["model"].as_str().unwrap_or("")).to_string();
+    let id = s(m, "model");
     let efforts = m["supportedReasoningEfforts"]
         .as_array()
         .map(|a| a.iter().filter_map(|e| e["reasoningEffort"].as_str().map(String::from)).collect::<Vec<_>>());
-    let mut out = vec![ModelInfo { spec: format!("codex/{}", s(m, "model")), label: label.clone(), detail: format!("Codex · {}", s(m, "description")), efforts: efforts.clone() }];
+    let mut out = vec![ModelInfo { spec: format!("codex/{id}"), label: label.clone(), detail: detail(&id, &s(m, "description")), efforts: efforts.clone() }];
     let fast = m["serviceTiers"].as_array().into_iter().flatten().find(|t| t["id"].as_str() == Some(FAST_TIER));
     if let Some(t) = fast {
         out.push(ModelInfo {
-            spec: format!("codex/{}{FAST_SUFFIX}", s(m, "model")),
+            spec: format!("codex/{id}{FAST_SUFFIX}"),
             label: format!("{label} ({})", t["name"].as_str().unwrap_or("Fast")),
-            detail: format!("Codex · {}", s(t, "description")),
+            detail: detail(&id, &s(t, "description")),
             efforts,
         });
     }
@@ -1902,6 +1930,20 @@ mod tests {
         assert_eq!(infos.iter().map(|i| i.spec.as_str()).collect::<Vec<_>>(), ["codex/gpt-6.1-sol", "codex/gpt-6.1-sol-fast"]);
         assert_eq!(infos[1].label, "GPT-6.1 Sol (Fast)");
         assert_eq!(model_infos(&json!({ "model": "m", "serviceTiers": [] })).len(), 1);
+    }
+
+    #[test]
+    fn list_details_name_the_task_tiers() {
+        assert_eq!(task_role("gpt-6-luna"), Some("fast · small tasks"));
+        assert_eq!(task_role("gpt-5.6-terra-fast"), Some("small–medium tasks"));
+        assert_eq!(task_role("gpt-6.1-sol-fast"), Some("medium–big tasks"));
+        assert_eq!(task_role("gpt-6-astra"), Some("not used for tasks"));
+        assert_eq!(task_role("gpt-5.5"), None);
+        let infos = model_infos(&json!({ "model": "gpt-6.1-sol", "displayName": "GPT-6.1 Sol", "description": "Latest workhorse",
+            "serviceTiers": [{ "id": "priority", "name": "Fast", "description": "2x speed" }] }));
+        assert_eq!(infos.iter().map(|i| i.detail.as_str()).collect::<Vec<_>>(),
+            ["Codex · medium–big tasks · Latest workhorse", "Codex · medium–big tasks · 2x speed"]);
+        assert_eq!(model_infos(&json!({ "model": "gpt-5.5", "description": "" }))[0].detail, "Codex");
     }
 
     #[test]

@@ -30,8 +30,16 @@ pub fn models() -> Vec<ModelInfo> {
         list.push(DEFAULT_MODEL.to_string());
     }
     list.into_iter()
-        .map(|m| ModelInfo { spec: format!("chatgpt/{m}"), label: m.clone(), detail: "ChatGPT account · winfer tools".into(), efforts: efforts(&m) })
+        .map(|m| ModelInfo { spec: format!("chatgpt/{m}"), label: m.clone(), detail: detail(&m), efforts: efforts(&m) })
         .collect()
+}
+
+/// The picker's description: the task tier for Luna, Terra, Sol and Astra (see codex::task_role).
+fn detail(model: &str) -> String {
+    match super::codex::task_role(model) {
+        Some(role) => format!("ChatGPT account · {role}"),
+        None => "ChatGPT account · winfer tools".into(),
+    }
 }
 
 /// The `reasoning.effort` values the Responses API takes for `model`, per OpenAI's model pages
@@ -1670,6 +1678,13 @@ fn undo(shared: &Shared, files: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn list_details_name_the_task_tiers() {
+        assert_eq!(detail("gpt-6.1-sol"), "ChatGPT account · medium–big tasks");
+        assert_eq!(detail("gpt-6-astra"), "ChatGPT account · not used for tasks");
+        assert_eq!(detail("gpt-5.5"), "ChatGPT account · winfer tools");
+    }
 
     #[test]
     fn message_text_joins_output_parts() {

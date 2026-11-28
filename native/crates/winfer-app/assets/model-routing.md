@@ -17,13 +17,13 @@ Use only specs it lists; never invent one.
   architecture, multi-file refactors, subtle or concurrency bugs, security, migrations, code review
   of risky changes, and anything that already failed once. Sonnet (`claude/sonnet`) is the
   default for medium to medium-big work: ordinary features, bug fixes and tests in a real codebase.
-- Everyday, well-specified work → Codex/GPT or Gemini. Scripts and shell, config and CI edits,
-  dependency bumps, renames, boilerplate, data wrangling, docs and READMEs, commit messages,
-  explaining code, quick questions. They're fast and save Claude usage for the hard parts.
+- Everyday, well-specified work → Codex (Luna, Terra or Sol) or Gemini. Scripts and shell, config
+  and CI edits, dependency bumps, renames, boilerplate, data wrangling, docs and READMEs, commit
+  messages, explaining code, quick questions. They're fast and save Claude usage for the hard parts.
 - Lots to read → Gemini. Huge logs, long docs, a sweep over a big unfamiliar codebase, research,
   comparing many files, reading screenshots or designs.
 - Tiny and mechanical (one-line fix, run a command, rename) → the smallest/fastest model there is
-  (Claude Haiku, a `-fast`/mini variant, Gemini 4 Hydrogen) at low effort.
+  (Claude Haiku, Codex Luna, Gemini 4 Hydrogen) at low effort.
 - Effort: low for mechanical work, the default for most, high only for hard reasoning. Never max
   effort by default; it's slow and expensive.
 - When two choices are close, take the cheaper and faster one: you can always switch up.
@@ -34,6 +34,16 @@ Use only specs it lists; never invent one.
 - Big or large work → Opus (`claude/opus`).
 - Never pick Claude Fable (`claude/fable`): not for the hardest work, not after failures, not when
   moving up or reviewing. Opus is the ceiling. Only the user naming Fable allows it.
+
+## Codex: Luna, Terra, Sol, never Astra
+Use the newest generation of each family that list_models shows (e.g. `codex/gpt-6-luna`,
+`codex/gpt-5.6-terra`, `codex/gpt-6.1-sol`).
+- Small or fast work → Luna (the same role as Haiku). Use its `-fast` variant only when speed matters.
+- Small to medium work → Terra.
+- Medium or big work → Sol (`-fast` variant fine when speed matters).
+- Never Astra (any Astra model): not for hard work, not when escalating or reviewing. Only the user
+  naming Astra allows it. Sol is the ceiling within Codex.
+- Don't pick other OpenAI models (older GPT-5.x, mini variants) unless the user names one.
 
 ## Gemini: only two models
 - Small or mechanical Gemini work → Gemini 4 Hydrogen (`agy/gemini-4-hydrogen`).
@@ -53,7 +63,8 @@ Good moments, at a step boundary (after a turn finished, not every turn):
 - Plan or investigate on a strong model, then hand the implementation to a cheaper one, or the
   other way round: let a fast model gather facts, then a strong one make the hard change.
 - Stuck: the same failure twice, going in circles, or an approach that keeps breaking → move up to
-  a stronger model (up to Opus at most, never Fable), or to the other family for fresh eyes.
+  a stronger model (up to Opus at most, never Fable; within Codex up to Sol, never Astra), or to
+  the other family for fresh eyes.
 - The hard part is done and what's left is routine (tests to fix up, docs, cleanup) → move down.
 - Review: have a different family look over finished work before you call it ready.
 - Usage running out (above).
