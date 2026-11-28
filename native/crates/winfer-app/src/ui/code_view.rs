@@ -53,6 +53,8 @@ pub(super) struct Env {
     pub width: f32,
     /// Height of the code pane, in px.
     pub height: f32,
+    /// In Home: the task numbers and machine names its text links.
+    pub refs: Option<Rc<super::root::home_nav::Refs>>,
 }
 
 impl Env {
@@ -134,6 +136,10 @@ pub struct CodeView {
     restore_composer_focus: bool,
     /// `plan_done_at` a hide timer is already running for.
     plan_hide_armed: Option<u64>,
+    /// In Home: the task numbers and machine names its text links (see `home_nav::link_refs`).
+    refs: Option<Rc<super::root::home_nav::Refs>>,
+    /// The composer hint set by `set_placeholder` (None: the default one).
+    hint: Option<String>,
 }
 
 /// How long a fully completed plan stays docked above the composer.
@@ -645,7 +651,7 @@ impl CodeView {
         let list = ListState::new(0, ListAlignment::Bottom, px(800.0));
         list.set_follow_mode(FollowMode::Tail);
         let sky = cx.new(|cx| SpaceSkyView::new(model.clone(), app.clone(), cx));
-        Self { dictation: None, model, app, list, rows: Rc::new(Vec::new()), sigs: Vec::new(), input, seen_rev: 0, flipped: if cfg!(debug_assertions) && std::env::var("WINFER_NATIVE_CODE_DEMO").is_ok_and(|v| v == "diff") { ["t1", "t2", "t3", "t4"].map(String::from).into() } else { HashSet::new() }, toggled: HashMap::new(), toggle_seq: 0, scroll_end_pending: false, pane_size: Size::default(), zoom_accum: Pixels::ZERO, images: Rc::new(RefCell::new(HashMap::new())), wg_scrolls: Rc::new(RefCell::new(HashMap::new())), popup: 0, popup_scroll: ScrollHandle::new(), popup_closed_at: None, picks: HashMap::new(), asked_files: false, ticking: false, sky, born: HashMap::new(), seeded: false, picker: Default::default(), usage_sheet: Default::default(), task_log_scroll: Default::default(), preview: None, last_user: None, composer_rows: 3, visible: PAGE_ROWS, hidden: 0, seen_items: 0, load_pending: false, focus: cx.focus_handle(), restore_composer_focus: false, plan_hide_armed: None }
+        Self { dictation: None, model, app, list, rows: Rc::new(Vec::new()), sigs: Vec::new(), input, seen_rev: 0, flipped: if cfg!(debug_assertions) && std::env::var("WINFER_NATIVE_CODE_DEMO").is_ok_and(|v| v == "diff") { ["t1", "t2", "t3", "t4"].map(String::from).into() } else { HashSet::new() }, toggled: HashMap::new(), toggle_seq: 0, scroll_end_pending: false, pane_size: Size::default(), zoom_accum: Pixels::ZERO, images: Rc::new(RefCell::new(HashMap::new())), wg_scrolls: Rc::new(RefCell::new(HashMap::new())), popup: 0, popup_scroll: ScrollHandle::new(), popup_closed_at: None, picks: HashMap::new(), asked_files: false, ticking: false, sky, born: HashMap::new(), seeded: false, picker: Default::default(), usage_sheet: Default::default(), task_log_scroll: Default::default(), preview: None, last_user: None, composer_rows: 3, visible: PAGE_ROWS, hidden: 0, seen_items: 0, load_pending: false, focus: cx.focus_handle(), restore_composer_focus: false, plan_hide_armed: None, refs: None, hint: None }
     }
 
     /// Once the plan is complete, re-render after `PLAN_HIDE_MS` so `render_plan` drops it.
@@ -694,6 +700,28 @@ impl CodeView {
 
     fn draft(&self, cx: &App) -> String {
         self.input.read(cx).value().to_string()
+    }
+
+    /// Nothing typed in the composer (Home's Esc goes back only then).
+    pub(super) fn composer_empty(&self, cx: &App) -> bool {
+        self.draft(cx).is_empty()
+    }
+
+    /// Home's task numbers and machine names, linked in this chat's text.
+    pub(super) fn set_refs(&mut self, refs: super::root::home_nav::Refs, cx: &mut Context<Self>) {
+        if self.refs.as_deref() != Some(&refs) {
+            self.refs = Some(Rc::new(refs));
+            cx.notify();
+        }
+    }
+
+    /// The composer's hint, e.g. who it talks to when Home shows a task's agent.
+    pub(super) fn set_placeholder(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.hint.as_deref() != Some(text) {
+            self.hint = Some(text.to_string());
+            let text = text.to_string();
+            self.input.update(cx, |i, cx| i.set_placeholder(text, window, cx));
+        }
     }
 
     fn set_input(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
@@ -1516,8 +1544,23 @@ fn text_row(env: &Env, key: &str, text: &str, _streaming: bool) -> AnyElement {
     } else {
         crate::code::links::linkify(text, env.cwd.as_deref())
     };
+    // In Home: "Task 3" drills in; a paired machine's name is a chip.
+    let body = match env.refs.as_deref() {
+        Some(refs) => super::root::home_nav::link_refs(&body, refs),
+        None => body,
+    };
+    let chips = env.refs.is_some() && body.contains(super::root::home_nav::MACHINE_ICON);
+    let md = TextView::markdown(SharedString::from(format!("cw-md-{key}")), SharedString::from(body));
+    let md = if chips {
+        let rgba = gpui::Rgba::from(c.accent);
+        let hex = format!("#{:02x}{:02x}{:02x}", (rgba.r * 255.0) as u8, (rgba.g * 255.0) as u8, (rgba.b * 255.0) as u8);
+        let icon = Arc::new(Image::from_bytes(ImageFormat::Svg, super::root::home_nav::machine_icon(&hex).into_bytes()));
+        md.image_source(move |uri| if uri.as_ref() == super::root::home_nav::MACHINE_ICON { ImageSource::Image(icon.clone()) } else { ImageSource::from(uri.clone()) })
+    } else {
+        md
+    };
     enter(env, key, div().w_full().py(px(if env.compact { 4.0 } else { 8.0 })).px_0p5().text_size(px(13.5 * env.scale)).line_height(relative(1.62)).text_color(c.fg)
-        .child(TextView::markdown(SharedString::from(format!("cw-md-{key}")), SharedString::from(body)).style(md_style(c)).selectable(true).on_link_click({
+        .child(md.style(md_style(c)).selectable(true).on_link_click({
             let view = env.view.clone();
             move |href, _, _, cx| {
                 let href = href.to_string();
@@ -2947,7 +2990,7 @@ impl CodeView {
                 body = body.child(div().font_family(mono.clone()).text_size(px(11.5)).text_color(c.muted).max_h(px(140.0)).overflow_hidden().whitespace_normal().child(a.detail.clone()));
             }
             if let Some(d) = a.diff.as_deref().filter(|d| !d.trim().is_empty()) {
-                let env = Env { c, mono: mono.clone(), scale: 1.0, compact: true, view: cx.entity().downgrade(), flipped: Rc::new(HashSet::new()), toggled: Rc::new(HashMap::new()), expand_thinking: false, expand_shell: false, images: self.images.clone(), wg_scrolls: self.wg_scrolls.clone(), now: 0, cwd: None, remote: false, born: Rc::new(HashMap::new()), width: 600.0, height: self.pane_size.height / px(1.0) };
+                let env = Env { c, mono: mono.clone(), scale: 1.0, compact: true, view: cx.entity().downgrade(), flipped: Rc::new(HashSet::new()), toggled: Rc::new(HashMap::new()), expand_thinking: false, expand_shell: false, images: self.images.clone(), wg_scrolls: self.wg_scrolls.clone(), now: 0, cwd: None, remote: false, born: Rc::new(HashMap::new()), width: 600.0, height: self.pane_size.height / px(1.0), refs: None };
                 body = body.child(diff_block(&env, d, 400));
             }
             actions = div().flex().gap_2().child(decide("Allow", "Y", Decision::Allow, true, format!("allow-{id}"), model.clone(), id.clone())).child(decide("Always allow", "A", Decision::Always, false, format!("always-{id}"), model.clone(), id.clone())).child(decide("Deny", "N", Decision::Deny, false, format!("deny-{id}"), model.clone(), id.clone()));
@@ -3542,7 +3585,7 @@ impl Render for CodeView {
         let away = !items.is_empty() && !self.list.is_following_tail() && self.list.is_scrolled_to_end() == Some(false);
         let pane_id = self.model.read(cx).pane_id.clone();
         let remote = self.app.read(cx).pane(&pane_id).is_some_and(|p| p.remote.is_some());
-        let env = Env { c, mono: mono.clone(), scale, compact, view: cx.entity().downgrade(), flipped: Rc::new(self.flipped.clone()), toggled: Rc::new(self.toggled.clone()), expand_thinking, expand_shell, images: self.images.clone(), wg_scrolls: self.wg_scrolls.clone(), now, cwd: self.model.read(cx).state.cwd.clone(), remote, born: Rc::new(self.born.clone()), width: (self.pane_size.width / px(1.0) - 32.0).max(240.0), height: self.pane_size.height / px(1.0) };
+        let env = Env { c, mono: mono.clone(), scale, compact, view: cx.entity().downgrade(), flipped: Rc::new(self.flipped.clone()), toggled: Rc::new(self.toggled.clone()), expand_thinking, expand_shell, images: self.images.clone(), wg_scrolls: self.wg_scrolls.clone(), now, cwd: self.model.read(cx).state.cwd.clone(), remote, born: Rc::new(self.born.clone()), width: (self.pane_size.width / px(1.0) - 32.0).max(240.0), height: self.pane_size.height / px(1.0), refs: self.refs.clone() };
         let model = self.model.clone();
         let rows = self.rows.clone();
         let transcript: AnyElement = if items.is_empty() {

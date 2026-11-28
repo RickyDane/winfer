@@ -427,26 +427,40 @@ impl Root {
             self.execute(Command::Focus(PaneRef::Id(id)), window, cx);
             return;
         }
-        let Some(remote) = self.connect.mirrors.get(peer).and_then(|m| m.panes.iter().find(|p| p.id == pane_id)).cloned() else { return };
-        let machine = crate::connect::peer_name(peer).unwrap_or_else(|| "another machine".into());
-        let reference = crate::model::RemoteRef { peer: peer.to_string(), pane: pane_id.to_string(), machine: machine.clone() };
-        let title = format!("{} · {machine}", remote.title);
+        let Some(id) = self.remote_tile(peer, pane_id, cx) else { return };
         self.state.update(cx, |s, cx| {
-            // In a workspace of that machine's workspace (listed under the machine), not the one
-            // open here.
-            let ws = s.remote_workspace(peer, &remote.workspace_id, &format!("{} · {machine}", remote.workspace));
             if s.view() != crate::model::View::Workspace {
                 s.view = Some(crate::model::View::Workspace);
             }
-            let id = s.add_pane(&remote.provider, crate::model::AddPane { workspace_id: Some(ws), worktree: Some(false), custom_title: Some(title), cwd: Some(String::new()), ..Default::default() });
             s.focus_pane(&id);
+            cx.notify();
+        });
+    }
+
+    /// The tile showing another machine's pane here, added (without leaving the current view)
+    /// when there's none yet: Home shows a remote task's orchestrator through it.
+    pub(super) fn remote_tile(&mut self, peer: &str, pane_id: &str, cx: &mut Context<Self>) -> Option<String> {
+        let existing = self.state.read(cx).all_panes().find(|p| p.remote.as_ref().is_some_and(|r| r.peer == peer && r.pane == pane_id)).map(|p| p.id.clone());
+        if existing.is_some() {
+            return existing;
+        }
+        let remote = self.connect.mirrors.get(peer).and_then(|m| m.panes.iter().find(|p| p.id == pane_id)).cloned()?;
+        let machine = crate::connect::peer_name(peer).unwrap_or_else(|| "another machine".into());
+        let reference = crate::model::RemoteRef { peer: peer.to_string(), pane: pane_id.to_string(), machine: machine.clone() };
+        let title = format!("{} · {machine}", remote.title);
+        Some(self.state.update(cx, |s, cx| {
+            // In a workspace of that machine's workspace (listed under the machine), not the one
+            // open here.
+            let ws = s.remote_workspace(peer, &remote.workspace_id, &format!("{} · {machine}", remote.workspace));
+            let id = s.add_pane(&remote.provider, crate::model::AddPane { workspace_id: Some(ws), worktree: Some(false), custom_title: Some(title), cwd: Some(String::new()), ..Default::default() });
             if let Some(p) = s.workspaces.iter_mut().flat_map(|w| w.panes.iter_mut()).find(|p| p.id == id) {
                 p.remote = Some(reference);
                 p.status = remote.status;
                 p.model = None;
             }
             cx.notify();
-        });
+            id
+        }))
     }
 
     /// Sends a request to a peer; `failure`: what to toast if it comes back not ok.

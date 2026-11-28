@@ -261,8 +261,12 @@ pub(super) struct Home {
     forks: HashMap<String, Orch>,
     pub tasks: Vec<HomeTask>,
     pub(super) loaded: bool,
-    /// The thread the Home chat shows: None for the conductor, else a forked task's id.
+    /// The thread the Home chat shows: None for the conductor, else the task drilled into.
     pub thread: Option<String>,
+    /// The agent picked in a task's chat, by task id: one of its panes (else its main chat).
+    pub agent: HashMap<String, String>,
+    /// How many of the conductor's items were there when the user left its chat ("n new").
+    pub seen: usize,
     pub views: HashMap<String, Entity<CodeView>>,
     /// The conductor's latest request came by voice: its answer is spoken.
     voice_turn: bool,
@@ -785,8 +789,14 @@ impl Root {
         self.state.read(cx).view() == View::Home && status::window_focused() && self.home_thread_pane() == pane_id
     }
 
+    /// The Home session on screen: the conductor or a fork's orchestrator (a task's agent pane
+    /// isn't one: its id matches no Home session).
     pub(super) fn home_thread_pane(&self) -> String {
-        self.home.thread.as_deref().map_or_else(|| CONDUCTOR.to_string(), task_pane)
+        match self.home.thread.as_deref() {
+            None => CONDUCTOR.to_string(),
+            Some(t) if self.home.agent.contains_key(t) => format!("{}-agent", task_pane(t)),
+            Some(t) => task_pane(t),
+        }
     }
 
     /// Answers what the session asks when nobody can, and follows its step.

@@ -115,6 +115,7 @@ and portable copies alike only replace the `.exe` after a UAC prompt: the app st
 - `WINFER_NATIVE_CODE_WEB=1`: winfer code panes show the chat, whatever the setting
 - `WINFER_NATIVE_PROMPT=…`: the start prompt of those panes
 - `WINFER_NATIVE_CODE_DEMO=1` (`welcome`, `draft`, `fast`, `model`, `effort`, `mode`, `diff`, `phone`, `agents`): chat panes play a scripted session instead of starting a process, to check the styling without a login
+- `WINFER_NATIVE_HOME_DEMO=1` with `WINFER_NATIVE_CODE_DEMO=home`: Home with a light, a forked, a remote and a merged task whose chats play scripts (use a throwaway `WINFER_NATIVE_IDENTIFIER`); `WINFER_NATIVE_HOME_TASK=2` (or `2/backend`) opens that task's chat
 - `WINFER_VAULT_FILE=path`: keep the keychain values (paired phones, keys) in a file instead, so a test copy can't touch the real ones
 - `WINFER_NATIVE_LAYER=browser|palette|…`, `WINFER_NATIVE_MOBILE=1`, `WINFER_NATIVE_INSTALL_BROWSER=1`: open a layer, the phone view, or download Chromium at launch
 - `WINFER_NATIVE_URL=https://…`: loads this page in the browser panel
