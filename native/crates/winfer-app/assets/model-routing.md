@@ -23,10 +23,17 @@ Use only specs it lists; never invent one.
 - Lots to read → Gemini. Huge logs, long docs, a sweep over a big unfamiliar codebase, research,
   comparing many files, reading screenshots or designs.
 - Tiny and mechanical (one-line fix, run a command, rename) → the smallest/fastest model there is
-  (Haiku class, a `-fast`/mini variant, Gemini Flash class) at low effort.
+  (Haiku class, a `-fast`/mini variant, Gemini 4 Hydrogen) at low effort.
 - Effort: low for mechanical work, the default for most, high only for hard reasoning. Never max
   effort by default; it's slow and expensive.
 - When two choices are close, take the cheaper and faster one: you can always switch up.
+
+## Gemini: only two models
+- Small or mechanical Gemini work → Gemini 4 Hydrogen (`agy/gemini-4-hydrogen`).
+- Medium or big Gemini work (large reads, research, sweeps over a codebase) → Gemini 4 Neon
+  (`agy/gemini-4-neon`).
+- Don't pick any other Gemini model (3.x Flash, Carbon, Argon, the orchestrator variants) unless
+  the user names it.
 
 ## Mind the usage left
 - Check usage_status (or list_models, which shows it) before a big task. Avoid a provider under

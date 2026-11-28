@@ -86,7 +86,7 @@ fn consolidate(parsed: &[crate::providers::ModelInfo]) -> Vec<ModelInfo> {
             } else {
                 Some(["low", "medium", "high"].map(String::from).into())
             };
-            ModelInfo { detail: format!("Antigravity · {}", vendor(&base)), spec: format!("agy/{base}"), efforts, label }
+            ModelInfo { detail: detail(&base), spec: format!("agy/{base}"), efforts, label }
         })
         .collect()
 }
@@ -127,6 +127,16 @@ fn list_models() -> Option<String> {
     }
     drop(proc);
     Some(out)
+}
+
+/// The picker's (and Home's list_models) description: a tier hint for the models tasks use, else the vendor.
+fn detail(id: &str) -> String {
+    let hint = match id {
+        "gemini-4-hydrogen" => "fast · small tasks",
+        "gemini-4-neon" => "medium–big tasks",
+        _ => vendor(id),
+    };
+    format!("Antigravity · {hint}")
 }
 
 fn vendor(id: &str) -> &'static str {
@@ -2106,6 +2116,9 @@ mod tests {
         let specs: Vec<&str> = out.iter().map(|m| m.spec.as_str()).collect();
         assert_eq!(specs, ["agy/gemini-4-neon", "agy/gemini-4-argon", "agy/gemini-pro-orchestrator-neon", "agy/gpt-oss-120b"]);
         assert_eq!(out[0].label, "Gemini 4 Neon");
+        assert_eq!(out[0].detail, "Antigravity · medium–big tasks");
+        assert_eq!(out[1].detail, "Antigravity · Google");
+        assert_eq!(detail("gemini-4-hydrogen"), "Antigravity · fast · small tasks");
         assert_eq!(out[0].efforts, Some(vec!["low".into(), "medium".into(), "high".into(), "xhigh".into()]));
         assert_eq!(out[1].efforts, Some(vec!["low".into(), "medium".into(), "high".into()]));
         assert_eq!(out[2].label, "Orchestrator (Neon)");
