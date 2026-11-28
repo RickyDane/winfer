@@ -17,8 +17,7 @@ const RAIL_WIDTH: f32 = 320.0;
 /// A card's stage pill colors.
 fn stage_color(stage: Stage, c: &Colors) -> Hsla {
     match stage {
-        Stage::Planning | Stage::Checking => c.accent,
-        Stage::Running => c.success,
+        Stage::Planning | Stage::Checking | Stage::Running => c.accent,
         Stage::NeedsYou => c.warning,
         Stage::Ready => c.success,
         Stage::Failed => c.danger,

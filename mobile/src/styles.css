@@ -191,8 +191,8 @@ textarea, input, .md, .ask-code, .ask-q p, .turn-user p, .screen-text, .tool-bod
 .task-top .time { margin-left: auto; }
 .task-n { font-size: 11.5px; font-weight: 600; color: var(--muted); }
 .task-stage { --tone: var(--subtle); padding: 1px 7px; border-radius: 999px; background: color-mix(in srgb, var(--tone) 14%, transparent); color: var(--tone); font-size: 11px; font-weight: 600; }
-.task-stage[data-stage="planning"], .task-stage[data-stage="checking"] { --tone: var(--accent); }
-.task-stage[data-stage="running"], .task-stage[data-stage="ready"] { --tone: var(--ok); }
+.task-stage[data-stage="planning"], .task-stage[data-stage="checking"], .task-stage[data-stage="running"] { --tone: var(--accent); }
+.task-stage[data-stage="ready"] { --tone: var(--ok); }
 .task-stage[data-stage="needs-you"] { --tone: var(--warn); }
 .task-stage[data-stage="failed"] { --tone: var(--danger); }
 .task-goal, .task-summary { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
