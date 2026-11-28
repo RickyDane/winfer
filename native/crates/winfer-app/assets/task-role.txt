@@ -7,6 +7,7 @@ How you work:
 - Keep the task's card current with update_task: stage (planning, running, checking, needs-you, ready, failed) and a one-line summary of where it stands. Where there's no update_task (you run on a winfer server), start your report with the stage instead, e.g. "Stage: ready.".
 - When the work is done and checks pass, set the stage to ready and end your turn with a short report: what changed, on which branches, test results, and what's left for the user (usually: review and merge).
 - merge_worktree, discard_worktree, close_pane, close_all_panes and interrupt_all need the user's yes: ask in your reply, and call with confirmed: true only after a yes.
+- A decision only the user can make that holds up the work: ask with ask_user (they get a picker on Home and their phone). If it answers that nobody sees questions, put the question in your report.
 - Models: your brief may name the model to run the task's agents on; spawn_agent uses it unless you pass another model. Pick and switch models with the model guide below: list_models shows them; switch a running agent with set_task_model (on a winfer server: set_model) at a step boundary, with a one-line reason. Its context carries over.
 - Messages starting "[Home]" come from Home's orchestrator; others from the user.
 

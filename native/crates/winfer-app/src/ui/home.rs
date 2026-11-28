@@ -777,6 +777,9 @@ impl Root {
     /// The step a forked task's orchestrator is on, while it works.
     pub(super) fn fork_step(&self, task_id: &str, cx: &App) -> Option<String> {
         let o = self.home.forks.get(task_id)?;
+        if o.model.read(cx).state.approvals.iter().any(|a| !a.questions.is_empty()) {
+            return Some("waiting for your answer".into());
+        }
         o.model.read(cx).state.busy.then(|| o.step.clone().unwrap_or_else(|| "thinking".into()))
     }
 
@@ -791,8 +794,9 @@ impl Root {
 
     /// Answers what the session asks when nobody can, and follows its step.
     fn on_orch_changed(&mut self, pane_id: &str, cx: &mut Context<Self>) {
-        // The conductor's questions wait for the user on Home, unless it works for voice.
-        let user_answers = pane_id == CONDUCTOR && !self.home.voice_turn;
+        // Orchestrators' questions wait for the user (on Home and their phone), unless the
+        // conductor works for voice.
+        let user_answers = pane_id != CONDUCTOR || !self.home.voice_turn;
         let on_screen = self.home_thread_on_screen(pane_id, cx);
         let Some(o) = self.orch_mut(pane_id) else { return };
         let (asks, step, session) = {
@@ -816,7 +820,8 @@ impl Root {
             o.step = step;
         }
         if asked && !on_screen {
-            self.orchestrator_says(pane_id, "Home's orchestrator has a question for you.", cx);
+            let text = if pane_id == CONDUCTOR { "Home's orchestrator has a question for you." } else { "I have a question for you." };
+            self.orchestrator_says(pane_id, text, cx);
         }
         self.remember_session(pane_id, session, cx);
         if pane_id == CONDUCTOR {
@@ -824,6 +829,8 @@ impl Root {
                 self.home.touched_ms = now_secs() * 1000;
             }
             self.mobile_home_changed(cx);
+        } else {
+            self.mobile_home_asking(pane_id, cx);
         }
         if step_changed {
             cx.notify();
@@ -982,6 +989,8 @@ impl Root {
         if let Some(o) = gone {
             SESSIONS.remove(pane_id);
             self.home.views.remove(pane_id);
+            // Its questions leave the phones with it.
+            self.mobile_home_status(cx);
             let busy = o.model.read(cx).state.busy;
             if code != 0 || busy {
                 let text = format!("The orchestrator stopped (exit code {code}). The next message starts it again.");

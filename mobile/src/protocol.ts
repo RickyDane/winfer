@@ -68,7 +68,10 @@ export interface Pane {
   config?: PaneConfig | null;
   /** Subagents and background shells still running, as the desktop's pane header shows them. Older desktops don't send it. */
   background?: BgItem[];
-  /** Home's orchestrator (the desktop's chat above every workspace), not a workspace's agent. */
+  /**
+   * Home's orchestrator (the desktop's chat above every workspace), not a workspace's agent. Its `request`
+   * can also be a task orchestrator's question (the text starts with the task); answers go to this pane.
+   */
   home?: boolean;
   /** Home's tasks, as the desktop's Home panel lists them (on the Home pane only). Older desktops don't send it. */
   tasks?: HomeTask[];

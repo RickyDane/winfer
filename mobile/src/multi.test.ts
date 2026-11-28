@@ -46,6 +46,21 @@ describe("MultiClient", () => {
     expect(forMachine(s, "B").providers.map((p) => p.id)).toEqual(["box"]);
   });
 
+  it("shows a Home question and sends the answer to that desktop", async () => {
+    const { a, b, multi } = setup();
+    const home: Pane = { ...pane("home-orch"), workspaceId: "", home: true };
+    b.feed(true, [home]);
+    const request = { kind: "question" as const, text: "Task 2 · repo\nWhich?", options: [{ n: 1, label: "A" }, { n: 2, label: "Type something" }] };
+    const shown = () => multi.getState().panes.find((p) => p.id === "B~home-orch");
+    b.emit({ t: "status", pane: { ...home, status: "needs-input", request } });
+    expect(shown()).toMatchObject({ home: true, status: "needs-input", request });
+    await multi.request({ t: "choose", paneId: "B~home-orch", option: 2, text: "mine" });
+    expect(b.request).toHaveBeenCalledWith({ t: "choose", paneId: "home-orch", option: 2, text: "mine" });
+    expect(a.request).not.toHaveBeenCalled();
+    b.emit({ t: "status", pane: home, silent: true });
+    expect(shown()?.request).toBeNull();
+  });
+
   it("keeps each desktop's Home tasks apart", () => {
     const { a, b, multi } = setup();
     const home = (goal: string): Pane => ({

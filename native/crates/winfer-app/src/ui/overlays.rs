@@ -414,10 +414,17 @@ impl Root {
         let index = pending.answers.len();
         let q = pending.questions.get(index)?.clone();
         let s = self.state.read(cx);
-        let asker = s.pane(&pending.pane_id).map_or(String::new(), |p| {
-            let ws = s.workspaces.iter().find(|w| w.id == p.workspace_id).map_or(String::new(), |w| format!(" · {}", w.name));
-            format!("{}{ws}", s.provider_name(&p.provider))
-        });
+        let asker = s.pane(&pending.pane_id).map_or_else(
+            || match crate::voice::home_pane(&pending.pane_id) {
+                Some(crate::voice::HomePane::Task(t)) => self.task(t).map_or_else(String::new, |t| format!("{} · {}", t.title(), t.workspace)),
+                Some(crate::voice::HomePane::Conductor) => "Home".to_string(),
+                None => String::new(),
+            },
+            |p| {
+                let ws = s.workspaces.iter().find(|w| w.id == p.workspace_id).map_or(String::new(), |w| format!(" · {}", w.name));
+                format!("{}{ws}", s.provider_name(&p.provider))
+            },
+        );
         let input = self.question_input.clone()?;
         let typed = input.read(cx).value().trim().to_string();
         let multi = q.multi;
