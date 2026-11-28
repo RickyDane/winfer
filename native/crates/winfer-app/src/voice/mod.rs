@@ -7,6 +7,8 @@ pub mod io;
 pub mod protocol;
 pub mod resample;
 
+use winfer_core::hooks::Surface;
+
 /// Home's orchestrators run under made-up pane ids that no workspace lists (see `ui/home.rs`):
 /// one conductor for the whole app, and one sub-orchestrator per forked task.
 pub const CONDUCTOR: &str = "home-orch";
@@ -28,6 +30,15 @@ pub fn home_pane(pane_id: &str) -> Option<HomePane<'_>> {
 
 pub fn task_pane(task_id: &str) -> String {
     format!("{TASK_PREFIX}{task_id}")
+}
+
+/// Which kind of chat `pane_id` is, for telemetry.
+pub fn surface(pane_id: &str) -> Surface {
+    match home_pane(pane_id) {
+        Some(HomePane::Conductor) => Surface::Home,
+        Some(HomePane::Task(_)) => Surface::TaskOrchestrator,
+        None => Surface::Pane,
+    }
 }
 
 /// Whether `pane_id` is one of Home's orchestrators.

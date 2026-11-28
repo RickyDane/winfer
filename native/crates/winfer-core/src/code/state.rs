@@ -221,6 +221,8 @@ pub struct CodeState {
     pub outbox: Vec<Cmd>,
     /// A plan handed over for approval, to open in the file viewer (taken by the app).
     pub show_plan: Option<String>,
+    /// Which chat this is, for the hooks.
+    pub surface: crate::hooks::Surface,
     /// A message was sent from here and its turn hasn't started yet: that turn gets timed.
     speed_armed: bool,
     /// The timed turn: when it started and when the first output arrived (unix ms). Only turns
@@ -236,7 +238,7 @@ impl Default for CodeState {
             sheet: None, rate: None, last_rate: None, backend_timed: false, turn_out_base: 0, log_task: None, task_log: None, mode: Mode::Ask, effort: "high".into(), ultracode: false, sub_model: None, sub_effort: None,
             items: Vec::new(), approvals: Vec::new(), tasks: Vec::new(), todos: Vec::new(), plan_done_at: None, skills: Vec::new(),
             usage: Usage { window: 200_000, ..Default::default() }, busy: false, turn_started: None, exited: None, paused_until: None, queued: 0, outbox: Vec::new(),
-            show_plan: None, speed_armed: false, speed: None,
+            show_plan: None, surface: Default::default(), speed_armed: false, speed: None,
         }
     }
 }
@@ -352,10 +354,11 @@ impl CodeState {
     /// Applies a command's local effect and queues it for the process.
     pub fn send(&mut self, cmd: Cmd) {
         match &cmd {
-            Cmd::Send { steer: false, .. } => {
-                self.speed_armed = true;
+            Cmd::Send { steer, .. } => {
+                // A steer joins the running turn, which keeps its own timing.
+                self.speed_armed |= !*steer;
                 if let Some(h) = crate::hooks::get() {
-                    h.turn_sent(&self.model, &self.effort, self.ultracode);
+                    h.turn_sent(&self.model, &self.effort, self.ultracode, self.surface, *steer);
                 }
             }
             Cmd::SetMode(m) => self.mode = *m,
@@ -796,6 +799,7 @@ impl CodeState {
             tokens_per_sec: self.last_rate.filter(|r| r.is_finite() && *r > 0.0),
             output_tokens: self.usage.turn.unwrap_or(0),
             duration_ms: now_ms().saturating_sub(started),
+            surface: self.surface,
         })
     }
 
@@ -1253,6 +1257,40 @@ mod tests {
         r.sample(1_000, 75);
         r.sample(1_500, 100); // 25 tok / 500ms = 50 tok/s
         assert!((r.rate().unwrap() - 50.0).abs() < 0.01);
+    }
+
+    /// Records what this thread's chats report (the hooks are global to the test process).
+    struct Recorder;
+
+    thread_local! {
+        static SENT: std::cell::RefCell<Vec<(crate::hooks::Surface, bool)>> = Default::default();
+        static TIMED: std::cell::RefCell<Vec<crate::hooks::TurnSpeed>> = Default::default();
+    }
+
+    impl crate::hooks::Hooks for Recorder {
+        fn turn_sent(&self, _model: &str, _effort: &str, _ultracode: bool, surface: crate::hooks::Surface, steer: bool) {
+            SENT.with_borrow_mut(|v| v.push((surface, steer)));
+        }
+        fn turn_speed(&self, speed: &crate::hooks::TurnSpeed) {
+            TIMED.with_borrow_mut(|v| v.push(speed.clone()));
+        }
+    }
+
+    #[test]
+    fn orchestrator_turns_report_sends_steers_and_speed() {
+        use crate::hooks::Surface;
+        crate::hooks::install(Box::new(Recorder));
+        let mut s = CodeState { surface: Surface::Home, model: "claude/opus".into(), ..Default::default() };
+        s.submit("hello", &[], None);
+        s.apply(Ev::TurnStart);
+        s.apply(Ev::TextDelta { id: "a".into(), text: "hi".into() });
+        // Typed while it works: counted, and the running turn is still timed once.
+        s.submit("and this", &[], None);
+        s.apply(Ev::TurnDone);
+        assert_eq!(SENT.take(), [(Surface::Home, false), (Surface::Home, true)]);
+        let timed = TIMED.take();
+        assert_eq!(timed.len(), 1);
+        assert_eq!(timed[0].surface, Surface::Home);
     }
 
     #[test]

@@ -4,8 +4,8 @@
 use std::sync::OnceLock;
 
 pub trait Hooks: Send + Sync {
-    /// A chat sent a new turn (not a steer).
-    fn turn_sent(&self, _model: &str, _effort: &str, _ultracode: bool) {}
+    /// A chat sent a message: a new turn, or (`steer`) one into the running turn.
+    fn turn_sent(&self, _model: &str, _effort: &str, _ultracode: bool, _surface: Surface, _steer: bool) {}
     /// A turn the user sent from here finished, with how fast the model answered.
     fn turn_speed(&self, _speed: &TurnSpeed) {}
     /// A pane was added.
@@ -26,6 +26,28 @@ pub trait Hooks: Send + Sync {
     fn stopping(&self) {}
 }
 
+/// Where a winfer code chat runs.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Surface {
+    /// A chat pane.
+    #[default]
+    Pane,
+    /// Home's orchestrator.
+    Home,
+    /// A forked task's orchestrator.
+    TaskOrchestrator,
+}
+
+impl Surface {
+    pub fn label(self) -> &'static str {
+        match self {
+            Surface::Pane => "pane",
+            Surface::Home => "home",
+            Surface::TaskOrchestrator => "task_orchestrator",
+        }
+    }
+}
+
 /// How fast a winfer code turn was answered.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TurnSpeed {
@@ -40,6 +62,7 @@ pub struct TurnSpeed {
     pub tokens_per_sec: Option<f32>,
     pub output_tokens: u64,
     pub duration_ms: u64,
+    pub surface: Surface,
 }
 
 static HOOKS:OnceLock<Box<dyn Hooks>> = OnceLock::new();

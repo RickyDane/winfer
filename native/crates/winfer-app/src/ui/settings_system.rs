@@ -752,7 +752,10 @@ const USAGE_DATA: &[(IconName, &str, &[&str])] = &[
     (IconName::Bot, "Agents and tokens", &[
         "Tokens per provider and model, per hour",
         "Agent tool calls per tool: count, failures, average time",
-        "winfer code turns per reasoning effort",
+        "winfer code turns and steering messages per reasoning effort",
+        "Speed of each winfer code turn: model, effort, timing and output tokens",
+        "Whether a turn ran in a pane, Home or a task orchestrator",
+        "Tasks Home starts: light, fork or remote, and the model",
         "Live voice: model, tokens, response time and tool names",
     ]),
     (IconName::Bug, "Reliability", &[

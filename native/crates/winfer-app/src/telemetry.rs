@@ -14,9 +14,13 @@
 //! - `workspace_size` (open workspaces and panes, when it changes, at most every 10 minutes),
 //!   `settings_drift` once per launch (names of the preferences changed from the defaults; values
 //!   only for fixed choices like the theme), `memory_milestone` after 1, 4, 8, 24 and 72 hours up,
-//!   `effort_used` (winfer code turns per backend and reasoning effort, every 10 minutes);
+//!   `effort_used` (winfer code turns, and messages sent into a running turn (`steers`), per
+//!   backend, reasoning effort and `surface`, every 10 minutes);
 //! - `turn_speed` per winfer code turn sent from this machine: provider, model, effort, time to
-//!   first token, output tokens per second, output tokens and turn length;
+//!   first token, output tokens per second, output tokens, turn length and `surface` (`pane`,
+//!   `home` for Home's orchestrator, or `task_orchestrator`);
+//! - `home_task_started` when Home starts a task: `light`, `fork` or `remote`, provider and
+//!   model;
 //! - `tool_used`: the agents' tool calls per tool and hour (name, calls, failures, average
 //!   time), from Claude Code's and Codex's logs; never inputs or results.
 //! - `$ai_generation` and `$ai_span` (PostHog AI Observability) for live voice: model, token
@@ -38,6 +42,7 @@ use std::sync::{Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::Manager;
 use winfer_backend::{diagnostics, tool_stats, usage_history};
+use winfer_core::hooks::Surface;
 
 const DEFAULT_HOST: &str = "https://us.i.posthog.com";
 const FILE: &str = "telemetry.json";
@@ -71,14 +76,16 @@ struct Telemetry {
     saved: Mutex<Saved>,
     queue: Mutex<Vec<Value>>,
     commands: Mutex<std::collections::BTreeMap<String, u32>>,
-    /// Turns sent in winfer code per (backend, effort).
-    efforts: Mutex<std::collections::BTreeMap<(String, String), u32>>,
+    efforts: Mutex<Efforts>,
     /// Latest workspace size, the session's largest, and the last one sent.
     size: Mutex<(Option<WorkspaceSize>, WorkspaceSize, Option<WorkspaceSize>)>,
     /// The build has a key and the environment doesn't forbid it.
     allowed: bool,
     enabled: AtomicBool,
 }
+
+/// Messages sent in winfer code per (backend, effort, surface): (new turns, steers).
+type Efforts = std::collections::BTreeMap<(String, String, Surface), (u32, u32)>;
 
 static T: OnceLock<Telemetry> = OnceLock::new();
 static PROCESS_START: OnceLock<Instant> = OnceLock::new();
@@ -116,8 +123,8 @@ fn now_ms() -> i64 {
 struct CoreHooks;
 
 impl winfer_core::hooks::Hooks for CoreHooks {
-    fn turn_sent(&self, model: &str, effort: &str, ultracode: bool) {
-        turn_sent(model, effort, ultracode);
+    fn turn_sent(&self, model: &str, effort: &str, ultracode: bool, surface: Surface, steer: bool) {
+        turn_sent(model, effort, ultracode, surface, steer);
     }
     fn turn_speed(&self, speed: &winfer_core::hooks::TurnSpeed) {
         turn_speed(speed);
@@ -271,15 +278,28 @@ fn plain_label(name: &str) -> String {
     if plain { name.to_string() } else { "other".to_string() }
 }
 
-/// A winfer code turn was sent at this reasoning effort (`model` is `backend/model`).
-pub fn turn_sent(model: &str, effort: &str, ultracode: bool) {
+/// A winfer code message was sent at this reasoning effort (`model` is `backend/model`).
+pub fn turn_sent(model: &str, effort: &str, ultracode: bool, surface: Surface, steer: bool) {
     let Some(t) = T.get() else { return };
     if !active() {
         return;
     }
+    count_sent(&mut t.efforts.lock().unwrap_or_else(PoisonError::into_inner), model, effort, ultracode, surface, steer);
+}
+
+fn count_sent(efforts: &mut Efforts, model: &str, effort: &str, ultracode: bool, surface: Surface, steer: bool) {
     let backend = provider_label(model.split('/').next().unwrap_or_default()).to_string();
     let effort = if ultracode { "ultracode".to_string() } else { plain_label(effort) };
-    *t.efforts.lock().unwrap_or_else(PoisonError::into_inner).entry((backend, effort)).or_default() += 1;
+    let counts = efforts.entry((backend, effort, surface)).or_default();
+    if steer {
+        counts.1 += 1;
+    } else {
+        counts.0 += 1;
+    }
+}
+
+fn effort_events(efforts: Efforts) -> impl Iterator<Item = Value> {
+    efforts.into_iter().map(|((backend, effort, surface), (turns, steers))| json!({ "backend": backend, "effort": effort, "surface": surface.label(), "turns": turns, "steers": steers }))
 }
 
 /// A model id as reported: a plain id (`claude-opus-5-5`, `gpt-5.1-codex`) without a context
@@ -290,15 +310,35 @@ fn model_label(model: &str) -> String {
     if plain { base.to_string() } else { "other".to_string() }
 }
 
+/// A custom command's model could be anything the user typed.
+fn reported_model(provider: &str, model: &str) -> String {
+    if provider == "custom" { "other".to_string() } else { model_label(model) }
+}
+
+/// The `home_task_started` event's properties. `model` is the agent's: `backend/model` for
+/// winfer code, else the agent's own model id; none when it runs its default.
+fn home_task_props(mode: &str, agent: Option<&str>, model: Option<&str>) -> Value {
+    let provider = agent.map(provider_label);
+    let model = model.map(|m| match (provider, m.split_once('/')) {
+        (Some("winfer") | None, Some((backend, id))) => reported_model(provider_label(backend), id),
+        (Some(provider), _) => reported_model(provider, m),
+        (None, None) => model_label(m),
+    });
+    json!({ "mode": mode, "provider": provider, "model": model })
+}
+
+/// Home started a task (`light`, `fork` or `remote`). Never its goal, prompt or workspace.
+pub fn home_task_started(mode: &str, agent: Option<&str>, model: Option<&str>) {
+    track("home_task_started", home_task_props(mode, agent, model));
+}
+
 /// The `turn_speed` event's properties: provider and model, time to first token and output speed.
 fn turn_speed_props(s: &winfer_core::hooks::TurnSpeed) -> Value {
     let (backend, spec_model) = s.model.split_once('/').unwrap_or((s.model.as_str(), ""));
     let model = s.actual_model.as_deref().filter(|m| !m.is_empty()).unwrap_or(spec_model);
     let provider = provider_label(backend);
-    // A custom command's model could be anything the user typed.
-    let model = if provider == "custom" { "other".to_string() } else { model_label(model) };
     json!({
-        "provider": provider, "model": model, "effort": plain_label(&s.effort),
+        "provider": provider, "model": reported_model(provider, model), "effort": plain_label(&s.effort), "surface": s.surface.label(),
         "ttft_ms": s.ttft_ms, "ttft_secs": (s.ttft_ms as f64 / 100.0).round() / 10.0,
         "tokens_per_sec": s.tokens_per_sec.map(|r| (f64::from(r) * 10.0).round() / 10.0),
         "output_tokens": s.output_tokens, "duration_ms": s.duration_ms,
@@ -314,8 +354,8 @@ pub fn turn_speed(s: &winfer_core::hooks::TurnSpeed) {
 fn report_efforts() {
     let Some(t) = T.get() else { return };
     let counts = std::mem::take(&mut *t.efforts.lock().unwrap_or_else(PoisonError::into_inner));
-    for ((backend, effort), turns) in counts {
-        track("effort_used", json!({ "backend": backend, "effort": effort, "turns": turns }));
+    for props in effort_events(counts) {
+        track("effort_used", props);
     }
 }
 
@@ -770,13 +810,43 @@ mod tests {
     fn turn_speed_reports_provider_and_resolved_model() {
         let s = winfer_core::hooks::TurnSpeed {
             model: "claude/opus".into(), actual_model: Some("claude-opus-5-5[1m]".into()), effort: "high".into(),
-            ttft_ms: 1234, tokens_per_sec: Some(48.26), output_tokens: 900, duration_ms: 20_000,
+            ttft_ms: 1234, tokens_per_sec: Some(48.26), output_tokens: 900, duration_ms: 20_000, surface: Surface::Pane,
         };
         let p = turn_speed_props(&s);
         assert_eq!((p["provider"].as_str(), p["model"].as_str(), p["ttft_secs"].as_f64(), p["tokens_per_sec"].as_f64()), (Some("claude"), Some("claude-opus-5-5"), Some(1.2), Some(48.3)));
         let s = winfer_core::hooks::TurnSpeed { model: "mytool/x y".into(), actual_model: None, tokens_per_sec: None, ..s };
         let p = turn_speed_props(&s);
         assert_eq!((p["provider"].as_str(), p["model"].as_str(), p["tokens_per_sec"].is_null()), (Some("custom"), Some("other"), true));
+    }
+
+    #[test]
+    fn orchestrator_turns_are_marked_with_their_surface() {
+        use crate::voice::{CONDUCTOR, surface, task_pane};
+        assert_eq!([surface(CONDUCTOR), surface(&task_pane("t1")), surface("p-1")], [Surface::Home, Surface::TaskOrchestrator, Surface::Pane]);
+        let s = winfer_core::hooks::TurnSpeed {
+            model: "claude/opus".into(), actual_model: None, effort: "high".into(),
+            ttft_ms: 1, tokens_per_sec: None, output_tokens: 1, duration_ms: 1, surface: Surface::TaskOrchestrator,
+        };
+        assert_eq!(turn_speed_props(&s)["surface"], "task_orchestrator");
+
+        let mut efforts = Efforts::new();
+        count_sent(&mut efforts, "claude/opus", "high", false, Surface::Home, false);
+        count_sent(&mut efforts, "claude/opus", "high", false, Surface::Home, true);
+        count_sent(&mut efforts, "claude/opus", "high", false, Surface::Pane, false);
+        let events: Vec<Value> = effort_events(efforts).collect();
+        assert_eq!(events, [
+            json!({ "backend": "claude", "effort": "high", "surface": "pane", "turns": 1, "steers": 0 }),
+            json!({ "backend": "claude", "effort": "high", "surface": "home", "turns": 1, "steers": 1 }),
+        ]);
+    }
+
+    #[test]
+    fn home_tasks_report_mode_and_model_labels_only() {
+        assert_eq!(home_task_props("fork", Some("winfer"), Some("claude/opus")), json!({ "mode": "fork", "provider": "winfer", "model": "opus" }));
+        assert_eq!(home_task_props("light", Some("codex"), Some("gpt-5.1-codex")), json!({ "mode": "light", "provider": "codex", "model": "gpt-5.1-codex" }));
+        assert_eq!(home_task_props("light", Some("my-tool"), Some("secret model")), json!({ "mode": "light", "provider": "custom", "model": "other" }));
+        assert_eq!(home_task_props("light", Some("winfer"), Some("mytool/secret")), json!({ "mode": "light", "provider": "winfer", "model": "other" }));
+        assert_eq!(home_task_props("remote", None, None), json!({ "mode": "remote", "provider": null, "model": null }));
     }
 
     #[test]
