@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Home · event messages</title>
+<link rel="stylesheet" href="shared.css">
+<style>
+.vtabs { max-width: 1440px; margin: 0 auto 10px; padding: 0 24px; display: flex; gap: 6px; }
+.vtabs button { height: 28px; padding: 0 12px; border-radius: 8px; font-size: 12.5px; color: var(--muted); border: 1px solid var(--edge); }
+.vtabs button.on { background: var(--active); color: var(--fg); border-color: var(--border-strong); }
+.pc { max-width: 1440px; margin: 0 auto 12px; padding: 0 24px; display: grid; grid-template-columns: 1fr 1fr 1.3fr; gap: 18px; font-size: 12px; color: var(--muted); }
+.pc h2 { margin: 0 0 4px; font-size: 10.5px; letter-spacing: .07em; text-transform: uppercase; color: var(--subtle); font-weight: 600; }
+.pc ul { margin: 0; padding-left: 16px; } .pc li { margin: 2px 0; }
+.window { height: 900px; }
+
+/* ---- shared event atoms ---- */
+.ev { display: flex; align-items: center; gap: 7px; min-height: 26px; padding: 0 8px; border-radius: 8px; font-size: 12px; color: var(--muted); }
+.ev:hover { background: var(--hover); }
+.ev .eic { width: 18px; height: 18px; border-radius: 5px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.ev .eic .ic { width: 11px; height: 11px; stroke-width: 2; }
+.k-ok { color: var(--success); background: #4ade801f; } .k-ask { color: var(--warning); background: #fbbf241f; }
+.k-err { color: var(--danger); background: #f871711f; } .k-bg { color: var(--accent); background: #7c8cff1f; } .k-mute { color: var(--subtle); background: #71717a1f; }
+.ev a.task { font-weight: 600; }
+.ev .txt { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ev .q { color: var(--fg); }
+.ev .tm { margin-left: auto; font-size: 11px; color: var(--subtle); flex-shrink: 0; padding-left: 8px; }
+.ev .handled { font-size: 10.5px; color: var(--subtle); display: inline-flex; align-items: center; gap: 3px; flex-shrink: 0; }
+.c { height: 18px; padding: 0 6px; display: inline-flex; align-items: center; gap: 4px; border-radius: 5px; font: 10.5px var(--mono); color: var(--muted); background: var(--hover); flex-shrink: 0; white-space: nowrap; }
+.c .ic { width: 10px; height: 10px; }
+.code0 { color: var(--success); background: #4ade801a; } .code1 { color: var(--danger); background: #f871711a; }
+.ev .act { font-size: 11px; color: var(--accent); flex-shrink: 0; }
+.divider { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--subtle); margin: 2px 0; }
+.divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+.divider .ic { width: 11px; height: 11px; }
+
+/* report card */
+.report { border-radius: 12px; border: 1px solid var(--edge); background: var(--card); overflow: hidden; }
+.report .rh { display: flex; align-items: center; gap: 8px; padding: 8px 10px; font-size: 12.5px; cursor: pointer; }
+.report .rh:hover { background: var(--hover); }
+.report .rh b { font-weight: 600; } .report .rh .sub { color: var(--subtle); font-size: 11.5px; }
+.report .rh .chev { margin-left: auto; color: var(--subtle); transition: transform .15s; }
+.report.open .rh .chev { transform: rotate(90deg); }
+.report .rb { padding: 2px 12px 10px 36px; font-size: 12.5px; line-height: 1.55; color: var(--muted); position: relative; max-height: 64px; overflow: hidden; }
+.report .rb::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 28px; background: linear-gradient(transparent, var(--card)); }
+.report.open .rb { max-height: none; } .report.open .rb::after { display: none; }
+.report .rb h4 { margin: 6px 0 2px; font-size: 12px; color: var(--fg); } .report .rb p { margin: 0 0 4px; } .report .rb ul { margin: 2px 0; padding-left: 16px; }
+.report .rf { display: flex; gap: 6px; padding: 0 10px 8px 36px; }
+
+/* group (A collapsed run / B updates block) */
+.grp { border-radius: 10px; }
+.grp > .gh { display: flex; align-items: center; gap: 7px; min-height: 26px; padding: 0 8px; border-radius: 8px; font-size: 12px; color: var(--muted); cursor: pointer; }
+.grp > .gh:hover { background: var(--hover); }
+.grp > .gh .chev { color: var(--subtle); transition: transform .15s; }
+.grp.open > .gh .chev { transform: rotate(90deg); }
+.grp > .gb { display: none; flex-direction: column; gap: 1px; padding-left: 14px; margin-left: 9px; border-left: 1px solid var(--border); }
+.grp.open > .gb { display: flex; }
+.dots { display: inline-flex; gap: 3px; } .dots i { width: 6px; height: 6px; border-radius: 50%; }
+
+/* B: updates block */
+.updates { border: 1px solid var(--border); background: #0f0f11; border-radius: 12px; padding: 4px; }
+.updates > .gh { font-weight: 500; }
+.updates > .gb { border-left: 0; margin-left: 0; padding: 2px 0 4px; }
+.updates .report { margin: 4px 4px 2px; }
+
+/* C: timeline gutter */
+.tl { position: relative; padding-left: 0; }
+.tl-row { display: grid; grid-template-columns: 1fr 230px; gap: 18px; align-items: start; }
+.tl-main { min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.tl-gutter { position: relative; display: flex; flex-direction: column; gap: 6px; padding-left: 14px; border-left: 1px solid var(--border); min-height: 100%; }
+.mini { position: relative; border-radius: 9px; border: 1px solid var(--border); background: var(--card); padding: 6px 8px; font-size: 11.5px; color: var(--muted); display: flex; flex-direction: column; gap: 3px; cursor: pointer; }
+.mini:hover { background: var(--hover); }
+.mini::before { content: ""; position: absolute; left: -21.5px; top: 11px; width: 9px; height: 9px; border-radius: 50%; background: var(--panel); border: 2px solid var(--kc, var(--subtle)); }
+.mini .mh { display: flex; align-items: center; gap: 6px; }
+.mini .mh .tm { margin-left: auto; font-size: 10.5px; color: var(--subtle); }
+.mini .mb { color: var(--subtle); font-size: 11px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.mini .chips { display: flex; gap: 4px; flex-wrap: wrap; }
+.chat-inner.wide { max-width: 1010px; }
+.variant { display: none; } .variant.on { display: block; }
+</style></head>
+<body>
+<div class="note" style="grid-template-columns:1fr">
+  <h1>Home · event messages <span class="tag">MOCKUP</span> <span class="back">"[winfer] …" app events as compact chat elements instead of user bubbles</span></h1>
+</div>
+<div class="vtabs" id="vtabs">
+  <button data-v="a" class="on">A · Inline system rows</button>
+  <button data-v="b">B · "Updates" block between turns</button>
+  <button data-v="c">C · Timeline gutter</button>
+</div>
+<div class="pc" id="pc"></div>
+
+<div class="window">
+  <div class="titlebar"><div class="lights"><i></i><i></i><i></i></div><div class="t">winfer — Home</div></div>
+  <div class="body">
+    <div class="sidebar">
+      <div class="nav on"><svg class="ic" viewBox="0 0 24 24"><path d="M3 11l9-7 9 7v9H3z"/></svg>Home<span class="dot"></span></div>
+      <div class="nav"><svg class="ic" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg>Panes</div>
+      <div class="side-h">Workspaces</div>
+      <div class="ws"><span class="mono-tile" style="background:#7c8cff">W</span>winfer<span class="n">6</span></div>
+      <div class="ws"><span class="mono-tile" style="background:#e08b6a">N</span>nebula<span class="n">2</span></div>
+      <div class="ws"><span class="mono-tile" style="background:#38bdf8">D</span>dane-server<span class="n">1</span></div>
+    </div>
+    <div class="panel main">
+      <div class="tabs"><span class="tab on">Home</span><span class="tab">Task 7</span><span class="tab">Task 2</span><span class="grow"></span><span class="step">Orchestrator · Opus 5.5</span></div>
+      <div class="chat"><div class="chat-inner" id="chat"></div></div>
+      <div class="composer"><div class="composer-box"><div class="ph">Ask the orchestrator…</div>
+        <div class="row"><span class="chip">@ workspace</span><span class="chip">Opus 5.5</span><span class="grow"></span><span class="send"><svg class="ic" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg></span></div></div></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const I = {
+  ok:'<path d="M5 12l5 5 9-10"/>', ask:'<path d="M9 9a3 3 0 1 1 4 2.8c-.8.4-1 1-1 1.7M12 17h.01"/>',
+  err:'<path d="M12 7v6M12 17h.01"/>', bg:'<path d="M4 6h16M4 12h10M4 18h6"/>', home:'<path d="M3 11l9-7 9 7v9H3z"/>',
+  at:'<circle cx="12" cy="12" r="4"/><path d="M16 12v1.5a2.5 2.5 0 0 0 5 0V12a9 9 0 1 0-4 7.5"/>',
+  server:'<rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="13" width="16" height="7" rx="1.5"/><path d="M8 7.5h.01M8 16.5h.01"/>',
+  branch:'<circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="8" r="2"/><path d="M6 7v10M18 10c0 4-6 3-12 7"/>',
+  pane:'<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3"/>', chev:'<path d="M9 6l6 6-6 6"/>',
+  doc:'<path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5M10 13h6M10 17h6"/>', file:'<path d="M7 3h7l5 5v13H7z"/>', search:'<circle cx="11" cy="11" r="6"/><path d="M20 20l-4-4"/>',
+};
+const ic = (n, s='') => `<svg class="ic" viewBox="0 0 24 24" ${s}>${I[n]}</svg>`;
+const ws = t => `<span class="c">${ic('pane')}${t}</span>`, br = t => `<span class="c">${ic('branch')}${t}</span>`;
+const mach = t => `<span class="machine">${ic('server')}${t}</span>`;
+const code = n => `<span class="c code${n?1:0}">exit ${n}</span>`;
+const kcol = {ok:'var(--success)',ask:'var(--warning)',err:'var(--danger)',bg:'var(--accent)',mute:'var(--subtle)'};
+
+// ----- transcript data (same for all variants) -----
+const T = [
+ {t:'prompt', label:'Home opened · brief requested', raw:'[winfer] The user opened Home. Give a short brief …'},
+ {t:'asst', html:'<p>Morning. <b>3 tasks running</b>, 1 waiting on you: Task 2 asks whether to keep the legacy settings migration. Nebula’s release watch is still polling.</p>'},
+ {t:'user', html:'Ship the GPUI tab-strip fix. Use @winfer, run it as a task.'},
+ {t:'note', label:'Mentioned workspaces: winfer', raw:'[winfer] The user mentioned these workspaces …'},
+ {t:'tools', rows:[['search','Grep','tab_strip|TabStrip native/crates','0.4s'],['file','Read','native/crates/winfer-app/src/ui/tabs.rs','0.1s'],['pane','spawn_task','Task 7 · winfer · "Fix tab strip overflow"','1.2s']], worked:'Worked for 16s'},
+ {t:'asst', html:'<p>Started <a>Task 7</a> in <code>winfer</code> on a fresh worktree. I’ll report back when it lands.</p>'},
+ // burst of events while the user is away
+ {t:'ev', k:'ok', task:'Task 7', body:`${ws('winfer/5')}<span class="c">WinferCode</span>${br('winfer/winfer-4')}<span>finished</span>`, tm:'10:42', silent:true},
+ {t:'ev', k:'ask', task:'Task 2', body:`${ws('winfer/2')}<span>needs input:</span><span class="txt q">“Keep the legacy settings.json migration or drop it?”</span>`, tm:'10:43', act:'Answer', silent:true},
+ {t:'ev', k:'err', pane:'dane-server:1', body:`<span class="c">WinferCode</span><span>finished:</span><span class="txt q">Not logged in · Please run /login.</span>`, tm:'10:44', silent:true},
+ {t:'ev', k:'bg', bg:'bg1', body:`<span class="txt">“nebula release watch”</span>${code(0)}<span class="c">1495s</span>`, tm:'10:47', act:'Output', silent:true},
+ {t:'report', task:'Task 7', sub:'winfer · branch winfer/winfer-4', tm:'10:48', html:`<h4>Summary</h4><p>Tab strip now clips overflowing tabs and shows a “+3” overflow menu. Close buttons no longer shift layout on hover.</p><h4>Changes</h4><ul><li><code>ui/tabs.rs</code> — measure pass + overflow menu (+142 −38)</li><li><code>theme.rs</code> — <code>tab_overflow_bg</code> token</li></ul><h4>Tests</h4><p><code>cargo test -p winfer-app</code> — 214 passed. Screenshot attached in the task chat.</p><h4>Next</h4><p>Ready to merge; no conflicts with main.</p>`},
+ {t:'asst', html:'<p>Task 7 is done and ready to merge. Two things need you:</p><ul><li><b>Task 2</b> asks about the legacy migration — I’d drop it (no installs older than 0.9).</li><li><b>dane-server</b> is signed out; push your Claude sign-in there?</li></ul>'},
+ {t:'user', html:'Drop it. And yes push the sign-in.'},
+ {t:'tools', rows:[['pane','send_to_pane','winfer/2 · "Drop the legacy migration"','0.2s'],['server','push_sign_in','dane-server · claude:default','2.1s']], worked:'Worked for 4s'},
+ {t:'ev', k:'ok', task:'Task 2', body:`${ws('winfer/2')}${br('winfer/winfer-2')}<span>finished</span>`, tm:'10:55', silent:true},
+];
+
+const evRow = (e, handled) => {
+  const who = e.task ? `<a class="task">${e.task}</a>` : e.pane ? mach(e.pane) : `<span class="c">${ic('bg')}${e.bg}</span>`;
+  return `<div class="ev" title="[winfer] … (raw event)"><span class="eic k-${e.k}">${ic(e.k)}</span>${who}${e.body}
+    ${e.act?`<a class="act">${e.act}</a>`:''}${handled&&e.silent?`<span class="handled" title="Orchestrator replied [silent]">${ic('ok','style="width:10px;height:10px"')}handled</span>`:''}<span class="tm">${e.tm}</span></div>`;
+};
+const report = (r, open) => `<div class="report ${open?'open':''}" onclick="this.classList.toggle('open')">
+  <div class="rh"><span class="ev" style="padding:0;min-height:0"><span class="eic k-ok">${ic('doc')}</span></span><b><a>${r.task}</a> · report</b><span class="sub">${r.sub}</span><span class="tm" style="margin-left:auto;font-size:11px;color:var(--subtle)">${r.tm}</span><span class="chev" style="margin-left:6px">${ic('chev')}</span></div>
+  <div class="rb">${r.html}</div></div>`;
+const tools = t => `<div class="tools">${t.rows.map(([i,n,ti,tm])=>`<div class="tool"><span class="badge k-mute">${ic(i)}</span><span class="nm">${n}</span><span class="ti">${ti}</span><span class="tm">${tm}</span></div>`).join('')}</div><div class="m-event">${t.worked}</div>`;
+const asst = a => `<div><div class="who"><span class="avatar" style="background:var(--claude)">W</span><b>Orchestrator</b></div><div class="m-text">${a.html}</div></div>`;
+const user = u => `<div class="m-user">${u.html}</div>`;
+const isEv = x => x.t==='ev' || x.t==='report';
+const dotsFor = run => `<span class="dots">${run.map(e=>`<i style="background:${kcol[e.t==='report'?'ok':e.k]}"></i>`).join('')}</span>`;
+
+function runs(fn) { // split transcript into runs of consecutive events
+  const out = []; let cur = null;
+  for (const x of T) { if (isEv(x)) { (cur ||= []).push(x); } else { if (cur) out.push(fn(cur)), cur = null; out.push(x); } }
+  if (cur) out.push(fn(cur)); return out;
+}
+const summary = run => {
+  const n = run.length, ask = run.filter(e=>e.k==='ask').length, err = run.filter(e=>e.k==='err').length, ok = run.filter(e=>e.k==='ok'||e.t==='report').length;
+  return [ok&&`${ok} done`, ask&&`<span style="color:var(--warning)">${ask} needs input</span>`, err&&`<span style="color:var(--danger)">${err} error</span>`].filter(Boolean).join(' · ');
+};
+
+const V = {
+ a: { pc:`<section><h2>A · Inline system rows</h2><ul><li>Each event is a one-line row in the flow, same weight as tool rows: kind icon, task link, chips, time.</li><li>3+ consecutive events fold into “N events” (expanded here for the first run); reports are collapsible cards.</li><li>Prompts like “opened Home” become a muted divider; “[silent]” replies vanish, row shows “handled”.</li></ul></section>
+   <section><h2>Pros / cons</h2><ul><li>+ Closest to existing tool rows; chronological, nothing hidden.</li><li>+ Cheapest to build (one new renderer per message).</li><li>− Busy afternoons still add many rows between turns.</li></ul></section>
+   <section><h2>Code</h2><ul><li><code>ChatMessage</code> gets <code>kind: Event{EventKind, task, pane, machine, …}</code> set where Home sends it (home.rs sender, ~1517) instead of parsing; fallback: <code>text.starts_with("[winfer] ")</code> + regex on “Task N · ws/n”.</li><li>code_view.rs: render <code>Event</code> via new <code>event_row()</code>/<code>report_card()</code>; skip assistant msg == “[silent]” and mark the preceding event handled.</li><li>Group runs of ≥3 in the message-list builder (like tool-call collapsing).</li></ul></section>`,
+   render(){ let first = true; return runs(run => ({t:'run', run})).map(x => {
+     if (x.t!=='run') return base(x);
+     const body = x.run.map(e => e.t==='report' ? report(e) : evRow(e, true)).join('');
+     if (x.run.length < 3) return `<div style="display:flex;flex-direction:column;gap:4px">${body}</div>`;
+     const open = first; first = false;
+     return `<div class="grp ${open?'open':''}"><div class="gh" onclick="this.parentNode.classList.toggle('open')"><span class="chev">${ic('chev')}</span>${dotsFor(x.run)}<span>${x.run.length} events</span><span style="color:var(--subtle)">· ${summary(x.run)}</span><span class="tm" style="margin-left:auto;font-size:11px;color:var(--subtle)">10:42–10:48</span></div><div class="gb">${body}</div></div>`;
+   }).join(''); } },
+ b: { pc:`<section><h2>B · “Updates” block between turns</h2><ul><li>All events since the last turn collect in one bordered “Updates” block with a summary line (2 done · 1 needs input · 1 error).</li><li>Needs-input and error rows stay visible when collapsed; done rows fold away.</li><li>Report cards live inside the block.</li></ul></section>
+   <section><h2>Pros / cons</h2><ul><li>+ Conversation reads as user ↔ orchestrator; updates are clearly “from the app”.</li><li>+ Urgent items still surface while quiet ones collapse.</li><li>− Timing of an event relative to the orchestrator’s reply is less exact.</li></ul></section>
+   <section><h2>Code</h2><ul><li>Same structural tag as A (<code>Event</code> kind) — required here, since grouping keys on it.</li><li>List builder merges consecutive <code>Event</code> messages (and any “[silent]” replies between them) into one <code>UpdatesBlock</code> element with its own collapse state keyed by first message id.</li><li>Collapsed view = header + rows where <code>kind ∈ {NeedsInput, Error}</code>.</li></ul></section>`,
+   render(){ return runs(run => ({t:'run', run})).map(x => {
+     if (x.t!=='run') return base(x);
+     const big = x.run.length > 1, urgent = x.run.filter(e=>e.k==='ask'||e.k==='err');
+     const rows = x.run.map(e => e.t==='report' ? report(e) : evRow(e)).join('');
+     return `<div class="grp updates ${big?'':'open'}"><div class="gh" onclick="this.parentNode.classList.toggle('open')"><span class="chev">${ic('chev')}</span><span>Updates</span>${dotsFor(x.run)}<span style="color:var(--subtle);font-weight:400">${summary(x.run)}</span><span class="tm" style="margin-left:auto;font-size:11px;color:var(--subtle)">${x.run[0].tm}${big?'–'+x.run.at(-1).tm:''}</span></div>
+       ${big?`<div class="collapsed-urgent">${urgent.map(e=>evRow(e)).join('')}</div>`:''}<div class="gb">${rows}</div></div>`;
+   }).join('').replace(/<div class="grp updates open">([\s\S]*?)<\/div>\s*<div class="gb">/g, m=>m); } },
+ c: { pc:`<section><h2>C · Timeline gutter</h2><ul><li>Chat column stays pure conversation; events appear as small cards in a right gutter, aligned to the turn they happened after, on a vertical timeline.</li><li>Reports show as a card with 2 lines; click opens it in the task tab.</li></ul></section>
+   <section><h2>Pros / cons</h2><ul><li>+ Zero noise in the conversation.</li><li>+ Glanceable activity feed.</li><li>− Needs ~230px width; collapses badly next to the task rail / in narrow windows.</li><li>− Two reading columns; harder to tell what the orchestrator was reacting to.</li></ul></section>
+   <section><h2>Code</h2><ul><li>Same <code>Event</code> tag; message list renders a two-column row per turn: <code>(turn elements, events after it)</code>.</li><li>New gutter layout in code_view.rs (only for Home); fallback to A below a width breakpoint — so effectively A + an extra layout.</li></ul></section>`,
+   render(){ // pair each non-event block with events following it
+     const rows = []; let cur = {main:[], side:[]};
+     for (const x of T) { if (isEv(x)) cur.side.push(x); else { if (cur.side.length) { rows.push(cur); cur = {main:[], side:[]}; } cur.main.push(x); } }
+     rows.push(cur);
+     return `<div class="tl">${rows.map(r => `<div class="tl-row"><div class="tl-main">${r.main.map(base).join('')}</div><div class="tl-gutter">${r.side.map(mini).join('')}</div></div>`).join('<div style="height:10px"></div>')}</div>`;
+   } },
+};
+function mini(e) {
+  const k = e.t==='report' ? 'ok' : e.k;
+  const who = e.task ? `<a style="font-weight:600">${e.task}${e.t==='report'?' · report':''}</a>` : e.pane ? mach(e.pane) : `<span class="c">${ic('bg')}${e.bg}</span>`;
+  const label = {ok:'finished',ask:'needs input',err:'error',bg:'exited'}[k];
+  const mb = e.t==='report' ? 'Tab strip now clips overflowing tabs and shows a “+3” overflow menu. 214 tests passed.'
+    : (e.body.match(/class="txt q">(.*?)<\/span>/)||[])[1] || '';
+  const chips = e.t==='report' ? br('winfer/winfer-4') : e.body.replace(/<span class="txt q">.*?<\/span>|<span>[^<]*<\/span>|<span class="txt">.*?<\/span>/g,'');
+  return `<div class="mini" style="--kc:${kcol[k]}"><div class="mh"><span class="ev" style="padding:0;min-height:0"><span class="eic k-${k}">${ic(e.t==='report'?'doc':k)}</span></span>${who}<span style="color:${kcol[k]}">${e.t==='report'?'':label}</span><span class="tm">${e.tm}</span></div>${chips.trim()?`<div class="chips">${chips}</div>`:''}${mb?`<div class="mb">${mb}</div>`:''}</div>`;
+}
+function base(x) {
+  if (x.t==='user') return user(x); if (x.t==='asst') return asst(x); if (x.t==='tools') return tools(x);
+  if (x.t==='prompt') return `<div class="divider" title="${x.raw}">${ic('home')}${x.label}</div>`;
+  if (x.t==='note') return `<div class="divider" style="justify-content:flex-end" title="${x.raw}">${ic('at')}${x.label}</div>`;
+  return '';
+}
+function show(v) {
+  document.querySelectorAll('#vtabs button').forEach(b => b.classList.toggle('on', b.dataset.v===v));
+  document.getElementById('pc').innerHTML = V[v].pc;
+  const chat = document.getElementById('chat'); chat.className = 'chat-inner' + (v==='c'?' wide':''); chat.innerHTML = V[v].render();
+  history.replaceState(null, '', '#'+v);
+}
+document.getElementById('vtabs').onclick = e => e.target.dataset.v && show(e.target.dataset.v);
+show((location.hash||'#a').slice(1));
+</script>
+<style>
+/* B: when an updates block is open hide the urgent preview; when collapsed show it */
+.updates.open .collapsed-urgent { display: none; }
+.updates .collapsed-urgent { display: flex; flex-direction: column; gap: 1px; padding: 0 0 2px 14px; }
+</style>
+</body></html>
