@@ -374,6 +374,21 @@ textarea, input, .md, .ask-code, .ask-q p, .turn-user p, .screen-text, .tool-bod
 .thread-notice > span { display: inline-flex; align-items: flex-start; gap: 6px; max-width: 90%; padding: 5px 11px; border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--raised); color: var(--muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
 .thread-notice svg { flex: none; margin-top: 3px; color: var(--subtle); }
 .thread-notice[data-kind="account"] svg { color: var(--accent); }
+/* Home's app events: one compact line each (desktop: ui/home_events.rs). */
+.event-row { margin: 2px 0; }
+.event-row > button { display: flex; align-items: center; gap: 7px; width: 100%; padding: 5px 8px; border: 0; border-radius: var(--r-lg); background: transparent; color: var(--muted); font: inherit; font-size: 12.5px; text-align: left; }
+.event-row .event-icon { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 5px; color: var(--subtle); background: color-mix(in srgb, currentColor 14%, transparent); }
+.event-row[data-event="finished"] .event-icon, .event-row[data-event="report"] .event-icon { color: var(--success, #3fb27f); }
+.event-row[data-event="needs-input"] .event-icon { color: var(--warning, #fbbf24); }
+.event-row[data-event="error"] .event-icon { color: var(--danger); }
+.event-row[data-event="bg"] .event-icon { color: var(--accent); }
+.event-row .event-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.event-row .time { flex: none; font-size: 11px; color: var(--subtle); }
+.event-row[data-open="true"] .bg-chev { transform: rotate(90deg); }
+.event-row .bg-chev { flex: none; color: var(--subtle); transition: transform 0.2s var(--ease); }
+.event-row[data-event="prompt"] > button { justify-content: center; font-size: 11.5px; color: var(--subtle); }
+.event-row[data-event="prompt"] .event-text { flex: none; }
+.event-detail { margin: 2px 0 0 25px; padding: 8px 10px; border: 1px solid var(--edge); border-radius: var(--r-lg); background: var(--raised); font-size: 13px; }
 .bg-row { margin: 4px 0; }
 .bg-row > button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px; border: 0; border-radius: var(--r-lg); background: transparent; color: var(--muted); font: inherit; font-size: 12.5px; text-align: left; }
 .bg-row .bg-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--success, #3fb27f); }

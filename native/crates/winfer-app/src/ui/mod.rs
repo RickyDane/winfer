@@ -9,4 +9,5 @@ pub mod nebula;
 pub mod code_sheets;
 pub mod code_usage_sheet;
 pub mod code_view;
+mod home_events;
 pub mod viz;

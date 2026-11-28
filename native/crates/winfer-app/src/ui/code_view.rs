@@ -68,7 +68,7 @@ impl Env {
         px(11.5 * self.scale)
     }
 
-        fn open(&self, key: &str, default: bool) -> bool {
+    pub(super) fn open(&self, key: &str, default: bool) -> bool {
         default != self.flipped.contains(key)
     }
 }
@@ -196,8 +196,11 @@ fn tool_icon(name: &str) -> IconName {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum DisplayRow {
+pub(super) enum DisplayRow {
     Item(usize),
+    /// Home's app events (messages it sent, by item index) with whether the orchestrator answered
+    /// "[silent]"; drawn by `home_events`.
+    Events { key: String, events: Vec<(usize, bool)> },
     WorkGroup {
         key: String,
         start: usize,
@@ -213,7 +216,7 @@ impl DisplayRow {
     fn key<'a>(&'a self, items: &'a [Item]) -> &'a str {
         match self {
             DisplayRow::Item(ix) => items.get(*ix).map_or("", Item::key),
-            DisplayRow::WorkGroup { key, .. } | DisplayRow::Report { key, .. } => key.as_str(),
+            DisplayRow::WorkGroup { key, .. } | DisplayRow::Report { key, .. } | DisplayRow::Events { key, .. } => key.as_str(),
             DisplayRow::Working => "cw-working",
         }
     }
@@ -244,7 +247,7 @@ fn push_row(rows: &mut Vec<DisplayRow>, items: &[Item], k: usize, open: &mut Opt
     rows.push(DisplayRow::Report { key: format!("rep-{}", items[k].key()), items: vec![k] });
 }
 
-fn build_display_rows(items: &[Item], busy: bool, compact_tools: bool) -> Vec<DisplayRow> {
+pub(super) fn build_display_rows(items: &[Item], busy: bool, compact_tools: bool) -> Vec<DisplayRow> {
     if !compact_tools {
         let (mut out, mut open) = (Vec::new(), None);
         for k in 0..items.len() {
@@ -458,6 +461,20 @@ fn row_signature(row: &DisplayRow, items: &[Item], env_flipped: &HashSet<String>
     match row {
         DisplayRow::Item(ix) => items.get(*ix).map_or(0, |i| signature(i, env_flipped, env_toggled, now)),
         DisplayRow::Working => u64::MAX,
+        DisplayRow::Events { key, events } => {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            (key, events, env_flipped.contains(key), env_toggled.get(key)).hash(&mut h);
+            for (ix, _) in events {
+                if let Some(i) = items.get(*ix) {
+                    signature(i, env_flipped, env_toggled, now).hash(&mut h);
+                    for n in 0..4 {
+                        let k = format!("evrep-{}-{n}", i.key());
+                        (env_flipped.contains(&k), env_toggled.get(&k)).hash(&mut h);
+                    }
+                }
+            }
+            h.finish()
+        }
         DisplayRow::Report { key, items: charts } => {
             let mut h = std::collections::hash_map::DefaultHasher::new();
             key.hash(&mut h);
@@ -950,7 +967,7 @@ impl CodeView {
         self.model.update(cx, |m, cx| m.send(cmd, cx));
     }
 
-    fn toggle(&mut self, key: &str, was_open: bool, cx: &mut Context<Self>) {
+    pub(super) fn toggle(&mut self, key: &str, was_open: bool, cx: &mut Context<Self>) {
         if !self.flipped.remove(key) {
             self.flipped.insert(key.to_string());
         }
@@ -1209,8 +1226,11 @@ impl CodeView {
     }
 
     /// Splices what changed since the last frame into the list state.
-    fn sync_list(&mut self, items: &[Item], busy: bool, compact_tools: bool, now: u64) {
+    fn sync_list(&mut self, items: &[Item], busy: bool, compact_tools: bool, now: u64, home: bool) {
         let mut rows = build_display_rows(items, busy, compact_tools);
+        if home {
+            rows = super::home_events::fold(items, rows);
+        }
         if items.len() != self.seen_items {
             self.seen_items = items.len();
             self.visible = PAGE_ROWS;
@@ -1334,7 +1354,7 @@ fn pill(c: Colors, id: impl Into<ElementId>, icon: Option<AnyElement>, label: Op
 }
 
 /// Chevron that smoothly rotates 0 ↔ 90° when a row is toggled open or closed.
-fn toggle_chevron(key: &str, open: bool, toggled: Option<(u64, bool)>, color: Hsla) -> AnyElement {
+pub(super) fn toggle_chevron(key: &str, open: bool, toggled: Option<(u64, bool)>, color: Hsla) -> AnyElement {
     let icon = Icon::new(IconName::ChevronRight).size(px(11.0)).text_color(color);
     if let Some((seq, opening)) = toggled {
         let dur = if opening { 200 } else { 160 };
@@ -1353,7 +1373,7 @@ fn toggle_chevron(key: &str, open: bool, toggled: Option<(u64, bool)>, color: Hs
 }
 
 /// Subtle fade + vertical glide for a tool/reasoning body opening or closing.
-fn toggle_body(key: &str, toggled: Option<(u64, bool)>, body: Div) -> AnyElement {
+pub(super) fn toggle_body(key: &str, toggled: Option<(u64, bool)>, body: Div) -> AnyElement {
     if let Some((seq, opening)) = toggled {
         let dur = if opening { 210 } else { 160 };
         let id = SharedString::from(format!("tb-{key}-{seq}"));
@@ -1450,7 +1470,7 @@ fn welcome_layout(w: f32, h: f32) -> WelcomeLayout {
 }
 
 /// Plays the entrance animation on rows that appeared in the last moment.
-fn enter(env: &Env, key: &str, el: Div) -> AnyElement {
+pub(super) fn enter(env: &Env, key: &str, el: Div) -> AnyElement {
     if env.fresh(key) { rise(el, SharedString::from(format!("in-{key}")), 0, 10.0).into_any_element() } else { el.into_any_element() }
 }
 
@@ -3527,7 +3547,8 @@ impl Render for CodeView {
         }
         let compact_tools = self.compact_tools(cx);
         let items = if self.prefs(cx).8 { items } else { items.into_iter().filter(|i| !matches!(i, Item::Notice { text, error: false, .. } if crate::code::bg_note::parse(text).is_some())).collect() };
-        self.sync_list(&items, busy, compact_tools, now);
+        let home = crate::voice::home_pane(&self.model.read(cx).pane_id).is_some();
+        self.sync_list(&items, busy, compact_tools, now, home);
         // A newly sent message resumes following the bottom, even when scrolled up.
         let last_user = items.iter().rev().find(|i| matches!(i, Item::User { .. })).map(|i| i.key().to_string());
         if last_user != self.last_user {
@@ -3570,6 +3591,7 @@ impl Render for CodeView {
                 };
                 let inner: AnyElement = match row {
                     DisplayRow::Working => working_row(&list_env),
+                    DisplayRow::Events { key, events } => super::home_events::events_row(&list_env, items, key, events),
                     DisplayRow::Report { key, items: charts } => report_row(&list_env, key, charts.iter().filter_map(|ix| items.get(*ix))),
                     DisplayRow::WorkGroup { key, start, end, active } => {
                         work_group_row(&list_env, items, key, *start, *end, *active)

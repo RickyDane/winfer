@@ -7,12 +7,35 @@ use super::state::{CodeState, Item};
 use crate::request::{AgentRequest, RequestOption};
 use serde_json::{Value, json};
 
+/// One of Home's app events as a phone notice: `event` says which kind, `detail` holds a
+/// question, error or report in full.
+fn event_row(id: &str, e: &super::home_event::HomeEvent, at: u64) -> Value {
+    use super::home_event::EventKind::*;
+    let kind = match e.kind {
+        Finished => "finished",
+        NeedsInput => "needs-input",
+        Error => "error",
+        Report => "report",
+        BgExit => "bg",
+        Opened | Mention => "prompt",
+        Info => "info",
+    };
+    json!({ "id": id, "role": "notice", "kind": "event", "event": kind, "text": e.summary(), "detail": e.detail, "ts": (at > 0).then_some(at) })
+}
+
 /// The transcript as the phone's thread: your messages, the replies, and a row per tool call.
 pub fn live_thread(state: &CodeState, limit: usize) -> Vec<Value> {
     let mut out = Vec::new();
     for item in &state.items {
         match item {
-            Item::User { key, text, at, .. } => out.push(json!({ "id": key, "role": "user", "text": text, "ts": (*at > 0).then_some(*at) })),
+            Item::User { key, text, at, .. } => match super::home_event::parse_message(text).filter(|e| !e.is_empty()) {
+                // Home's app events: a compact line each. Phones that don't know kind "event" show
+                // it as a plain note, so older apps keep working.
+                Some(events) => out.extend(events.iter().enumerate().map(|(n, e)| event_row(&format!("{key}-{n}"), e, *at))),
+                None => out.push(json!({ "id": key, "role": "user", "text": text, "ts": (*at > 0).then_some(*at) })),
+            },
+            // An orchestrator's "[silent]" (the event needed nothing from the user) isn't a reply.
+            Item::Text { text, .. } if super::home_event::is_silent(text) => {}
             Item::Text { key, text, .. } => out.push(json!({ "id": key, "role": "assistant", "text": text, "ts": null })),
             Item::Tool { key, name, title, input, ok, started, ended, .. } => {
                 let task = state.tasks.iter().find(|t| t.ev.tool_id.as_deref() == Some(key.as_str()));
@@ -190,6 +213,19 @@ mod tests {
         assert_eq!(t.len(), 1);
         assert_eq!((t[0]["role"].as_str(), t[0]["text"].as_str(), t[0]["state"].as_str()), (Some("bg"), Some("Dev · exit 1 · 4s"), Some("failed")));
         assert_eq!(t[0]["detail"], "npm run dev\n\nboom");
+    }
+
+    #[test]
+    fn home_events_are_notices_and_silent_answers_vanish() {
+        let mut s = CodeState::default();
+        s.items.push(Item::User { key: "u".into(), text: "[winfer] Task 2 · a/2 (c) needs input: Go?\n[winfer] x:1 (c) finished.".into(), at: 5, images: Vec::new() });
+        s.items.push(Item::Text { key: "t".into(), text: "[silent]".into(), streaming: false });
+        s.items.push(Item::User { key: "m".into(), text: "my own".into(), at: 6, images: Vec::new() });
+        let t = live_thread(&s, 10);
+        assert_eq!(t.len(), 3);
+        assert_eq!((t[0]["role"].as_str(), t[0]["kind"].as_str(), t[0]["event"].as_str(), t[0]["text"].as_str()), (Some("notice"), Some("event"), Some("needs-input"), Some("Task 2 · a/2 needs input: Go?")));
+        assert_eq!((t[1]["id"].as_str(), t[1]["event"].as_str()), (Some("u-1"), Some("finished")));
+        assert_eq!(t[2]["role"], "user");
     }
 
     #[test]

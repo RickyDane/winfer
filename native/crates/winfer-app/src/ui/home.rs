@@ -36,7 +36,7 @@ pub(super) fn routing_guide() -> String {
     std::fs::read_to_string(own).ok().filter(|t| !t.trim().is_empty()).unwrap_or_else(|| ROUTING.to_string())
 }
 /// What an orchestrator replies when there's nothing to tell.
-const SILENT: &str = "[silent]";
+use crate::code::home_event::{HomeEvent, SILENT};
 /// Seconds (ticks) a pane's new status must hold before an orchestrator hears of it: hooks fire
 /// per turn and idle detection can flap.
 const SETTLE_TICKS: u8 = 2;
@@ -377,12 +377,7 @@ pub fn current_step(items: &[Item]) -> Option<String> {
 /// An event about an agent an orchestrator follows: `place` is "api/2" (or "pane 2" in a fork's
 /// own workspace), `task` the task it works on, if the event goes to the conductor.
 pub fn pane_event(task: Option<&HomeTask>, place: &str, agent: &str, branch: Option<&str>, what: &str, message: Option<&str>) -> String {
-    let branch = branch.map(|b| format!(", branch {b}")).unwrap_or_default();
-    let message = message.map(str::trim).filter(|m| !m.is_empty()).map(|m| format!(": {}", m.chars().take(200).collect::<String>())).unwrap_or_default();
-    let task = task.map(|t| format!("{} · ", t.title())).unwrap_or_default();
-    let place = if place.starts_with("pane ") { format!("Pane {}", &place[5..]) } else { place.to_string() };
-    let text = format!("[winfer] {task}{place} ({agent}{branch}) {what}{message}");
-    if text.ends_with(['.', '?', '!']) { text } else { format!("{text}.") }
+    HomeEvent::pane(task.map(HomeTask::title).as_deref(), place, agent, branch, what, message).raw
 }
 
 /// winfer's UI actions as MCP tools, for orchestrators.
@@ -888,7 +883,7 @@ impl Root {
         let stage = text.trim().strip_prefix("Stage:").and_then(|r| Stage::parse(r.split(['.', '\n', ',']).next().unwrap_or_default()));
         let first: String = text.lines().map(str::trim).find(|l| !l.is_empty() && !l.starts_with("Stage:")).unwrap_or_default().chars().take(200).collect();
         self.set_task(task_id, stage, (!first.is_empty()).then_some(first.as_str()), cx);
-        let note = format!("[winfer] {} ({}): {}", task.title(), task.workspace, text.chars().take(MAX_SPOKEN).collect::<String>());
+        let note = HomeEvent::report(&task.title(), &task.workspace, &text.chars().take(MAX_SPOKEN).collect::<String>()).raw;
         self.queue_for(CONDUCTOR, note, cx);
     }
 
@@ -1136,7 +1131,7 @@ impl Root {
             self.home.pending_remote.remove(&task);
             let title = self.task(&task).map(HomeTask::title).unwrap_or_default();
             self.set_task(&task, Some(Stage::Failed), Some(text), cx);
-            self.queue_for(CONDUCTOR, format!("[winfer] {title}: the other machine said: {text}"), cx);
+            self.queue_for(CONDUCTOR, HomeEvent::remote_said(&title, text).raw, cx);
         }
         true
     }
@@ -1513,9 +1508,10 @@ impl Root {
             return;
         }
         self.home.last_brief = Some(Instant::now());
-        let text = format!(
-            "[winfer] The user opened Home. Give a short brief (3-6 bullets) of what needs them and what happened: agents waiting ({waiting}), reviews ready ({reviews}), open tasks ({open_tasks}), usage left, failures. Look before you write (list_tasks, list_workspaces, usage_status; list_reviews if you have it). No preamble."
-        );
+        let text = HomeEvent::prompt(&format!(
+            "The user opened Home. Give a short brief (3-6 bullets) of what needs them and what happened: agents waiting ({waiting}), reviews ready ({reviews}), open tasks ({open_tasks}), usage left, failures. Look before you write (list_tasks, list_workspaces, usage_status; list_reviews if you have it). No preamble."
+        ))
+        .raw;
         self.home.voice_turn = false;
         self.queue_for(CONDUCTOR, text, cx);
     }

@@ -148,7 +148,9 @@ export interface Message {
   /** "bg": a finished background task: `text` is its one-line summary, `detail` its command and output. */
   detail?: string;
   /** "notice": what the session note is about (context compaction, or a move to another account at a usage limit). */
-  kind?: "compact" | "microcompact" | "account";
+  kind?: "compact" | "microcompact" | "account" | "event";
+  /** "notice" of kind "event": one of Home's app events (an agent finished, a task's report…); `detail` holds its question, error or report. */
+  event?: "finished" | "needs-input" | "error" | "report" | "bg" | "prompt" | "info";
 }
 
 /** One plan limit (5-hour, weekly…): `left` is the percent still available. */
