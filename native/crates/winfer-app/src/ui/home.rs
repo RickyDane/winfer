@@ -1550,27 +1550,41 @@ impl Root {
         if voice_tools::needs_confirmation(tool, args) {
             return Some(Ok("Not done: ask the user in your reply, and call again with confirmed: true once they said yes.".into()));
         }
-        // The actions work on the workspace on screen; app-wide ones leave the user where they are.
-        const APP_WIDE: &[&str] = &["switch_workspace", "create_workspace", "open_settings", "set_theme", "show_shortcuts", "toggle_sidebar", "toggle_browser", "show_side_panel", "show_overview", "show_history", "usage_status"];
-        let mut note = String::new();
-        let s = self.state.read(cx);
-        if (s.active_workspace_id != ws_id || s.view() != View::Workspace) && !APP_WIDE.contains(&tool) && !ws_id.is_empty() {
-            let name = s.workspaces.iter().find(|w| w.id == ws_id).map(|w| w.name.clone()).unwrap_or_default();
-            self.execute(Command::WorkspaceSwitch(ws_id.to_string()), window, cx);
-            self.update_state(cx, |s| s.set_view(View::Workspace));
-            note = format!(" (switched the user's view to workspace {name})");
+        // Orchestrators act in the background: the user's view, workspace and focus stay put.
+        // Only the conductor may navigate, and only through the explicit navigation tools.
+        let conductor = orch_pane == CONDUCTOR;
+        if NAVIGATION_TOOLS.contains(&tool) && !conductor {
+            return Some(Ok("Not done: task orchestrators don't change the user's view. Tell the user in your reply instead.".into()));
         }
+        let scoped = !NAVIGATION_TOOLS.contains(&tool) && !ws_id.is_empty();
+        let mut note = String::new();
+        let saved = scoped.then(|| {
+            let s = self.state.read(cx);
+            if s.active_workspace_id != ws_id || s.view() != View::Workspace {
+                let name = s.workspaces.iter().find(|w| w.id == ws_id).map(|w| w.name.clone()).unwrap_or_default();
+                note = format!(" (applied to workspace {name} in the background; the user's view didn't change)");
+            }
+            let focused_view = self.focused_view.clone();
+            let mut saved = None;
+            self.state.update(cx, |s, _| saved = Some(scope_to_workspace(s, ws_id)));
+            (saved.unwrap(), focused_view)
+        });
         let panes = |s: &AppState| -> HashSet<String> { s.workspaces.iter().find(|w| w.id == ws_id).map(|w| w.panes.iter().map(|p| p.id.clone()).collect()).unwrap_or_default() };
         let before = panes(self.state.read(cx));
-        let commands = match voice_tools::registry_commands(tool, args, &self.voice_context(cx)) {
-            Ok(c) => c,
-            Err(e) => return Some(Err(e)),
-        };
-        if commands.is_empty() {
-            return Some(Ok("Nothing to do with those arguments.".into()));
+        let commands = voice_tools::registry_commands(tool, args, &self.voice_context(cx));
+        if let Ok(commands) = &commands {
+            for c in commands.iter().cloned() {
+                self.execute(c, window, cx);
+            }
         }
-        for c in commands {
-            self.execute(c, window, cx);
+        if let Some((saved, focused_view)) = saved {
+            self.update_state(cx, |s| saved.restore(s));
+            self.focused_view = focused_view;
+        }
+        match commands {
+            Err(e) => return Some(Err(e)),
+            Ok(c) if c.is_empty() => return Some(Ok("Nothing to do with those arguments.".into())),
+            Ok(_) => {}
         }
         let started: Vec<String> = panes(self.state.read(cx)).difference(&before).cloned().collect();
         for id in &started {
@@ -1978,6 +1992,38 @@ pub(super) fn home_dir() -> String {
     dir.to_string_lossy().into_owned()
 }
 
+
+/// UI tools that change where the user is looking. Only the Home conductor may run them
+/// (because the user asked); everything else an orchestrator runs stays in the background.
+const NAVIGATION_TOOLS: &[&str] = &["switch_workspace", "create_workspace", "open_settings", "set_theme", "show_shortcuts", "toggle_sidebar", "toggle_browser", "show_side_panel", "show_overview", "show_history", "open_url", "usage_status"];
+
+/// What the user is looking at, kept while an orchestrator's action runs in its workspace.
+pub(super) struct UserFocus {
+    workspace: String,
+    pane: Option<String>,
+    view: View,
+}
+
+impl UserFocus {
+    pub(super) fn restore(self, s: &mut AppState) {
+        s.active_workspace_id = self.workspace;
+        // A pane the user had focused may have been closed by the action.
+        s.focused_pane_id = self.pane.filter(|p| s.pane(p).is_some()).or_else(|| s.active().and_then(|w| w.panes.first()).map(|p| p.id.clone()));
+        s.set_view(self.view);
+    }
+}
+
+/// Points the commands at `ws_id` (as if it were on screen) without touching the sidebar;
+/// `UserFocus::restore` puts the user's workspace, pane and view back.
+pub(super) fn scope_to_workspace(s: &mut AppState, ws_id: &str) -> UserFocus {
+    let saved = UserFocus { workspace: s.active_workspace_id.clone(), pane: s.focused_pane_id.clone(), view: s.view() };
+    if s.active_workspace_id != ws_id {
+        s.active_workspace_id = ws_id.to_string();
+        s.focused_pane_id = s.active().and_then(|w| w.panes.first()).map(|p| p.id.clone());
+    }
+    saved
+}
+
 #[cfg(test)]
 mod tests {
     use super::{AgentStatus, HomeTask, Item, Mirror, Stage, TaskMode, Watch, all_merged, answer_of, finished, free_number, new_task_id, remote_pane_open, reopen, current_step, find_task, fork_brief, home_tools, light_stage, listed_tasks, pane_event, ui_tools};
@@ -2248,5 +2294,39 @@ mod tests {
         assert_eq!(required(false), json!(["reason"]));
         let ui = ui_tools(&[("claude".into(), "Claude Code".into())]);
         assert!(ui.iter().find(|t| t["name"] == "merge_worktree").unwrap()["inputSchema"]["properties"]["confirmed"].is_object());
+    }
+
+    #[test]
+    fn orchestrator_actions_stay_in_the_background() {
+        use super::{scope_to_workspace, NAVIGATION_TOOLS};
+        use winfer_core::model::{AddPane, AppState, View};
+        let mut s = AppState::new();
+        s.hydrate(json!({ "workspaces": [], "ui": null }));
+        let mine = s.active_workspace_id.clone();
+        let other = s.create_workspace("other", "/tmp/other");
+        s.set_active_workspace(&mine);
+        s.set_view(View::Home);
+        // A task orchestrator spawns into a workspace that isn't on screen.
+        let saved = scope_to_workspace(&mut s, &other);
+        let a = s.add_pane("shell", AddPane { worktree: Some(false), ..Default::default() });
+        let b = s.add_pane("shell", AddPane { worktree: Some(false), ..Default::default() });
+        saved.restore(&mut s);
+        assert_eq!(s.view(), View::Home);
+        assert_eq!(s.active_workspace_id, mine);
+        let w = s.workspaces.iter().find(|w| w.id == other).unwrap();
+        assert!(w.panes.iter().any(|p| p.id == a) && w.panes.iter().any(|p| p.id == b));
+        assert_ne!(s.focused_pane_id.as_deref(), Some(b.as_str()));
+        // Focus and zoom land in that workspace without navigating.
+        let saved = scope_to_workspace(&mut s, &other);
+        s.focus_pane(&a);
+        if let Some(w) = s.active_mut() {
+            w.zoomed_pane_id = Some(a.clone());
+        }
+        saved.restore(&mut s);
+        assert_eq!((s.view(), s.active_workspace_id.as_str()), (View::Home, mine.as_str()));
+        assert_eq!(s.workspaces.iter().find(|w| w.id == other).unwrap().zoomed_pane_id.as_deref(), Some(a.as_str()));
+        for t in ["focus_pane", "zoom_pane", "set_layout", "spawn_agent", "spawn_panes"] {
+            assert!(!NAVIGATION_TOOLS.contains(&t), "{t}");
+        }
     }
 }
