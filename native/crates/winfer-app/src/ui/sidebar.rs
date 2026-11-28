@@ -351,6 +351,14 @@ impl Root {
             .when(!shell, |d| d.child(div().absolute().right(px(-2.0)).bottom(px(-2.0)).size(px(8.0)).rounded_full().bg(status_color(status, &c))))
     }
 
+    /// Middle click on a session row closes it, like a browser tab.
+    fn close_on_middle_click(id: String, cx: &Context<Self>) -> impl Fn(&MouseUpEvent, &mut Window, &mut App) + 'static {
+        cx.listener(move |this, _, window, cx| {
+            cx.stop_propagation();
+            this.execute(Command::Close(PaneRef::Id(id.clone())), window, cx);
+        })
+    }
+
     fn render_pane_row(&self, pane: &Pane, index: usize, sortable: bool, c: Colors, cx: &mut Context<Self>) -> AnyElement {
         let s = self.state.read(cx);
         let focused = s.focused_pane_id.as_deref() == Some(&pane.id) && s.active_workspace_id == pane.workspace_id;
@@ -362,6 +370,7 @@ impl Root {
         let renaming = self.sidebar.renaming.as_ref().filter(|(id, _)| *id == pane.id && !self.sidebar.rename_in_header).map(|(_, input)| input.clone());
         let status = pane.status;
         let (focus, menu_pane, rename, hover_dir) = (pane.id.clone(), pane.clone(), pane.id.clone(), pane.cwd.clone());
+        let close = pane.id.clone();
         let mono = crate::fonts::mono(cx);
         let drag = DraggedRow { id: pane.id.clone(), label: label.clone(), workspace: false, c };
         let drop_ws = pane.workspace_id.clone();
@@ -402,6 +411,7 @@ impl Root {
                     this.execute(Command::Focus(PaneRef::Id(focus.clone())), window, cx);
                 }
             }))
+            .on_mouse_up(MouseButton::Middle, Self::close_on_middle_click(close, cx))
             .on_mouse_down(MouseButton::Right, cx.listener(move |this, e: &MouseDownEvent, _, cx| {
                 let items = this.pane_menu(&menu_pane, cx);
                 let title = menu_pane.worktree.as_ref().map_or(menu_pane.cwd.clone(), |t| t.branch.clone());
@@ -509,11 +519,12 @@ impl Root {
             let s = self.state.read(cx);
             for p in &waiting {
                 let ask = s.progress.get(&p.id).and_then(|e| e.step.clone()).unwrap_or_else(|| "Waiting for your input".into());
-                let (focus, approve) = (p.id.clone(), p.id.clone());
+                let (focus, approve, close) = (p.id.clone(), p.id.clone(), p.id.clone());
                 sec = sec.child(
                     div().id(SharedString::from(format!("need-{}", p.id))).flex().items_center().gap(px(9.0)).rounded_md().px_1p5().py(px(7.0)).cursor_pointer()
                         .hover(move |d| d.bg(Hsla { a: 0.08, ..c.warning }))
                         .on_click(cx.listener(move |this, _, window, cx| this.execute(Command::Focus(PaneRef::Id(focus.clone())), window, cx)))
+                        .on_mouse_up(MouseButton::Middle, Self::close_on_middle_click(close, cx))
                         .child(Self::agent_tile(&p.provider, p.status, c))
                         .child(div().flex_1().min_w_0().flex().flex_col()
                             .child(div().truncate().text_size(px(12.5)).text_color(c.fg).child(s.pane_label(p)))
@@ -781,9 +792,11 @@ impl Root {
 
         let tile_button = |this: &Self, p: &Pane, cx: &mut Context<Self>| {
             let (focus, tip) = (p.id.clone(), this.state.read(cx).pane_label(p));
+            let close = p.id.clone();
             div().id(SharedString::from(format!("rail-{}", p.id))).p(px(5.0)).rounded_md().cursor_pointer().hover(move |d| d.bg(c.hover))
                 .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
                 .on_click(cx.listener(move |this, _, window, cx| this.execute(Command::Focus(PaneRef::Id(focus.clone())), window, cx)))
+                .on_mouse_up(MouseButton::Middle, Self::close_on_middle_click(close, cx))
                 .child(Self::agent_tile(&p.provider, p.status, c))
         };
         let mut body = div().flex().flex_col().items_center().gap_1p5().py_2();
