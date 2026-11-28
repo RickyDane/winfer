@@ -63,7 +63,7 @@ fn machine_name(peer: &str) -> Option<String> {
 const DEMO_PEER: &str = "demo-peer";
 
 /// A paired machine's name with a server icon (task cards, a remote task's chat).
-fn machine_chip(name: &str, c: Colors) -> Div {
+pub(super) fn machine_chip(name: &str, c: Colors) -> Div {
     div().flex_shrink_0().flex().items_center().gap_1().px_1p5().h(px(18.0)).rounded(px(5.0)).bg(Hsla { a: 0.14, ..c.accent }).text_color(c.accent).text_size(px(10.5)).font_weight(FontWeight::MEDIUM)
         .child(Icon::new(IconName::Server).size(px(10.5)))
         .child(name.to_string())

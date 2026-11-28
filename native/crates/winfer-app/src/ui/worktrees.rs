@@ -297,7 +297,7 @@ impl Root {
                                 list.retain(|w| w["info"]["path"].as_str() != Some(path.as_str()));
                             }
                         }
-                        Err(e) => this.toast(format!("Couldn't remove worktree: {e}"), cx),
+                        Err(e) => this.toast_err("Couldn't remove worktree", e, cx),
                     }
                     this.list_worktrees(&workspace, cx);
                     this.settle_home_tasks(cx);

@@ -305,10 +305,195 @@ fn force_split_dir(node: &LayoutNode, id: &str, dir: SplitDir) -> LayoutNode {
     }
 }
 
+/// What a toast is about: picks its icon, colour and how long it stays.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ToastKind {
+    Success,
+    Error,
+    Info,
+    Warning,
+    /// Work in flight ("Pushing…"); replaced in place through its key when it's done.
+    Progress,
+    /// An agent or task event (a task finished, the orchestrator said something).
+    Agent,
+}
+
+/// A chip under an agent toast's text, as on Home's task cards.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum ToastChip {
+    Workspace(SharedString),
+    Machine(SharedString),
+}
+
 #[derive(Clone)]
 pub(super) struct Toast {
-    pub text: SharedString,
-    pub action: Option<(SharedString, Command)>,
+    /// Unique per toast; clicks and expiry find it by this.
+    pub id: u64,
+    /// Set for toasts that later updates replace (`toast_update`, `toast_progress`).
+    pub key: Option<SharedString>,
+    pub kind: ToastKind,
+    /// Markdown, one line.
+    pub title: SharedString,
+    /// Markdown; for errors the raw error text, shown in a copyable mono block.
+    pub detail: Option<SharedString>,
+    pub chips: Vec<ToastChip>,
+    pub actions: Vec<(SharedString, Command)>,
+    /// Time left before it goes; `None` stays until dismissed.
+    pub left: Option<Duration>,
+    pub life: Option<Duration>,
+}
+
+impl Toast {
+    pub(super) fn new(kind: ToastKind, title: impl Into<SharedString>) -> Self {
+        Self { id: 0, key: None, kind, title: title.into(), detail: None, chips: Vec::new(), actions: Vec::new(), left: None, life: None }
+    }
+
+    /// A toast from the free text the old `toast(text)` calls pass: kind guessed from the wording,
+    /// first line the title, the rest the detail (and for errors, what follows the first ": ").
+    pub(super) fn from_text(text: &str) -> Self {
+        let kind = infer_toast_kind(text);
+        let (title, detail) = split_toast_text(text, kind);
+        Self { detail: detail.map(Into::into), ..Self::new(kind, title) }
+    }
+
+    pub(super) fn detail(mut self, detail: impl Into<SharedString>) -> Self {
+        let d: SharedString = detail.into();
+        self.detail = (!d.trim().is_empty()).then_some(d);
+        self
+    }
+
+    pub(super) fn action(mut self, label: impl Into<SharedString>, command: Command) -> Self {
+        self.actions.push((label.into(), command));
+        self
+    }
+
+    pub(super) fn chip(mut self, chip: ToastChip) -> Self {
+        self.chips.push(chip);
+        self
+    }
+
+    pub(super) fn keyed(mut self, key: impl Into<SharedString>) -> Self {
+        self.key = Some(key.into());
+        self
+    }
+}
+
+/// Errors and toasts with a button stay until dismissed; work in flight waits a minute for its
+/// update; everything else goes after 4 seconds, as before.
+pub(super) fn toast_lifetime(kind: ToastKind, has_actions: bool) -> Option<Duration> {
+    match kind {
+        ToastKind::Error => None,
+        _ if has_actions => None,
+        ToastKind::Progress => Some(Duration::from_secs(60)),
+        _ => Some(Duration::from_secs(4)),
+    }
+}
+
+pub(super) fn infer_toast_kind(text: &str) -> ToastKind {
+    let first = text.lines().next().unwrap_or("").trim();
+    let lower = first.to_lowercase();
+    let starts = |ps: &[&str]| ps.iter().any(|p| lower.starts_with(p));
+    let has = |ps: &[&str]| ps.iter().any(|p| lower.contains(p));
+    if starts(&["couldn't", "couldn’t", "could not", "can't", "can’t", "cannot", "unable", "error", "failed"])
+        || has(&[" failed", "not possible", "error:", " can't run", " can’t run", "couldn't "])
+    {
+        return ToastKind::Error;
+    }
+    if first.ends_with('…') || first.ends_with("...") {
+        return ToastKind::Progress;
+    }
+    if has(&["limit left", "% of the", "warning", "anymore", "no longer", "not paired"]) {
+        return ToastKind::Warning;
+    }
+    const DONE: &[&str] = &[
+        "merged", "discarded", "copied", "pushed", "unpaired", "paired", "saved", "installed", "reloaded", "removed", "created",
+        "deleted", "renamed", "sent", "restored", "updated", "imported", "exported", "enabled", "disabled", "added", "applied", "finished",
+    ];
+    let words: Vec<String> = lower.split_whitespace().take(3).map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()).to_string()).collect();
+    if words.iter().any(|w| DONE.contains(&w.as_str())) || lower.contains("up to date") {
+        return ToastKind::Success;
+    }
+    ToastKind::Info
+}
+
+pub(super) fn split_toast_text(text: &str, kind: ToastKind) -> (String, Option<String>) {
+    let text = text.trim();
+    let (first, rest) = match text.split_once('\n') {
+        Some((a, b)) => (a.trim(), Some(b.trim()).filter(|b| !b.is_empty())),
+        None => (text, None),
+    };
+    if kind == ToastKind::Error && rest.is_none()
+        && let Some((head, tail)) = first.split_once(": ")
+        && !head.is_empty()
+        && !tail.trim().is_empty()
+    {
+        return (head.to_string(), Some(tail.trim().to_string()));
+    }
+    (first.to_string(), rest.map(str::to_string))
+}
+
+/// The toasts on screen and the deck's state.
+#[derive(Default)]
+pub(super) struct Toasts {
+    pub items: Vec<Toast>,
+    next_id: u64,
+    /// The pointer is over the deck: it fans out and timers stop.
+    pub hovered: bool,
+    /// Fanned out by a click on the "+N more" pill.
+    pub pinned: bool,
+    ticking: bool,
+}
+
+impl Toasts {
+    pub(super) fn spread(&self) -> bool {
+        self.hovered || self.pinned
+    }
+
+    /// Adds `toast`, or replaces the one with the same key (or the same title and detail),
+    /// restarting its timer. Returns its id.
+    pub(super) fn push(&mut self, mut toast: Toast) -> u64 {
+        toast.life = toast_lifetime(toast.kind, !toast.actions.is_empty());
+        toast.left = toast.life;
+        let same = |t: &Toast| match (&t.key, &toast.key) {
+            (Some(a), Some(b)) => a == b,
+            (None, None) => t.title == toast.title && t.detail == toast.detail,
+            _ => false,
+        };
+        if let Some(i) = self.items.iter().position(same) {
+            toast.id = self.items[i].id;
+            self.items.remove(i);
+        } else {
+            self.next_id += 1;
+            toast.id = self.next_id;
+        }
+        let id = toast.id;
+        self.items.push(toast);
+        id
+    }
+
+    pub(super) fn dismiss(&mut self, id: u64) {
+        self.items.retain(|t| t.id != id);
+        if self.items.len() <= 3 {
+            self.pinned = false;
+        }
+    }
+
+    /// Counts timers down by `dt` unless the deck is spread; drops the ones that ran out.
+    /// Returns whether any toast still has a timer.
+    pub(super) fn tick(&mut self, dt: Duration) -> bool {
+        if !self.spread() {
+            for t in &mut self.items {
+                if let Some(left) = &mut t.left {
+                    *left = left.saturating_sub(dt);
+                }
+            }
+            self.items.retain(|t| t.left.is_none_or(|l| !l.is_zero()));
+        }
+        if self.items.len() <= 3 {
+            self.pinned = false;
+        }
+        self.items.iter().any(|t| t.left.is_some())
+    }
 }
 
 impl Root {
@@ -391,31 +576,96 @@ impl Root {
     }
 
     pub(super) fn toast(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
-        self.push_toast(text.into(), None, cx);
+        self.push_toast(Toast::from_text(&text.into()), cx);
     }
 
     pub(super) fn toast_action(&mut self, text: impl Into<SharedString>, label: &'static str, action: Command, cx: &mut Context<Self>) {
-        self.push_toast(text.into(), Some((label.into(), action)), cx);
+        self.push_toast(Toast::from_text(&text.into()).action(label, action), cx);
     }
 
     pub(super) fn toast_with_label(&mut self, text: impl Into<SharedString>, label: String, action: Command, cx: &mut Context<Self>) {
-        self.push_toast(text.into(), Some((label.into(), action)), cx);
+        self.push_toast(Toast::from_text(&text.into()).action(label, action), cx);
     }
 
-    fn push_toast(&mut self, text: SharedString, action: Option<(SharedString, Command)>, cx: &mut Context<Self>) {
-        let lifetime = if action.is_some() { 12 } else { 4 };
-        self.toasts.push(Toast { text: text.clone(), action });
-        cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(Duration::from_secs(lifetime)).await;
-            let _ = this.update(cx, |this, cx| {
-                if let Some(i) = this.toasts.iter().position(|t| t.text == text) {
-                    this.toasts.remove(i);
+    pub(super) fn toast_ok(&mut self, title: impl Into<SharedString>, cx: &mut Context<Self>) {
+        self.push_toast(Toast::new(ToastKind::Success, title), cx);
+    }
+
+    /// An error: `title` says what failed, `err` (shown raw, copyable) why. Stays until dismissed.
+    pub(super) fn toast_err(&mut self, title: impl Into<SharedString>, err: impl std::fmt::Display, cx: &mut Context<Self>) {
+        self.push_toast(Toast::new(ToastKind::Error, title).detail(err.to_string()), cx);
+    }
+
+    /// Work in flight under `key`; a later `toast_update` with the same key replaces it.
+    pub(super) fn toast_progress(&mut self, key: impl Into<SharedString>, title: impl Into<SharedString>, cx: &mut Context<Self>) {
+        self.push_toast(Toast::new(ToastKind::Progress, title).keyed(key), cx);
+    }
+
+    /// Replaces the toast under `key` (or shows a new one), e.g. "Pushing…" → "Pushed".
+    pub(super) fn toast_update(&mut self, key: impl Into<SharedString>, kind: ToastKind, title: impl Into<SharedString>, detail: Option<String>, cx: &mut Context<Self>) {
+        let mut toast = Toast::new(kind, title).keyed(key);
+        if let Some(d) = detail {
+            toast = toast.detail(d);
+        }
+        self.push_toast(toast, cx);
+    }
+
+    pub(super) fn push_toast(&mut self, toast: Toast, cx: &mut Context<Self>) -> u64 {
+        let id = self.toasts.push(toast);
+        self.tick_toasts(cx);
+        cx.notify();
+        id
+    }
+
+    pub(super) fn dismiss_toast(&mut self, id: u64, cx: &mut Context<Self>) {
+        self.toasts.dismiss(id);
+        cx.notify();
+    }
+
+    /// One timer drives every toast's countdown (and its bar) while any has one.
+    fn tick_toasts(&mut self, cx: &mut Context<Self>) {
+        if std::mem::replace(&mut self.toasts.ticking, true) {
+            return;
+        }
+        const STEP: Duration = Duration::from_millis(100);
+        cx.spawn(async move |this, cx| loop {
+            cx.background_executor().timer(STEP).await;
+            let more = this.update(cx, |this, cx| {
+                let more = this.toasts.tick(STEP);
+                if !more {
+                    this.toasts.ticking = false;
                 }
                 cx.notify();
+                more
             });
+            if !more.unwrap_or(false) {
+                break;
+            }
         })
         .detach();
-        cx.notify();
+    }
+
+    /// Development aid (`WINFER_NATIVE_LAYER=toasts`): one of each kind of toast.
+    #[cfg(debug_assertions)]
+    pub(super) fn toast_demo(&mut self, cx: &mut Context<Self>) {
+        self.toast("Plugins reloaded", cx);
+        self.toast("studio-mac: 12% of the 5-hour limit left\nResets at 18:40", cx);
+        self.toast_action("Merged winfer/winfer-4 into main", "Undo", Command::Palette(None), cx);
+        self.toast_err("Push failed", "fatal: unable to access 'https://github.com/winfer/winfer.git/': Could not resolve host: github.com", cx);
+        self.push_toast(
+            Toast::new(ToastKind::Agent, "Task 7 finished")
+                .detail("**Ready for review**: refactored `render_toasts` and added [tests](https://winfer.dev).")
+                .chip(ToastChip::Workspace("winfer".into()))
+                .chip(ToastChip::Machine("studio-mac".into()))
+                .action("Review", Command::Palette(None)),
+            cx,
+        );
+        self.toast_progress("demo-push", "Pushing `winfer/winfer-11`…", cx);
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_secs(3)).await;
+            let _ = this.update(cx, |this, cx| this.toast_update("demo-push", ToastKind::Success, "Pushed `winfer/winfer-11` to origin", Some("Opened PR [#412](https://winfer.dev)".into()), cx));
+        })
+        .detach();
     }
 
     fn worktree_of(&mut self, target: &PaneRef, cx: &mut Context<Self>) -> Option<Pane> {
@@ -470,7 +720,7 @@ impl Root {
             if answer.await != Ok(0) {
                 return;
             }
-            let _ = this.update(cx, |this, cx| this.toast(format!("Merging {branch} into {base}…"), cx));
+            let _ = this.update(cx, |this, cx| this.toast_progress(format!("merge:{branch}"), format!("Merging `{branch}` into `{base}`…"), cx));
             let result = tauri::async_runtime::spawn(async move {
                 let info = worktree_info(&info)?;
                 if dirty {
@@ -481,14 +731,14 @@ impl Root {
             .await;
             let _ = this.update(cx, |this, cx| match result {
                 Ok(Ok(())) => {
-                    this.toast(format!("Merged {branch} into {base}"), cx);
+                    this.toast_update(format!("merge:{branch}"), ToastKind::Success, format!("Merged `{branch}` into `{base}`"), None, cx);
                     this.record_merge_of(&pane, stats, cx);
                     this.set_review_status_for(&pane.id, review::ReviewStatus::Merged, cx);
                     this.update_state(cx, |s| s.log_activity(&workspace, format!("Merged {branch} into {base}"), None));
                     this.home_worktree_merged(&pane, cx);
                 }
-                Ok(Err(err)) => this.toast(format!("Merge not possible: {err}"), cx),
-                Err(err) => this.toast(format!("Merge not possible: {err}"), cx),
+                Ok(Err(err)) => this.toast_update(format!("merge:{branch}"), ToastKind::Error, "Merge not possible", Some(err.to_string()), cx),
+                Err(err) => this.toast_update(format!("merge:{branch}"), ToastKind::Error, "Merge not possible", Some(err.to_string()), cx),
             });
         })
         .detach();
@@ -502,7 +752,7 @@ impl Root {
             this.close_pane(&pane.id, cx);
             this.set_review_status_for(&pane.id, review::ReviewStatus::Discarded, cx);
             this.update_state(cx, |s| s.log_activity(&pane.workspace_id, format!("Discarded {branch}"), None));
-            this.toast(format!("Discarding {branch}…"), cx);
+            this.toast_progress(format!("discard:{branch}"), format!("Discarding `{branch}`…"), cx);
             cx.spawn(async move |this, cx| {
                 let result = tauri::async_runtime::spawn(async move {
                     let info = worktree_info(&info)?;
@@ -511,9 +761,9 @@ impl Root {
                 .await;
                 let _ = this.update(cx, |this, cx| {
                     match result {
-                        Ok(Ok(_)) => this.toast(format!("Discarded {branch}"), cx),
-                        Ok(Err(err)) => this.toast(format!("Couldn't remove worktree: {err}"), cx),
-                        Err(err) => this.toast(format!("Couldn't remove worktree: {err}"), cx),
+                        Ok(Ok(_)) => this.toast_update(format!("discard:{branch}"), ToastKind::Success, format!("Discarded `{branch}`"), None, cx),
+                        Ok(Err(err)) => this.toast_update(format!("discard:{branch}"), ToastKind::Error, "Couldn't remove worktree", Some(err.to_string()), cx),
+                        Err(err) => this.toast_update(format!("discard:{branch}"), ToastKind::Error, "Couldn't remove worktree", Some(err.to_string()), cx),
                     }
                     this.settle_home_tasks(cx);
                 });
@@ -988,7 +1238,71 @@ pub(super) fn worktree_info(info: &crate::model::WorktreeInfo) -> Result<winfer_
 
 #[cfg(test)]
 mod tests {
-    use super::{BINDINGS, canonical, chord_for, event_chord, format_chord, slug};
+    use super::{BINDINGS, Command, Toast, ToastKind, Toasts, canonical, chord_for, event_chord, format_chord, infer_toast_kind, slug, split_toast_text, toast_lifetime};
+    use std::time::Duration;
+
+    #[test]
+    fn toast_kind_is_inferred_from_wording() {
+        assert_eq!(infer_toast_kind("Couldn't remove worktree: busy"), ToastKind::Error);
+        assert_eq!(infer_toast_kind("Merge not possible: conflict"), ToastKind::Error);
+        assert_eq!(infer_toast_kind("Plugin “x” failed: boom"), ToastKind::Error);
+        assert_eq!(infer_toast_kind("Merging winfer/winfer-4 into main…"), ToastKind::Progress);
+        assert_eq!(infer_toast_kind("Merged winfer/winfer-4 into main"), ToastKind::Success);
+        assert_eq!(infer_toast_kind("Pair link copied"), ToastKind::Success);
+        assert_eq!(infer_toast_kind("winfer is up to date"), ToastKind::Success);
+        assert_eq!(infer_toast_kind("studio: 12% of the 5-hour limit left"), ToastKind::Warning);
+        assert_eq!(infer_toast_kind("No release notes to show"), ToastKind::Info);
+    }
+
+    #[test]
+    fn toast_text_splits_into_title_and_detail() {
+        assert_eq!(split_toast_text("Title\nmore\nlines", ToastKind::Info), ("Title".into(), Some("more\nlines".into())));
+        assert_eq!(split_toast_text("Couldn't push: no route", ToastKind::Error), ("Couldn't push".into(), Some("no route".into())));
+        assert_eq!(split_toast_text("Task 3: done", ToastKind::Info), ("Task 3: done".into(), None));
+        assert_eq!(split_toast_text("Plain", ToastKind::Success), ("Plain".into(), None));
+    }
+
+    #[test]
+    fn errors_and_actions_stay_until_dismissed() {
+        assert_eq!(toast_lifetime(ToastKind::Error, false), None);
+        assert_eq!(toast_lifetime(ToastKind::Info, true), None);
+        assert_eq!(toast_lifetime(ToastKind::Success, false), Some(Duration::from_secs(4)));
+        let mut t = Toasts::default();
+        let err = t.push(Toast::from_text("Couldn't push: offline"));
+        let act = t.push(Toast::from_text("Race finished").action("Results", Command::Palette(None)));
+        t.push(Toast::from_text("Copied"));
+        t.tick(Duration::from_secs(5));
+        assert_eq!(t.items.iter().map(|x| x.id).collect::<Vec<_>>(), vec![err, act]);
+        t.dismiss(err);
+        assert_eq!(t.items.len(), 1);
+    }
+
+    #[test]
+    fn spread_deck_pauses_timers() {
+        let mut t = Toasts::default();
+        t.push(Toast::from_text("Copied"));
+        t.hovered = true;
+        t.tick(Duration::from_secs(10));
+        assert_eq!(t.items.len(), 1);
+        t.hovered = false;
+        t.tick(Duration::from_secs(4));
+        assert!(t.items.is_empty());
+    }
+
+    #[test]
+    fn updates_replace_by_key_and_keep_the_id() {
+        let mut t = Toasts::default();
+        let a = t.push(Toast::new(ToastKind::Progress, "Pushing…").keyed("push"));
+        t.push(Toast::from_text("Other"));
+        let b = t.push(Toast::new(ToastKind::Success, "Pushed").keyed("push"));
+        assert_eq!(a, b);
+        assert_eq!(t.items.len(), 2);
+        let pushed = t.items.iter().find(|x| x.id == a).unwrap();
+        assert_eq!((pushed.kind, pushed.title.as_ref()), (ToastKind::Success, "Pushed"));
+        // Same text twice shows once.
+        t.push(Toast::from_text("Other"));
+        assert_eq!(t.items.len(), 2);
+    }
     use gpui_kit::{Keystroke, Modifiers};
     use std::collections::HashMap;
 
