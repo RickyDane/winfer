@@ -533,38 +533,22 @@ impl Root {
     /// orchestrator, agents needing input, or the task's own "needs you".
     fn home_waiting(&self, cx: &App) -> Vec<Waiting> {
         let s = self.state.read(cx);
-        let ask = |a: &crate::code::protocol::Approval| match a.questions.first() {
-            Some(q) => if q.question.is_empty() { q.header.clone() } else { q.question.clone() },
-            None => format!("wants to run {}", if a.title.is_empty() { &a.tool } else { &a.title }),
-        };
+        let first = |m: Option<&Entity<crate::code::session::CodeModel>>| m.and_then(|m| m.read(cx).state.approvals.first().cloned());
         let mut out = Vec::new();
         for t in super::home::listed_tasks(&self.home.tasks).into_iter().filter(|t| t.stage.open()) {
-            let before = out.len();
-            if let Some(a) = self.home_model(&task_pane(&t.id)).and_then(|m| m.read(cx).state.approvals.first().map(ask)) {
-                out.push((t.id.clone(), None, format!("{} · Orchestrator: {a}", t.title())));
-            }
-            for p in t.panes.iter().filter_map(|p| s.pane(p)) {
-                let name = s.pane_label(p);
-                match self.code_models.get(&p.id).and_then(|m| m.read(cx).state.approvals.first().map(ask)) {
-                    Some(a) => out.push((t.id.clone(), Some(p.id.clone()), format!("{} · {name}: {a}", t.title()))),
-                    None if p.status == AgentStatus::NeedsInput => out.push((t.id.clone(), Some(p.id.clone()), format!("{} · {name} needs input", t.title()))),
-                    None => {}
-                }
-            }
-            if t.mode == TaskMode::Remote
-                && let (Some(peer), Some(pane)) = (&t.machine, &t.remote_pane)
-                && let Some(tile) = s.all_panes().find(|p| p.remote.as_ref().is_some_and(|r| r.peer == *peer && r.pane == *pane))
-            {
-                match self.code_models.get(&tile.id).and_then(|m| m.read(cx).state.approvals.first().map(ask)) {
-                    Some(a) => out.push((t.id.clone(), None, format!("{}: {a}", t.title()))),
-                    None if tile.status == AgentStatus::NeedsInput => out.push((t.id.clone(), None, format!("{} needs input", t.title()))),
-                    None => {}
-                }
-            }
-            if out.len() == before && t.stage == Stage::NeedsYou {
-                let why = if t.summary.is_empty() { "needs you".to_string() } else { t.summary.clone() };
-                out.push((t.id.clone(), None, format!("{}: {why}", t.title())));
-            }
+            // A fork's orchestrator (its questions wait in its approvals), the agent panes, and a
+            // remote task's orchestrator tile; each one's first pending approval.
+            let orch = first(self.home_model(&task_pane(&t.id)).as_ref());
+            let agents: Vec<_> = t.panes.iter().filter_map(|p| s.pane(p)).map(|p| (Some(p.id.clone()), s.pane_label(p), first(self.code_models.get(&p.id)), p.status == AgentStatus::NeedsInput)).collect();
+            let tile = match (&t.machine, &t.remote_pane) {
+                (Some(peer), Some(pane)) if t.mode == TaskMode::Remote => s.all_panes().find(|p| p.remote.as_ref().is_some_and(|r| r.peer == *peer && r.pane == *pane)),
+                _ => None,
+            };
+            let tile = tile.map(|p| (None, "Orchestrator".to_string(), first(self.code_models.get(&p.id)), p.status == AgentStatus::NeedsInput));
+            let all: Vec<_> = std::iter::once((None, "Orchestrator".to_string(), orch, false)).chain(agents).chain(tile).collect();
+            let askers: Vec<home_nav::Asker> = all.iter().map(|(pane, name, a, needs)| home_nav::Asker { pane: pane.clone(), name: name.clone(), approval: a.as_ref(), needs_input: *needs }).collect();
+            let needs_you = (t.stage == Stage::NeedsYou).then_some(t.summary.as_str());
+            out.extend(home_nav::task_waiting(&t.title(), &askers, needs_you).into_iter().map(|(pane, text)| (t.id.clone(), pane, text)));
         }
         out
     }

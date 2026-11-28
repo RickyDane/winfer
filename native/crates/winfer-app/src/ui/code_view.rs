@@ -3001,7 +3001,7 @@ impl CodeView {
                 for (oi, o) in q.options.iter().enumerate() {
                     let on = picks.get(qi).is_some_and(|p| p.contains(&oi));
                     let (aid, multi) = (a.id.clone(), q.multi);
-                    options = options.child(div().id(SharedString::from(format!("q-{}-{qi}-{oi}", a.id))).flex().flex_col().gap_0p5().rounded_lg().border_1().px_3().py_1p5().cursor_pointer().text_size(px(12.5))
+                    options = options.child(div().id(SharedString::from(format!("q-{}-{qi}-{oi}", a.id))).debug_selector(move || format!("cw-q-{qi}-{oi}")).flex().flex_col().gap_0p5().rounded_lg().border_1().px_3().py_1p5().cursor_pointer().text_size(px(12.5))
                         .when(on, |d| d.bg(alpha(c.accent, 0.14)).text_color(c.fg))
                         .when(!on, |d| d.text_color(c.muted).hover(move |d| d.bg(c.hover).text_color(c.fg)))
                         .on_click(cx.listener(move |this, _, _, cx| {
@@ -3024,7 +3024,7 @@ impl CodeView {
             let ready = a.questions.iter().enumerate().all(|(i, _)| picks.get(i).is_some_and(|p| !p.is_empty()));
             let (aid, qs) = (a.id.clone(), a.questions.clone());
             actions = div().flex().items_center().gap_3()
-                .child(div().id(SharedString::from(format!("answer-{}", a.id))).h(px(30.0)).flex().items_center().px_3().rounded_lg().text_size(px(12.5)).bg(c.accent).text_color(c.on_accent)
+                .child(div().id(SharedString::from(format!("answer-{}", a.id))).debug_selector(|| "cw-answer".to_string()).h(px(30.0)).flex().items_center().px_3().rounded_lg().text_size(px(12.5)).bg(c.accent).text_color(c.on_accent)
                     .when(ready, |d| d.cursor_pointer().hover(|d| d.opacity(0.88))).when(!ready, |d| d.opacity(0.4))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if !ready { return; }
@@ -3039,7 +3039,7 @@ impl CodeView {
         // Keep the card compact: content scrolls within a height cap tied to the pane, actions stay pinned.
         let cap = (self.pane_size.height / px(1.0) * 0.4).clamp(120.0, 320.0);
         let scroll = div().id(SharedString::from(format!("appr-scroll-{}", a.id))).min_h_0().max_h(px(cap)).overflow_y_scroll().child(body);
-        let card = div().w_full().flex().flex_col().gap_2().mb_2().p_3().min_w_0().rounded_xl().border_1().border_color(alpha(c.warning, 0.55)).bg(c.raised).shadow_md().child(head).child(scroll).child(actions);
+        let card = div().debug_selector(|| "cw-approval".to_string()).w_full().flex().flex_col().gap_2().mb_2().p_3().min_w_0().rounded_xl().border_1().border_color(alpha(c.warning, 0.55)).bg(c.raised).shadow_md().child(head).child(scroll).child(actions);
         dock_inset(rise(card, SharedString::from(format!("appr-{}", a.id)), 0, 14.0), false).into_any_element()
     }
 
@@ -4227,6 +4227,50 @@ mod tests {
         assert_eq!(sky.origin.y, px(0.0));
         assert_eq!(sky.size.width, px(600.0));
         assert_eq!(sky.size.height, px(400.0));
+    }
+
+    /// A task orchestrator's multiple-choice question (it waits in its approvals) shows in Home's
+    /// drill-in chat as an option card above the composer, and picking + Answer answers it.
+    #[gpui_kit::test]
+    fn an_orchestrators_question_is_an_answerable_card_above_the_composer(cx: &mut gpui_kit::TestAppContext) {
+        use super::CodeView;
+        use crate::code::protocol::{Approval, Question, QuestionOption};
+        use crate::code::session::CodeModel;
+        use crate::model::AppState;
+        use gpui_kit::{AppContext, Modifiers, px};
+
+        cx.update(gpui_kit::init);
+        let opt = |l: &str| QuestionOption { label: l.into(), description: String::new() };
+        let (view, vcx) = cx.add_window_view(|window, cx| {
+            let app = cx.new(|_| AppState::new());
+            let model = cx.new(|_| {
+                let mut m = CodeModel::for_test(app.clone());
+                m.pane_id = crate::voice::task_pane("t2");
+                m.state.approvals = vec![Approval { id: "oq".into(), questions: vec![Question { header: "Export scope".into(), question: "What should Export include?".into(), options: vec![opt("Current filters"), opt("Whole report")], multi: false }], ..Default::default() }];
+                m
+            });
+            CodeView::new(model, app, window, cx)
+        });
+        for _ in 0..2 {
+            vcx.run_until_parked();
+            vcx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+        }
+        let card = vcx.debug_bounds("cw-approval").expect("the question card is drawn");
+        let composer = vcx.debug_bounds("cw-composer-card").expect("composer drawn");
+        // Docked on the composer (the dock tucks it a few px into the composer's top edge).
+        assert!(card.top() < composer.top() && card.bottom() <= composer.top() + px(4.0), "the card sits above the composer: {card:?} vs {composer:?}");
+        let option = vcx.debug_bounds("cw-q-0-1").expect("its options are drawn");
+        vcx.simulate_click(option.center(), Modifiers::default());
+        vcx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert_eq!(vcx.read(|cx| view.read(cx).picks.get("oq").cloned()), Some(vec![vec![1]]));
+        let answer = vcx.debug_bounds("cw-answer").expect("Answer button drawn");
+        vcx.simulate_click(answer.center(), Modifiers::default());
+        vcx.run_until_parked();
+        assert!(vcx.read(|cx| view.read(cx).model.read(cx).state.approvals.is_empty()), "answering clears the question");
     }
 
     #[gpui_kit::test]

@@ -2,6 +2,7 @@
 //! Home's chats turn into links. Pure, so it's tested without a window.
 
 use super::home::TaskMode;
+use crate::code::protocol::Approval;
 use crate::code::state::Item;
 
 /// What a task's chat in Home shows.
@@ -69,6 +70,45 @@ fn strip_links(s: &str) -> String {
         rest = &rest[end + 1..];
     }
     out.push_str(rest);
+    out
+}
+
+/// What an approval asks, in a line: its first question, or the command it wants to run.
+pub fn ask_text(a: &Approval) -> String {
+    match a.questions.first() {
+        Some(q) if !q.question.is_empty() => q.question.clone(),
+        Some(q) => q.header.clone(),
+        None => format!("wants to run {}", if a.title.is_empty() { &a.tool } else { &a.title }),
+    }
+}
+
+/// One agent of a task, for the needs-you banner: its pane (None: the task's main chat, e.g. a
+/// fork's orchestrator or a remote task's), name, first pending approval, and whether its pane
+/// says it needs input.
+pub struct Asker<'a> {
+    pub pane: Option<String>,
+    pub name: String,
+    pub approval: Option<&'a Approval>,
+    pub needs_input: bool,
+}
+
+/// What waits for the user in one task: (the agent pane to open, None for its main chat; the
+/// line the banner shows). `needs_you`: the task's stage says so (with its summary), shown when
+/// none of its agents asks anything.
+pub fn task_waiting(title: &str, askers: &[Asker], needs_you: Option<&str>) -> Vec<(Option<String>, String)> {
+    let mut out: Vec<(Option<String>, String)> = askers
+        .iter()
+        .filter_map(|a| match (a.approval, a.needs_input) {
+            (Some(ap), _) => Some((a.pane.clone(), format!("{title} · {}: {}", a.name, ask_text(ap)))),
+            (None, true) => Some((a.pane.clone(), format!("{title} · {} needs input", a.name))),
+            (None, false) => None,
+        })
+        .collect();
+    if out.is_empty()
+        && let Some(why) = needs_you
+    {
+        out.push((None, format!("{title}: {}", if why.is_empty() { "needs you" } else { why })));
+    }
     out
 }
 
@@ -311,5 +351,34 @@ mod tests {
         assert_eq!(new_replies(&items, 0), 2);
         assert_eq!(latest_reply(&items).as_deref(), Some("Task 3 is ready more"));
         assert_eq!(latest_reply(&[]), None);
+    }
+
+    fn question(id: &str) -> Approval {
+        let q = crate::code::protocol::Question { header: "Export scope".into(), question: "What should Export include?".into(), options: vec![crate::code::protocol::QuestionOption { label: "Current filters".into(), description: String::new() }], multi: false };
+        Approval { id: id.into(), questions: vec![q], ..Default::default() }
+    }
+
+    #[test]
+    fn an_orchestrators_question_is_listed_and_opens_its_chat() {
+        let q = question("oq");
+        let run = Approval { id: "ap".into(), tool: "Bash".into(), title: "pnpm add csv-stringify".into(), ..Default::default() };
+        let askers = [
+            Asker { pane: None, name: "Orchestrator".into(), approval: Some(&q), needs_input: false },
+            Asker { pane: Some("p-backend".into()), name: "backend".into(), approval: Some(&run), needs_input: true },
+            Asker { pane: Some("p-tests".into()), name: "tests".into(), approval: None, needs_input: false },
+        ];
+        let w = task_waiting("Task 2", &askers, Some("waiting on scope"));
+        assert_eq!(w, vec![(None, "Task 2 · Orchestrator: What should Export include?".to_string()), (Some("p-backend".to_string()), "Task 2 · backend: wants to run pnpm add csv-stringify".to_string())]);
+        // The banner drills into (task, None): a fork's main chat is its orchestrator.
+        assert_eq!(who(TaskMode::Fork, None, &["p-backend".to_string()], |_| true, None, None), Who::Orchestrator);
+    }
+
+    #[test]
+    fn a_question_with_only_a_header_and_a_bare_needs_you() {
+        let mut q = question("q");
+        q.questions[0].question.clear();
+        assert_eq!(ask_text(&q), "Export scope");
+        assert_eq!(task_waiting("Task 5", &[], Some("")), vec![(None, "Task 5: needs you".to_string())]);
+        assert!(task_waiting("Task 5", &[], None).is_empty());
     }
 }
