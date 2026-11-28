@@ -1556,8 +1556,17 @@ impl Root {
         if NAVIGATION_TOOLS.contains(&tool) && !conductor {
             return Some(Ok("Not done: task orchestrators don't change the user's view. Tell the user in your reply instead.".into()));
         }
-        let scoped = !NAVIGATION_TOOLS.contains(&tool) && !ws_id.is_empty();
         let mut note = String::new();
+        // The conductor shows a pane because the user asked: go to its workspace like before.
+        if conductor && tool == "focus_pane" && !ws_id.is_empty() {
+            let s = self.state.read(cx);
+            if s.active_workspace_id != ws_id || s.view() != View::Workspace {
+                let name = s.workspaces.iter().find(|w| w.id == ws_id).map(|w| w.name.clone()).unwrap_or_default();
+                self.execute(Command::WorkspaceSwitch(ws_id.to_string()), window, cx);
+                note = format!(" (showed the user workspace {name})");
+            }
+        }
+        let scoped = !navigates(tool, conductor) && !ws_id.is_empty();
         let saved = scoped.then(|| {
             let s = self.state.read(cx);
             if s.active_workspace_id != ws_id || s.view() != View::Workspace {
@@ -1997,6 +2006,12 @@ pub(super) fn home_dir() -> String {
 /// (because the user asked); everything else an orchestrator runs stays in the background.
 const NAVIGATION_TOOLS: &[&str] = &["switch_workspace", "create_workspace", "open_settings", "set_theme", "show_shortcuts", "toggle_sidebar", "toggle_browser", "show_side_panel", "show_overview", "show_history", "open_url", "usage_status"];
 
+/// Whether an orchestrator's `tool` may change what the user sees: the navigation tools, and
+/// `focus_pane` from the conductor (it only calls it when the user wants to see a pane).
+pub(super) fn navigates(tool: &str, conductor: bool) -> bool {
+    conductor && (NAVIGATION_TOOLS.contains(&tool) || tool == "focus_pane")
+}
+
 /// What the user is looking at, kept while an orchestrator's action runs in its workspace.
 pub(super) struct UserFocus {
     workspace: String,
@@ -2298,7 +2313,7 @@ mod tests {
 
     #[test]
     fn orchestrator_actions_stay_in_the_background() {
-        use super::{scope_to_workspace, NAVIGATION_TOOLS};
+        use super::{navigates, scope_to_workspace};
         use winfer_core::model::{AddPane, AppState, View};
         let mut s = AppState::new();
         s.hydrate(json!({ "workspaces": [], "ui": null }));
@@ -2326,7 +2341,13 @@ mod tests {
         assert_eq!((s.view(), s.active_workspace_id.as_str()), (View::Home, mine.as_str()));
         assert_eq!(s.workspaces.iter().find(|w| w.id == other).unwrap().zoomed_pane_id.as_deref(), Some(a.as_str()));
         for t in ["focus_pane", "zoom_pane", "set_layout", "spawn_agent", "spawn_panes"] {
-            assert!(!NAVIGATION_TOOLS.contains(&t), "{t}");
+            assert!(!navigates(t, false), "{t}");
         }
+        for t in ["zoom_pane", "set_layout", "spawn_agent", "spawn_panes"] {
+            assert!(!navigates(t, true), "{t}");
+        }
+        // The conductor's focus_pane and navigation tools do navigate.
+        assert!(navigates("focus_pane", true) && navigates("switch_workspace", true));
+        assert!(!navigates("switch_workspace", false));
     }
 }
